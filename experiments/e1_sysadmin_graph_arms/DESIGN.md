@@ -69,11 +69,32 @@ measured, not assumed.
 | **Oracle** | — | the true parent sets | sets on the true parents |
 | **Flat** (no structure) | — | none: one row per $(s,a)$ | tabular sets; unvisited rows = the whole simplex |
 | **One learned graph** | exact BIC search over parent sets of size ≤ 3 from the 8 inputs (93 per node) | one parent set per node (may miss a parent) | sets on that parent set |
-| **Plausible graphs** | — (candidates enumerated) | all size-3 candidates; refuted against their one-variable extensions; declared bound $d=3$ | one set per row from the survivors (`agreement_set`) |
+| **Bayesian credible set** | exact posterior over the 93 parent sets (BDeu, uniform structure prior; K&F Prop. 18.7) | smallest set of candidates with posterior mass $\ge 1-\delta/N$ | sets on every candidate (factor cache) |
+| **ICP set** | invariance test of $P(m_i'\mid C)$ across loggers for every candidate $C$ (loggers = environments) | the accepted sets of size $\le d$: contains the true set w.p. $\ge 1-\alpha/N$ (ECI eq. 7.8) | sets on every candidate |
+| **Agreement rule** | — (candidates enumerated) | all size-3 candidates; refuted against their one-variable extensions; declared bound $d=3$ | one set per row from the survivors (`agreement_set`) |
+| **ICP + agreement** | ICP as above | the agreement rule run on the ICP-accepted candidates only | one set per row from the survivors |
 | **Plug-in controls** | oracle; one learned graph | as above | maximum-likelihood tables, **no** sets (ordinary value iteration) |
 
 The plug-in controls separate the role of the sets (pessimism) from the role of the graph.
-Every arm fits on the same pooled data (both loggers), with the same seeds.
+Every arm fits on the same pooled data (all loggers of a suite), with the same seeds.
+
+**Graph-level levels (S3).** ICP gives a frequentist level for the hypothesis set: the true parent
+set is accepted with probability $\ge 1-\alpha$ per target (Peters, Janzing & Schölkopf, *ECI*,
+eq. 7.8, p. 153), so the family of accepted sets is valid at $1-\alpha$ after a Bonferroni split over
+the $N$ targets. ICP's intersection $\hat S$ is *not* used: it controls false parents only and can
+miss true ones. The Bayesian credible set has a posterior level, not a frequentist one.
+
+**ICP test (S2).** For candidate $C$, compare $P(m_i'\mid C=u)$ across loggers within each
+configuration $u$ (G statistic summed over configurations with data from at least two loggers,
+chi-square reference). Given the true parents (or a superset), next states are conditionally
+independent of the past and of the logger, so the test is valid for exactly the sets the guarantee
+needs, even on trajectories. With one logger there are no environments: every set is accepted.
+
+**A prediction for the one-graph arm.** BIC keeps a parent roughly when
+$M/\log M \gtrsim \Delta\mathrm{Dim}/(2\Delta)$, with $\Delta$ the conditional mutual information the
+parent adds (nats) and $\Delta\mathrm{Dim}$ its extra parameters (our derivation from Koller &
+Friedman, p. 803). It predicts at which data size the one-graph arm stops missing the weak edge;
+E1 checks it.
 
 ## 5. Measurements (S5, S9)
 Per arm and run:

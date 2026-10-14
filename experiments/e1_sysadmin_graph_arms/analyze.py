@@ -1,10 +1,13 @@
 """E1 figures and tables from the result files (no simulation here).
 
-Reads ``results/e1/pilot_loggers.csv`` (written by ``pilot_loggers.py``) and writes
+Reads whichever of these exist and writes, under ``results/e1/figures`` and ``results/e1/tables``:
 
-- ``results/e1/figures/pilot_loggers.{pdf,png}``: what each logger family's data cover and can tell;
-- ``results/e1/tables/pilot_loggers.csv`` and ``.tex``: the same numbers, mean and 95% bootstrap
-  interval over seeds.
+- ``pilot_loggers.csv`` (``pilot_loggers.py``) -> ``pilot_loggers.{pdf,png}``, ``pilot_loggers.{csv,tex}``:
+  what each logger family's data cover and can tell;
+- ``structure_arms.csv`` (``structure_arms.py``) -> ``structure_arms.{pdf,png}``,
+  ``structure_arms.{csv,tex}``: S2/S3 graph arms against the true graph, and the S1 checks.
+
+Every number is a mean over seeds with a 95% percentile-bootstrap interval.
 
     uv run python experiments/e1_sysadmin_graph_arms/analyze.py
 """
@@ -120,15 +123,146 @@ def figure(data, summary, out_path: Path) -> list[Path]:
     return paths
 
 
+ARM_STYLE = {"bic": ("one graph: BIC", OKABE_ITO["vermillion"]),
+             "jpcmci": ("one graph: J-PCMCI+", OKABE_ITO["purple"]),
+             "posterior": ("Bayesian credible family", OKABE_ITO["orange"]),
+             "icp": ("ICP family", OKABE_ITO["blue"])}
+SUITE_STYLE = {"S-A aliasing": OKABE_ITO["grey"], "S-B two aliasing": OKABE_ITO["blue"],
+               "S-C softmax+lazy": OKABE_ITO["green"], "S-D two specialists": OKABE_ITO["sky"]}
+
+
+def load_structure(path: Path):
+    with path.open() as fh:
+        rows = list(csv.DictReader(fh))
+    for r in rows:
+        r["episodes"] = int(r["episodes"])
+        for k in ("valid", "family_size", "exact", "missed_parent", "gate_p", "markov_p", "stationarity_p"):
+            r[k] = float(r[k])
+    return rows
+
+
+def _cell(rows, **match):
+    return [r for r in rows if all(r[k] == v for k, v in match.items())]
+
+
+def structure_figure(rows, out_path: Path, alpha: float = 0.1) -> list[Path]:
+    """(a) missed true parents of the one-graph arms; (b) ICP family size per suite; (c) validity."""
+    import matplotlib.pyplot as plt
+
+    use_style()
+    episodes = sorted({r["episodes"] for r in rows})
+    fig, axes = plt.subplots(1, 3, figsize=(DOUBLE_COLUMN, 3.1), gridspec_kw={"wspace": 0.42})
+
+    def line(ax, xs, sets, color, label, ls="-"):
+        stats = [bootstrap_mean_ci(v) for v in sets]
+        m = [s[0] for s in stats]
+        ax.plot(xs, m, ls, color=color, marker="o", ms=3, label=label)
+        ax.fill_between(xs, [s[1] for s in stats], [s[2] for s in stats], color=color, alpha=0.15, lw=0)
+
+    ax = axes[0]
+    for arm in ("bic", "jpcmci"):
+        if not _cell(rows, arm=arm):
+            continue
+        for edge, ls in (("weak", "-"), ("strong", "--")):
+            sets = [[r["missed_parent"] for r in _cell(rows, arm=arm, edge=edge, episodes=e)]
+                    for e in episodes]
+            line(ax, episodes, sets, ARM_STYLE[arm][1], f"{ARM_STYLE[arm][0]}, {edge}", ls)
+    ax.set(xscale="log", ylim=(-0.03, 1.03), ylabel="runs missing a true parent")
+    ax.legend(loc="upper center", bbox_to_anchor=(0.5, -0.24), ncol=1)
+
+    ax = axes[1]
+    for suite, color in SUITE_STYLE.items():
+        sets = [[r["family_size"] for r in _cell(rows, arm="icp", edge="weak", suite=suite, episodes=e)]
+                for e in episodes]
+        if all(sets):
+            line(ax, episodes, sets, color, suite)
+    ax.set(xscale="log", yscale="log", ylabel="ICP family size per target")
+    ax.legend(loc="upper center", bbox_to_anchor=(0.5, -0.24), ncol=1)
+
+    ax = axes[2]
+    for arm in ("icp", "posterior"):
+        sets = [[r["valid"] for r in _cell(rows, arm=arm, edge="weak", episodes=e)] for e in episodes]
+        line(ax, episodes, sets, ARM_STYLE[arm][1], ARM_STYLE[arm][0])
+    ax.axhline(1 - alpha, color="black", lw=0.8, ls=":", label=f"nominal level {1 - alpha:.1f}")
+    ax.set(xscale="log", ylim=(-0.03, 1.03), ylabel="runs with a valid family")
+    ax.legend(loc="upper center", bbox_to_anchor=(0.5, -0.24), ncol=1)
+    from matplotlib.ticker import NullFormatter, NullLocator
+    for a in axes:
+        a.set_xticks(episodes)
+        a.set_xticklabels([str(e) for e in episodes])
+        a.xaxis.set_minor_locator(NullLocator())
+        a.xaxis.set_minor_formatter(NullFormatter())
+        a.set_xlabel("episodes per suite")
+    for a, tag in zip(axes, "abc", strict=True):
+        a.text(-0.02, 1.02, f"({tag})", transform=a.transAxes, ha="right", va="bottom", fontweight="bold")
+    paths = save(fig, out_path)
+    plt.close(fig)
+    return paths
+
+
+def structure_tables(rows, out_dir: Path, alpha: float = 0.1) -> list[Path]:
+    out_dir.mkdir(parents=True, exist_ok=True)
+    keys = sorted({(r["suite"], r["edge"], r["episodes"], r["arm"]) for r in rows if r["arm"] != "oracle"})
+    csv_path = out_dir / "structure_arms.csv"
+    with csv_path.open("w", newline="") as fh:
+        w = csv.writer(fh)
+        w.writerow(["suite", "edge", "episodes", "arm", "runs", "valid_mean", "valid_lo", "valid_hi",
+                    "family_size_mean", "missed_parent_mean"])
+        for k in keys:
+            sub = _cell(rows, suite=k[0], edge=k[1], episodes=k[2], arm=k[3])
+            v = bootstrap_mean_ci([r["valid"] for r in sub])
+            w.writerow([*k, len(sub), *(f"{x:.3f}" for x in v),
+                        f"{np.mean([r['family_size'] for r in sub]):.2f}",
+                        f"{np.mean([r['missed_parent'] for r in sub]):.2f}"])
+    # Compact LaTeX table: weak edge, valid share and family size per arm.
+    arms = [a for a in ("bic", "jpcmci", "posterior", "icp") if _cell(rows, arm=a)]
+    head = " & ".join(rf"\multicolumn{{2}}{{c}}{{{ARM_STYLE[a][0]}}}" for a in arms)
+    lines = [r"\begin{tabular}{ll" + "rr" * len(arms) + "}", r"\toprule",
+             "Suite & Episodes & " + head + r" \\",
+             " & & " + " & ".join("valid & size" for _ in arms) + r" \\", r"\midrule"]
+    for suite in SUITE_STYLE:
+        for e in sorted({r["episodes"] for r in rows}):
+            cells = []
+            for a in arms:
+                sub = _cell(rows, suite=suite, edge="weak", episodes=e, arm=a)
+                if not sub:
+                    cells += ["--", "--"]
+                    continue
+                cells += [f"{np.mean([r['valid'] for r in sub]):.2f}",
+                          f"{np.mean([r['family_size'] for r in sub]):.1f}"]
+            lines.append(f"{suite} & {e} & " + " & ".join(cells) + r" \\")
+    lines += [r"\bottomrule", r"\end{tabular}"]
+    tex_path = out_dir / "structure_arms.tex"
+    tex_path.write_text("\n".join(lines) + "\n")
+    # S1 checks: false-alarm rates of the data-only tests (setting 1: none should reject).
+    s1_path = out_dir / "s1_checks.csv"
+    with s1_path.open("w", newline="") as fh:
+        w = csv.writer(fh)
+        w.writerow(["suite", "runs", "gate_reject", "markov_reject", "stationarity_reject"])
+        for suite in SUITE_STYLE:
+            sub = _cell(rows, suite=suite, arm="oracle")
+            if sub:
+                tests = ("gate_p", "markov_p", "stationarity_p")
+                rate = [np.mean([r[k] <= alpha / 4 for r in sub]) for k in tests]
+                w.writerow([suite, len(sub), *(f"{x:.3f}" for x in rate)])
+    return [csv_path, tex_path, s1_path]
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--results", type=Path, default=Path("results/e1"))
     args = ap.parse_args()
-    data = load(args.results / "pilot_loggers.csv")
-    summary = summarise(data)
-    n_seeds = {lg: len(next(iter(cols.values()))) for lg, cols in data.items()}
-    written = figure(data, summary, args.results / "figures" / "pilot_loggers")
-    written += write_tables(summary, n_seeds, args.results / "tables")
+    written: list[Path] = []
+    if (args.results / "pilot_loggers.csv").exists():
+        data = load(args.results / "pilot_loggers.csv")
+        summary = summarise(data)
+        n_seeds = {lg: len(next(iter(cols.values()))) for lg, cols in data.items()}
+        written += figure(data, summary, args.results / "figures" / "pilot_loggers")
+        written += write_tables(summary, n_seeds, args.results / "tables")
+    if (args.results / "structure_arms.csv").exists():
+        rows = load_structure(args.results / "structure_arms.csv")
+        written += structure_figure(rows, args.results / "figures" / "structure_arms")
+        written += structure_tables(rows, args.results / "tables")
     for p in written:
         print(f"wrote {p}")
 

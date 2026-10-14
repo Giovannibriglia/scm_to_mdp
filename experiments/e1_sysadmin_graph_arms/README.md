@@ -74,6 +74,35 @@ reads it (it never simulates) and writes:
 - `results/e1/tables/pilot_loggers.csv` and `.tex`: every metric, mean [95% bootstrap interval]
   over seeds (a LaTeX `tabular` body, ready for `\input`).
 
+### Stage 2: assumption checks and graph arms (S1–S3)
+```bash
+uv sync --extra discovery
+uv run --extra discovery python experiments/e1_sysadmin_graph_arms/structure_arms.py --seeds 10
+uv run python experiments/e1_sysadmin_graph_arms/analyze.py
+```
+The first command adds Tigramite for J-PCMCI+ (GPL-3.0, an optional extra; without it the runner skips
+that arm). The runner (progress bar with time left; about 2 minutes) simulates every logger suite at
+40, 100 and 400 episodes, with a strong and a weak edge, and for each run:
+
+1. **S1 checks from data only**: the confounding gate (is the kernel the same under every logger?), a
+   first-order Markov test and a stationarity test. All use a permutation test within each input
+   configuration, so their level holds on sparse data and on trajectories.
+2. **Episode split**: discovery half for the graph arms, estimation half kept for S4.
+3. **Graph arms**: one graph by BIC, one graph by J-PCMCI+ (logger as context), the Bayesian credible
+   family, and the ICP family (the accepted parent sets: contains the true set w.p. ≥ 0.9).
+
+`analyze.py` then writes:
+
+- `results/e1/figures/structure_arms.pdf` / `.png`. **Caption:** *Graph arms on the SysAdmin ring
+  (10 seeds per point; bands are 95% bootstrap intervals). (a) Share of runs in which a one-graph
+  method misses a true parent, for a weak and a strong edge. (b) Size of the ICP family per target
+  (weak edge): with one logger (S-A) nothing can be rejected, with two diverse loggers the family
+  shrinks as data grow. (c) Share of runs whose family contains the true parents of every target
+  (weak edge), against the nominal 0.9 of the ICP family.*
+- `results/e1/tables/structure_arms.csv` (every suite, edge, size and arm) and `.tex` (weak edge:
+  valid share and family size per arm), and `results/e1/tables/s1_checks.csv` (how often each S1
+  check rejects; nominal 0.10 family-wise, since setting 1 holds in these suites).
+
 Columns of the pilot table:
 
 | Column | Meaning |
@@ -90,5 +119,6 @@ Columns of the pilot table:
 Options: `--n` (machines), `--episodes`, `--horizon`, `--seeds`, `--load-effect`, `--no-progress`.
 A progress bar (on stderr) shows the datasets done, the elapsed time and an estimate of the time left.
 
-**Status:** environment, loggers, data and diagnostics are implemented and tested. The learning arms
-(S2–S9, on NBN ≥ 0.24) are next.
+**Status:** S0–S3 implemented and tested (environment, loggers, S1 checks, graph arms). Next: the
+arms that need NBN (agreement rule, ICP + agreement) and S4–S9 (sets, compilation, robust planning,
+exact check).
