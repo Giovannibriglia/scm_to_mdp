@@ -1,6 +1,10 @@
 # E1 design — does graph uncertainty change decisions? (SysAdmin ring)
 
-**Status:** design (2026-10-14), nothing implemented. Expected results are written before any run (§7).
+**Status:** design written 2026-10-14 before any run (expected results in §7); S0–S9 implemented
+2026-10-14 (`pipeline_arms.py`). Implementation notes: S4 uses NBN `agreement_set` for every set arm
+(`refute=False` = the union over a given family, NBN #329; credible and ICP families use it); S8 uses
+per-row interval boxes from `joint_row_bounds`; the promise is the robust value of the returned
+policy (`robust_policy_value`), not the stopped iterate.
 
 **Question.** Offline data come from several exploratory behaviour policies on a small, fully observed,
 stochastic MDP. We compare a pipeline that uses **one learned graph**, one that keeps **several
@@ -89,7 +93,8 @@ configuration $u$ (G statistic summed over configurations with data from at leas
 reference distribution is a **permutation** of the logger labels within each configuration (each
 configuration's table redrawn with its margins fixed): given the true parents (or a superset), next
 states are conditionally independent of the past and of the logger, so the labels are exchangeable
-there and the level holds on sparse data and on trajectories. The chi-square approximation is not
+there: the level is exact for independent rows at any sample size, and approximate (close to nominal
+in simulations) on trajectories, where later configurations depend on earlier outcomes. The chi-square approximation is not
 used: on sparse cells it rejected 23% of null datasets at a nominal 5% (permutation: 4%). With one
 logger there are no environments: every set is accepted.
 
@@ -157,5 +162,5 @@ experiments/e1_sysadmin_graph_arms/
   analyze.py                             tables and figures with bootstrap intervals
 results/e1/                              (git-ignored)
 ```
-Dependencies: `nbn>=0.24` (sets, hypotheses, agreement rule, export), NumPy (robust value iteration,
+Dependencies: `nbn>=0.25` (sets, hypotheses, agreement rule and union over a family, export), NumPy (robust value iteration,
 exact evaluation). Storm (interval models) as an optional cross-check of S8.

@@ -86,7 +86,8 @@ that arm). The runner (progress bar with time left; about 2 minutes) simulates e
 
 1. **S1 checks from data only**: the confounding gate (is the kernel the same under every logger?), a
    first-order Markov test and a stationarity test. All use a permutation test within each input
-   configuration, so their level holds on sparse data and on trajectories.
+   configuration. Their level is exact for independent rows at any sample size, and approximate (close
+   to nominal in simulations) on trajectories.
 2. **Episode split**: discovery half for the graph arms, estimation half kept for S4.
 3. **Graph arms**: one graph by BIC, one graph by J-PCMCI+ (logger as context), the Bayesian credible
    family, and the ICP family (the accepted parent sets: contains the true set w.p. ≥ 0.9).
@@ -119,6 +120,49 @@ Columns of the pilot table:
 Options: `--n` (machines), `--episodes`, `--horizon`, `--seeds`, `--load-effect`, `--no-progress`.
 A progress bar (on stderr) shows the datasets done, the elapsed time and an estimate of the time left.
 
-**Status:** S0–S3 implemented and tested (environment, loggers, S1 checks, graph arms). Next: the
-arms that need NBN (agreement rule, ICP + agreement) and S4–S9 (sets, compilation, robust planning,
-exact check).
+### Stage 3: the whole pipeline, S1–S9, for every arm
+```bash
+uv run python experiments/e1_sysadmin_graph_arms/pipeline_arms.py --seeds 10
+uv run python experiments/e1_sysadmin_graph_arms/analyze_pipeline.py
+```
+The runner (progress bar with time left; a few minutes) uses the same suites, sizes and edges as
+stage 2. For each run it splits the data by episode (discovery half: S2/S3; estimation half: S4) and
+runs nine arms:
+
+| Arm | S2/S3: parent sets per machine | S4 (NBN `agreement_set`) |
+|---|---|---|
+| `oracle` | the true parents | sets on them |
+| `flat` | all 8 inputs (no structure) | one set per visited row |
+| `bic` | the BIC-best set (one learned graph) | sets on it |
+| `posterior` | the Bayesian credible family | union over the family (`refute=False`) |
+| `icp` | the ICP accepted family | union over the family (`refute=False`) |
+| `agreement` | all size-3 sets, refuted by their extensions | the agreement rule (`refute=True`) |
+| `icp_agreement` | the ICP family, then refuted | the agreement rule on it |
+| `plugin_oracle`, `plugin_bic` | the true / BIC parents | maximum-likelihood tables, no sets |
+
+Then: **S7** exports the per-machine sets with NBN (`nbn.factored_sets/1`) and reads each joint
+row's box back (`joint_row_bounds`, an outer relaxation); **S8** runs robust value iteration on the
+boxes (worst case, dynamic nature, γ = 0.95); **S9** evaluates the returned policy exactly. The
+budget is δ = 0.1 for the sets (split over the machines), plus α = 0.1 for the ICP family.
+**S5** (multi-candidate arms): up to 32 hypotheses, one candidate per machine, are drawn; each one's
+plug-in policy is evaluated, giving the largest regret among them and the share of states where they
+choose different actions.
+
+`analyze_pipeline.py` reads `results/e1/pipeline_arms.csv` and writes:
+
+- `results/e1/figures/pipeline_regret.pdf` / `.png`. **Caption:** *Regret of the returned policy,
+  $V^*-V^{\hat\pi}$ at "all machines up", against total episodes, per logger suite (columns) and
+  edge strength (rows); 10 seeds per point, bands are 95% bootstrap intervals. Solid: arms with
+  uncertainty sets (robust planning); dashed: plug-in controls.*
+- `results/e1/figures/pipeline_promise.pdf` / `.png`. **Caption:** *(a) Share of runs where the
+  promise held (promise ≤ true value); hatched: plug-in controls, which carry no guarantee.
+  (b) Feasible state-action rows (of 80) whose box is narrower than the simplex. (c) Promise
+  against true value per run, coloured as in (a): points above the diagonal kept their promise.*
+- `results/e1/figures/pipeline_s5.pdf` / `.png`. **Caption:** *S5, does graph disagreement matter?
+  For arms with several candidates per machine: the largest regret among the plug-in policies of
+  the sampled hypotheses, and the share of states where they disagree.*
+- `results/e1/tables/pipeline_arms.csv` and `.tex`: per arm and size (suites and edges pooled):
+  regret, promise, sound share, rows with a set, valid structure, mean [95% bootstrap interval].
+
+**Status:** S0–S9 implemented and tested (environment, loggers, S1 checks, graph arms, NBN sets and
+export, robust value iteration, exact check, S5 sampling).
