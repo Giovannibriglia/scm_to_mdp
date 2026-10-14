@@ -49,6 +49,40 @@ The full design (arms, measurements, knobs and the expected results, written bef
 - First a **pilot**: one dataset per logger family, to check that each logger produces the data it is
   meant to (coverage, aliasing, confounding) before any learning.
 
+## How to read the results
+Every figure and table answers one question about one step (or about the whole pipeline). Read them
+in two passes:
+
+1. **Safety first.** Does the procedure keep the guarantee it claims? Look at *truth inside every box*
+   (the event the guarantee rests on) and at *promise ≤ true value*. A procedure that claims a level
+   must reach it (≥ 0.9 here); one that falls clearly below is disqualified, whatever its regret.
+   Procedures with no guarantee (plug-in models, Bayesian boxes, optimistic or mixed criteria) are
+   drawn dashed or hatched: they are references, not candidates.
+2. **Then quality, among the safe procedures:** lower regret, tighter sets (smaller width, more rows
+   with a set), higher promise, fewer surviving hypotheses.
+
+All numbers are means over runs with 95% percentile-bootstrap intervals (bands, error bars, or
+`[lo, hi]` in the tables); the x axis is the data size (episodes per logger, log scale).
+
+| Step | Question | Figure (table) | Procedures compared |
+|---|---|---|---|
+| S1 data | What does each logger's data cover? | `pilot_loggers` | seven logger families |
+| S1 split | How much data for discovery vs estimation? | `bench_s1` | discovery 30 / 50 / 70% |
+| S1 gate | Level under setting 1, power under confounding | `pipeline_gate` (a); `s1_checks` | gate on / off (`oracle_gated` vs `oracle`) |
+| S1 → S2/S3 | Do more loggers help beyond more data? | `pipeline_loggers` | both loggers vs each alone |
+| S2/S3 graphs | Which parent-set procedure? | `structure_arms` (against the true graph); `pipeline_regret_*`, `pipeline_promise` (end to end) | BIC, J-PCMCI+, credible family, ICP, agreement, ICP + agreement, flat, oracle |
+| S4 sets | Which set builder? | `bench_s4` | L1 ball, KL, Hoeffding, Clopper–Pearson, Dirichlet |
+| S5 merge | Do plausible graphs agree enough to merge? Does it change the decision? | `pipeline_s5` | (a measurement, not a choice) |
+| S6 criterion | What does each declared criterion trade? | `bench_s6` | worst case, Hurwicz 0.5, optimistic, nominal |
+| S7/S8 | How much does the box relaxation lose? | `bench_s78` | product box, Fréchet box, exact factored |
+| S9 | — | every figure (it is the evaluator) | — |
+| robustness | Do conclusions survive a false bound, a distractor, N = 6? | `pipeline_ablations` (`ablations`) | core vs ablation |
+
+In a per-step bench (`bench_*`) only that step varies; everything else is fixed (true parents unless
+the step is S1, L1 sets unless the step is S4, product box and interval robust VI unless the step is
+S7/S8, worst case unless the step is S6). In the end-to-end figures (`pipeline_*`) the arms differ only
+in S2/S3, so their differences are the effect of the graph procedure.
+
 ## How to run
 From the repository root, with [uv](https://docs.astral.sh/uv/):
 ```bash
@@ -241,3 +275,51 @@ logger, not for the ICP family in S-A (one logger) or for the valid families in 
 **Status:** S0–S9 implemented and tested, with the second-pass items (S5 merge, coverage split, SHD,
 logger values, model cards, ε, 1000 episodes per logger, 20 seeds, S-E with the gate, loggers alone,
 ablations d = 2, distractor, N = 6). Open: the Storm cross-check of S8.
+
+### Stage 4: per-step benches (one step varies, the others fixed)
+```bash
+uv run python experiments/e1_sysadmin_graph_arms/step_benches.py
+uv run python experiments/e1_sysadmin_graph_arms/analyze_benches.py
+```
+Suites S-B and S-D, 20/50/200/1000 episodes per logger, strong and weak edge, ε = 0.2, 20 seeds
+(320 datasets; about 3 minutes on 8 workers). Each dataset is used by four benches (see the table
+in "How to read the results"); `results/e1/bench_<step>.csv`, then figures and tables `bench_s1`,
+`bench_s4`, `bench_s78`, `bench_s6`.
+
+- `figures/bench_s1`. **Caption:** *The S1 split: share of the data used for the gate and S2/S3
+  (discovery) vs for S4. Truth inside every box and regret, for ICP + agreement (a, b) and BIC (c, d).*
+- `figures/bench_s4`. **Caption:** *S4 set builders with the true parents fixed. (a) Share of runs
+  whose intervals contain the true probability of every factor row (dotted: the 0.9 level). (b) Mean
+  width of the interval on $P(m_i'=1)$ over rows with data. (c) Regret of the robust policy. Dashed:
+  Dirichlet posterior box (no frequentist guarantee).*
+- `figures/bench_s78`. **Caption:** *S7/S8 with the true parents and L1 sets fixed: the pipeline's
+  product box, the Fréchet box, and the exact factored inner problem (corners of the factor intervals).
+  (a) Promise (all three are sound). (b) Exact factored promise minus the relaxation's promise.
+  (c) Regret.*
+- `figures/bench_s6`. **Caption:** *S6 criteria on the same boxes: worst case (robust), Hurwicz 0.5,
+  optimistic, and the nominal maximum-likelihood model. (a) Share of runs whose promise held.
+  (b) Regret. (c) Promise. Dashed: criteria without a guarantee.*
+
+#### Results (2026-10-14; 320 datasets)
+- **S1 split: 50% is the safe default.** With 30% for discovery, ICP + agreement gets lower regret (0.1
+  vs 0.9 at 200 episodes per logger) but BIC's graph gets worse and its boxes miss the truth in 31% of
+  runs at 20 episodes per logger and 28% at 200 (50%: ≤ 5%); 70% for discovery leaves S4 short and
+  raises every arm's regret (oracle 18.7 vs 11.7 at 20).
+- **S4: KL or Clopper–Pearson intervals beat L1 balls.** All four guaranteed builders covered the true
+  factors in every run (conservative against the 0.9 level). KL and Clopper–Pearson are 25–40%
+  narrower than the L1 ball and Hoeffding at 200–1000 episodes per logger (0.085–0.09 vs 0.14 at 1000) and give
+  lower regret at small data (9.8–10.2 vs 11.7–12.5 at 20). The Dirichlet box is narrower still and has
+  the lowest regret, but covers the truth in only 89–96% of runs (no guarantee).
+- **S7/S8: the box relaxation costs much at small data; the exact factored problem is cheap here.**
+  Exact factored promises exceed the box's by 11–13 at 20–50 episodes per logger (33 vs 22 at 20), with
+  lower regret (8.3 vs 11.7 at 20; 3.1 vs 6.2 at 50), and it solves faster (0.008 s vs 0.02 s: 16 corners
+  per row for N = 4; the corners grow as $2^N$). The Fréchet box, needed only when a hidden variable
+  can couple the machines, is far looser (regret 31 at 20).
+- **S6: the guarantee costs regret at small data.** Only the worst case is guaranteed; it kept every
+  promise, at regret 11.7 at 20 episodes per logger. The nominal model has near-zero regret but kept
+  its promise in only 8–16% of runs; optimistic in none. Hurwicz 0.5 kept every promise here and had
+  regret 0.5, but carries no guarantee.
+
+**What this suggests for the pipeline (to confirm before a design change):** use KL or
+Clopper–Pearson intervals in S4 for binary factors, and the exact factored inner problem in S8 when
+$2^N$ corners per row is affordable; keep the 50% split and the worst-case criterion.
