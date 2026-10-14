@@ -4,8 +4,9 @@ Unlike :mod:`scm_to_mdp.diagnostics`, nothing here uses the true model: these ar
 pipeline itself runs before discovery. Each test compares ``P(m_i' | all inputs)`` across groups of
 rows with the invariance test of :mod:`scm_to_mdp.structure` (G statistic within each input
 configuration). Conditioning on *all* slice-t inputs is a superset of every target's parents, so under
-the null the next states in one configuration are independent draws, and the test is valid on
-trajectories.
+the null the next states in one configuration are draws from the same law. On trajectories later
+configurations depend on earlier outcomes, so the permutation level is approximate rather than exact;
+it stays close to nominal in simulations (the E1 false-alarm rates are about nominal).
 
 - **Confounding gate (policy as context).** Groups = loggers. Under no unobserved confounding the
   kernel is the same under every logger (Bareinboim, *Causal AI* v0.27, Def. 8.2.1, p. 547), so a

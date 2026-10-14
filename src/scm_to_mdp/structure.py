@@ -114,7 +114,8 @@ def invariance_pvalue(cols, target: str, parents: Candidate, regime: np.ndarray,
     the next states within a configuration are independent draws whatever their group, so the group
     labels are exchangeable within each configuration. ``reference="permutation"`` (default) uses that:
     each configuration's table is redrawn with its margins fixed (multivariate hypergeometric), which
-    gives a valid level at any sample size. ``reference="chi2"`` uses the chi-square approximation,
+    gives a valid level at any sample size for independent rows (approximate on trajectories, where
+    later configurations depend on earlier outcomes). ``reference="chi2"`` uses the chi-square approximation,
     which is anti-conservative when cells are sparse. With no testable configuration the p-value is 1.
     """
     if reference not in ("permutation", "chi2"):
