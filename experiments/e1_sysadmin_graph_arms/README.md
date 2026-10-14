@@ -189,5 +189,18 @@ one-graph arm misses parents and leaves its boxes, but its promise does not fail
 pessimism margin. Expectation (1), every graph arm ≈ oracle with many episodes, does not hold at
 400 episodes for the valid-family arms.
 
+**Open design items (DESIGN.md, checked 2026-10-14):**
+1. *S5 as designed:* merge hypotheses whose sets agree on every reachable row within τ and log
+   K → K′; disagreement on *reachable* states (now: sampled plug-in policies, all states).
+2. *Measurements:* coverage split into rows visited jointly vs covered factor by factor only, per arm
+   (needed for expectation 2); SHD of the learned graph; each logger's own value; one model card per
+   arm (size, rows with a set, coupling).
+3. *Knobs:* exploration ε ∈ {0.02, 0.2} (suites now fix 0.05); 1000 episodes per logger; 20 paired
+   seeds (now 10).
+4. *Suites:* S-E (specialist + confounded: the S1 gate must reject and route to confounded rows);
+   each suite against its loggers alone at the same total data; the S1 gate inside stage 3.
+5. *Ablations:* a false bound d = 2; a distractor bit read by one logger; N = 6.
+6. *Optional:* Storm cross-check of S8.
+
 **Status:** S0–S9 implemented and tested (environment, loggers, S1 checks, graph arms, NBN sets and
 export, robust value iteration, exact check, S5 sampling).
