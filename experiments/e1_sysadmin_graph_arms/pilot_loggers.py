@@ -15,6 +15,7 @@ import csv
 from pathlib import Path
 
 import numpy as np
+from tqdm import tqdm
 
 from scm_to_mdp.data import rollout
 from scm_to_mdp.diagnostics import observational_gap, profile
@@ -45,17 +46,19 @@ def main() -> None:
     ap.add_argument("--load-effect", type=float, default=0.3,
                     help="how much the hidden load lowers survival and repair success")
     ap.add_argument("--out", type=Path, default=Path("results/e1/pilot_loggers.csv"))
+    ap.add_argument("--no-progress", action="store_true", help="hide the progress bar")
     args = ap.parse_args()
 
     env = SysAdminRing(n=args.n, load_effect=args.load_effect)
     rows = []
-    for family, kwargs in LOGGERS:
-        for seed in range(args.seeds):
-            logger = make_logger(family, env, **kwargs)
-            data = rollout(env, logger, args.episodes, args.horizon, np.random.default_rng(seed))
-            prof = profile(env, data)
-            rows.append({"logger": family, "seed": seed, **prof,
-                         "confounding_excess": observational_gap(env, data)})
+    jobs = [(family, kwargs, seed) for family, kwargs in LOGGERS for seed in range(args.seeds)]
+    progress = tqdm(jobs, desc="pilot", unit="dataset", disable=args.no_progress)
+    for family, kwargs, seed in progress:
+        progress.set_postfix_str(f"{family}, seed {seed}")
+        logger = make_logger(family, env, **kwargs)
+        data = rollout(env, logger, args.episodes, args.horizon, np.random.default_rng(seed))
+        rows.append({"logger": family, "seed": seed, **profile(env, data),
+                     "confounding_excess": observational_gap(env, data)})
 
     args.out.parent.mkdir(parents=True, exist_ok=True)
     with args.out.open("w", newline="") as fh:

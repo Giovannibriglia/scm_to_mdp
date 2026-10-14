@@ -84,7 +84,8 @@ Columns of the pilot table:
 | `conc.` | single-policy concentrability: largest ratio of the optimal policy's discounted visits to the data's row frequency (∞ = the optimal policy uses a row the data never visit). A descriptive number: the theory's coefficient takes the worst case over all policies (Agarwal et al., *RL: Theory and Algorithms*, Assumption 4.1, p. 54) |
 | `confound` | gap between observed and interventional kernels, beyond sampling noise |
 
-Options: `--n` (machines), `--episodes`, `--horizon`, `--seeds`, `--load-effect`.
+Options: `--n` (machines), `--episodes`, `--horizon`, `--seeds`, `--load-effect`, `--no-progress`.
+A progress bar (on stderr) shows the datasets done, the elapsed time and an estimate of the time left.
 
 **Status:** environment, loggers, data and diagnostics are implemented and tested. The learning arms
 (S2–S9, on NBN ≥ 0.24) are next.
