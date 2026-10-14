@@ -14,6 +14,8 @@ family              behaviour                                                   
 ``lazy``            mostly no-op                                                failures seen, repairs rare
 ``recent_failure``  repairs the machine that failed most recently (history)     non-Markov but unconfounded
 ``confounded``      repairs more when the hidden load is high                   breaks setting 1 (RQ2)
+``distractor``      a region specialist that acts only when the observed        a spurious candidate
+                    distractor bit is 1                                         parent (E1 ablation)
 ==================  ==========================================================  =====================
 
 Every logger takes an exploration probability ``eps``: with probability ``eps`` it plays a uniform
@@ -37,6 +39,7 @@ class Logger:
     eps: float = 0.0
     name: str = "logger"
     reads_hidden: bool = field(default=False, init=False)
+    distractor: int = field(default=0, init=False)     # the observed distractor bit, set by rollout
     history_dependent: bool = field(default=False, init=False)
 
     def __post_init__(self) -> None:
@@ -193,6 +196,20 @@ class Confounded(Logger):
         return _repair_one(np.flatnonzero(state == 0), rng)
 
 
+@dataclass
+class DistractorReader(RegionSpecialist):
+    """A region specialist that repairs only when the observed distractor bit is 1 (no-op otherwise).
+
+    No machine depends on the bit, but in this logger's data the repair flags move with it, so a
+    candidate parent set holding the bit instead of a repair flag can look predictive.
+    """
+
+    name: str = "distractor"
+
+    def _act(self, state, rng, w):
+        return super()._act(state, rng, w) if self.distractor == 1 else 0
+
+
 FAMILIES = {
     "uniform": UniformRandom,
     "specialist": RegionSpecialist,
@@ -201,6 +218,7 @@ FAMILIES = {
     "lazy": Lazy,
     "recent_failure": RecentFailure,
     "confounded": Confounded,
+    "distractor": DistractorReader,
 }
 
 

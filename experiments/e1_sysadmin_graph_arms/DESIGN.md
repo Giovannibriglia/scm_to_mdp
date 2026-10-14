@@ -5,6 +5,13 @@
 (`refute=False` = the union over a given family, NBN #329; credible and ICP families use it); S8 uses
 per-row interval boxes from `joint_row_bounds`; the promise is the robust value of the returned
 policy (`robust_policy_value`), not the stopped iterate.
+Second pass (2026-10-14, items 1–5 of the README list): S5 merge per machine on rows of states the data
+reached (τ = 0.05), disagreement on reached states; coverage split (joint / factor only), SHD, logger
+values and model cards; ε ∈ {0.02, 0.2} for every logger, 20/50/200/1000 episodes per logger, 20 seeds;
+S-E with the S1 gate inside stage 3 and an `oracle_gated` arm (confounded rows from NBN, joint rows by
+Fréchet bounds, because the hidden load couples the machines and the product of factor bounds is then
+not guaranteed); loggers alone at equal total data; ablations d = 2, distractor bit (an observed i.i.d.
+bit read by one logger; the planner takes the worst case over its value), N = 6.
 
 **Question.** Offline data come from several exploratory behaviour policies on a small, fully observed,
 stochastic MDP. We compare a pipeline that uses **one learned graph**, one that keeps **several
