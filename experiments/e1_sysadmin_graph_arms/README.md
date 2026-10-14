@@ -179,7 +179,7 @@ choose different actions.
   optimal; the gap shrinks with data (oracle: 14.0 → 5.6 from 40 to 400 episodes).
 - *Structure buys coverage.* Feasible rows with a set at 400 episodes: oracle and BIC 79, flat 29.
 - *Valid families are wide at small n.* The agreement rule cannot refute much with 40–100 episodes
-  (about 20 survivors per machine), so its rows stay open and its regret is the largest; ICP +
+  (of 56 size-3 candidates per machine, 37 survive at 40 episodes, 21 at 100, 6 at 400), so its rows stay open and its regret is the largest; ICP +
   agreement is the best valid-family arm at 400 episodes (regret 8.9 vs agreement 11.9, ICP 10.0).
 - *S5:* the sampled hypotheses of the valid families disagree on most states (ICP 0.64, agreement
   0.69 at 400 episodes): on this domain graph ambiguity does change the plug-in decision.
