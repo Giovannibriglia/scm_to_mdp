@@ -4,12 +4,13 @@ Writes under ``results/e1/figures`` and ``results/e1/tables``:
 
 - ``pipeline_regret.{pdf,png}``: regret of the returned policy against total episodes, one panel per
   (edge strength, logger suite), one line per arm (plug-in controls dashed);
-- ``pipeline_promise.{pdf,png}``: (a) share of runs where the promise held (promise <= true value),
+- ``pipeline_promise.{pdf,png}``: (a) share of runs where the promise held (promise <= true value;
+  bars) and where the true kernel lay inside every box (diamonds: the event the guarantee rests on),
   (b) feasible rows with a set narrower than the simplex, (c) promise against true value;
 - ``pipeline_s5.{pdf,png}``: S5, does graph disagreement matter: the largest plug-in regret among the
   sampled hypotheses and the share of states where they disagree, for multi-candidate arms;
 - ``pipeline_arms.{csv,tex}``: per arm and total episodes (both edges and all suites pooled): regret,
-  promise, sound rate, rows with a set, valid structure.
+  promise, sound rate, truth inside every box, rows with a set, valid structure.
 
 Every number is a mean over runs with a 95% percentile-bootstrap interval.
 
@@ -108,14 +109,18 @@ def promise_figure(rows, out: Path) -> list[Path]:
     y = np.arange(len(ARM_STYLE))[::-1]
     sound = [ci([r["sound"] for r in pick(rows, arm=a)]) for a in ARM_STYLE]
     m, lo, hi = (np.array(v) for v in zip(*sound, strict=True))
+    inside = [ci([r["truth_in_boxes"] for r in pick(rows, arm=a)]) for a in ARM_STYLE]
     for k, (_, colour, ls) in enumerate(ARM_STYLE.values()):
         axes[0].barh(y[k], m[k], color=colour, hatch="////" if ls == "--" else None,
                      edgecolor="white" if ls == "--" else colour, lw=0,
                      xerr=[[m[k] - lo[k]], [hi[k] - m[k]]], error_kw={"lw": 0.6, "capsize": 1.5})
+        if not np.isnan(inside[k][0]):
+            axes[0].plot(inside[k][0], y[k], ls="none", marker="D", ms=3.5, mfc="white",
+                         mec=OKABE_ITO["black"], mew=0.8)
     axes[0].set_yticks(y, [ARM_STYLE[a][0] for a in ARM_STYLE], fontsize=6)
     axes[0].set_xlim(0, 1.05)
-    axes[0].set_xlabel("share of runs with\npromise $\\leq$ true value")
-    axes[0].set_title("(a) soundness")
+    axes[0].set_xlabel("share of runs")
+    axes[0].set_title("(a) bars: promise $\\leq$ true value\n$\\diamond$: truth inside every box")
     for arm in SET_ARMS:
         label, colour, ls = ARM_STYLE[arm]
         stats = [ci([r["rows_with_set"] for r in pick(rows, arm=arm, episodes=e)]) for e in episodes]
@@ -161,6 +166,7 @@ def s5_figure(rows, out: Path) -> list[Path]:
 
 
 TABLE = [("regret", "regret", "{:.1f}"), ("promise", "promise", "{:.1f}"), ("sound", "sound", "{:.2f}"),
+         ("truth_in_boxes", "truth in boxes", "{:.2f}"),
          ("rows_with_set", "rows with set", "{:.0f}"), ("valid_structure", "valid structure", "{:.2f}")]
 
 

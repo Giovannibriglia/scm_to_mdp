@@ -155,14 +155,39 @@ choose different actions.
   edge strength (rows); 10 seeds per point, bands are 95% bootstrap intervals. Solid: arms with
   uncertainty sets (robust planning); dashed: plug-in controls.*
 - `results/e1/figures/pipeline_promise.pdf` / `.png`. **Caption:** *(a) Share of runs where the
-  promise held (promise ≤ true value); hatched: plug-in controls, which carry no guarantee.
+  promise held (bars: promise ≤ true value; hatched: plug-in controls, which carry no guarantee) and
+  where the true kernel lay inside every box (diamonds: the event the guarantee rests on).
   (b) Feasible state-action rows (of 80) whose box is narrower than the simplex. (c) Promise
   against true value per run, coloured as in (a): points above the diagonal kept their promise.*
 - `results/e1/figures/pipeline_s5.pdf` / `.png`. **Caption:** *S5, does graph disagreement matter?
   For arms with several candidates per machine: the largest regret among the plug-in policies of
   the sampled hypotheses, and the share of states where they disagree.*
 - `results/e1/tables/pipeline_arms.csv` and `.tex`: per arm and size (suites and edges pooled):
-  regret, promise, sound share, rows with a set, valid structure, mean [95% bootstrap interval].
+  regret, promise, sound share, truth inside every box, rows with a set, valid structure, mean
+  [95% bootstrap interval].
+
+**First full run (2026-10-14; 4 suites × 40/100/400 episodes × 2 edges × 10 seeds, 9 arms;
+`results/e1/tables/pipeline_arms.csv`):**
+- *Sets keep their promise; plug-in does not.* Every set-based arm kept promise ≤ true value in all
+  240 runs; the plug-in controls broke it in 75–90% of runs, with near-zero regret.
+- *The one-graph arm breaks the guarantee's event.* The true kernel lay outside some BIC box in 21%
+  of runs (43% when BIC missed a parent), and outside some credible-family box in 5%. Its promises
+  still held only because pessimism is wide here, so "promise ≤ true value" alone is a weak test on
+  this domain; "truth inside every box" is the sharper one. Oracle, flat, agreement: 100%; ICP and
+  ICP + agreement: 99% (as their level allows).
+- *Pessimism costs decisions.* Robust arms have regret 4–35 where the plug-in policies are near
+  optimal; the gap shrinks with data (oracle: 14.0 → 5.6 from 40 to 400 episodes).
+- *Structure buys coverage.* Feasible rows with a set at 400 episodes: oracle and BIC 79, flat 29.
+- *Valid families are wide at small n.* The agreement rule cannot refute much with 40–100 episodes
+  (about 20 survivors per machine), so its rows stay open and its regret is the largest; ICP +
+  agreement is the best valid-family arm at 400 episodes (regret 8.9 vs agreement 11.9, ICP 10.0).
+- *S5:* the sampled hypotheses of the valid families disagree on most states (ICP 0.64, agreement
+  0.69 at 400 episodes): on this domain graph ambiguity does change the plug-in decision.
+
+These are pre-registered expectations 2–3 of `DESIGN.md` §7 confirmed in part: (3) yes; (2) the
+one-graph arm misses parents and leaves its boxes, but its promise does not fail, because of the
+pessimism margin. Expectation (1), every graph arm ≈ oracle with many episodes, does not hold at
+400 episodes for the valid-family arms.
 
 **Status:** S0–S9 implemented and tested (environment, loggers, S1 checks, graph arms, NBN sets and
 export, robust value iteration, exact check, S5 sampling).
