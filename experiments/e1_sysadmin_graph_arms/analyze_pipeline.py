@@ -218,7 +218,9 @@ def s5_figure(rows, out: Path) -> list[Path]:
     axes[0].set(ylabel="$\\log_{10}$ hypotheses", title="(a) $K$ (dotted) $\\to K'$ after merge")
     axes[1].set(ylabel="largest plug-in regret", title="(b) worst sampled hypothesis")
     axes[2].set(ylabel="share of reached states", ylim=(0, 1.02), title="(c) hypotheses disagree")
-    axes[2].legend(loc="upper right")
+    handles, labels = axes[2].get_legend_handles_labels()
+    fig.legend(handles, labels, loc="lower center", ncol=4, bbox_to_anchor=(0.5, -0.02), fontsize=6.5)
+    fig.subplots_adjust(bottom=0.3)
     paths = save(fig, out)
     plt.close(fig)
     return paths
