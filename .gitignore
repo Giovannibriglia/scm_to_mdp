@@ -1,0 +1,17 @@
+# Results of experiment runs (large; regenerate with the experiment scripts)
+results/
+
+# uv / Python
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+*.egg-info/
+
+# Local tool configuration (never published)
+.claude/
+.mcp.json
+
+# IDE / OS
+.idea/
+.DS_Store
