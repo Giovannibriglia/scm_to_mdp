@@ -52,11 +52,14 @@ The full design (arms, measurements, knobs and the expected results, written bef
 ## How to run
 From the repository root, with [uv](https://docs.astral.sh/uv/):
 ```bash
-uv sync                                                    # environment and dependencies
-uv run pytest -q                                           # tests of the environment and loggers
-uv run python experiments/e1_sysadmin_graph_arms/pilot_loggers.py --seeds 10   # simulate (seconds)
-uv run python experiments/e1_sysadmin_graph_arms/analyze.py                     # figure and tables
+uv sync
+uv run pytest -q
+uv run python experiments/e1_sysadmin_graph_arms/pilot_loggers.py --seeds 10
+uv run python experiments/e1_sysadmin_graph_arms/analyze.py
 ```
+In order: install the environment and dependencies; run the tests of the environment and loggers;
+simulate one dataset per logger family and seed (seconds); draw the figure and write the tables.
+(No inline `#` comments: zsh passes them on as arguments unless `interactivecomments` is set.)
 The pilot prints one line per logger family and writes `results/e1/pilot_loggers.csv`. `analyze.py`
 reads it (it never simulates) and writes:
 
