@@ -80,7 +80,7 @@ Every arm fits on the same pooled data (all loggers of a suite), with the same s
 
 **Graph-level levels (S3).** ICP gives a frequentist level for the hypothesis set: the true parent
 set is accepted with probability $\ge 1-\alpha$ per target (Peters, Janzing & Schölkopf, *ECI*,
-eq. 7.8, p. 153), so the family of accepted sets is valid at $1-\alpha$ after a Bonferroni split over
+§7.2.5, eq. 7.8, pp. 153–154), so the family of accepted sets is valid at $1-\alpha$ after a Bonferroni split over
 the $N$ targets. ICP's intersection $\hat S$ is *not* used: it controls false parents only and can
 miss true ones. The Bayesian credible set has a posterior level, not a frequentist one.
 

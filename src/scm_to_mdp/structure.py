@@ -10,7 +10,7 @@ set of size <= d can be scored or tested exactly. This module returns, per targe
 - ``posterior`` / ``credible_family``: the exact posterior over parent sets (BDeu marginal likelihood,
   uniform structure prior; K&F Prop. 18.7, p. 828) and its smallest credible family;
 - ``icp_family``: invariant causal prediction with the loggers as environments; the accepted sets of
-  size <= d contain the true parent set with probability >= 1 - alpha (ECI, eq. 7.8, p. 153). ICP's
+  size <= d contain the true parent set with probability >= 1 - alpha (ECI, §7.2.5, eq. 7.8, pp. 153-154). ICP's
   intersection is *not* returned: it controls false parents only and can miss true ones.
 
 Inputs and targets are binary columns (``data.columns(env)``); a candidate is a tuple of input names.
