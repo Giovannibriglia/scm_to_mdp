@@ -33,15 +33,20 @@ def candidate_sets(inputs: Sequence[str], d: int) -> list[Candidate]:
     return [c for k in range(d + 1) for c in itertools.combinations(inputs, k)]
 
 
+def _config_index(cols: Mapping[str, np.ndarray], parents: Candidate, cards, n_rows: int):
+    """Row index of each configuration of ``parents`` (C order) and the number of configurations."""
+    pc = [int((cards or {}).get(p, 2)) for p in parents]
+    if not parents:
+        return np.zeros(n_rows, dtype=np.int64), 1
+    return np.ravel_multi_index([cols[p].astype(np.int64) for p in parents], pc), math.prod(pc)
+
+
 def family_counts(cols: Mapping[str, np.ndarray], target: str, parents: Candidate,
                   cards: Mapping[str, int] | None = None) -> np.ndarray:
     """``[R, K]`` counts of ``target`` per configuration of ``parents`` (C order, last parent fastest)."""
-    cards = cards or {}
-    k = int(cards.get(target, 2))
-    pc = [int(cards.get(p, 2)) for p in parents]
-    rows = np.ravel_multi_index([cols[p].astype(np.int64) for p in parents], pc) if parents else \
-        np.zeros(len(cols[target]), dtype=np.int64)
-    counts = np.zeros((math.prod(pc), k), dtype=np.int64)
+    k = int((cards or {}).get(target, 2))
+    rows, n_conf = _config_index(cols, parents, cards, len(cols[target]))
+    counts = np.zeros((n_conf, k), dtype=np.int64)
     np.add.at(counts, (rows, cols[target].astype(np.int64)), 1)
     return counts
 
@@ -118,11 +123,9 @@ def invariance_pvalue(cols, target: str, parents: Candidate, regime: np.ndarray,
     if groups.size < 2:
         return 1.0
     k = int((cards or {}).get(target, 2))
-    pc = [int((cards or {}).get(p, 2)) for p in parents]
-    rows = np.ravel_multi_index([cols[p].astype(np.int64) for p in parents], pc) if parents else \
-        np.zeros(len(regime), dtype=np.int64)
+    rows, n_conf = _config_index(cols, parents, cards, len(regime))
     gidx = np.searchsorted(groups, regime)
-    table = np.zeros((math.prod(pc), groups.size, k), dtype=np.int64)
+    table = np.zeros((n_conf, groups.size, k), dtype=np.int64)
     np.add.at(table, (rows, gidx, cols[target].astype(np.int64)), 1)
     tables = []
     for t in table:

@@ -33,7 +33,7 @@ class JPCMCIResult:
 
 def _series(env: SysAdminRing, data: Transitions) -> dict[int, np.ndarray]:
     """One array per episode: rows (s_t, a_t, logger) for t = 0..T-1, then (s_T, missing, logger)."""
-    key = data.episode.astype(np.int64) + 1_000_000 * data.regime.astype(np.int64)
+    key = data.episode_ids()
     out = {}
     for k in np.unique(key):
         m = key == k

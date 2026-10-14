@@ -50,25 +50,24 @@ def _inputs(env: SysAdminRing) -> tuple[str, ...]:
     return tuple(env.state_vars + env.action_flags)
 
 
-def confounding_gate(env: SysAdminRing, data: Transitions) -> dict[str, float]:
-    cols = data.columns(env)
+def confounding_gate(env: SysAdminRing, data: Transitions, cols=None) -> dict[str, float]:
+    cols = data.columns(env) if cols is None else cols
     return {f"m{i}'": invariance_pvalue(cols, f"m{i}'", _inputs(env), data.regime) for i in range(env.n)}
 
 
 def _previous_step(env: SysAdminRing, data: Transitions) -> tuple[np.ndarray, np.ndarray]:
     """Index of the previous transition of the same episode (``-1`` at ``t = 0``)."""
-    key = data.episode.astype(np.int64) * 1_000_000 + data.regime.astype(np.int64) * 10_000 + data.t
-    order = np.argsort(key)
+    ep = data.episode_ids()
+    order = np.lexsort((data.t, ep))                       # by episode, then time
+    same = (np.diff(ep[order]) == 0) & (np.diff(data.t[order]) == 1)
     prev = np.full(len(data), -1)
-    sorted_key = key[order]
-    same = (np.diff(sorted_key) == 1)
     prev[order[1:][same]] = order[:-1][same]
     return prev, prev >= 0
 
 
-def markov_test(env: SysAdminRing, data: Transitions) -> dict[str, float]:
+def markov_test(env: SysAdminRing, data: Transitions, cols=None) -> dict[str, float]:
     prev, has = _previous_step(env, data)
-    cols = {k: v[has] for k, v in data.columns(env).items()}
+    cols = {k: v[has] for k, v in (data.columns(env) if cols is None else cols).items()}
     flags = env.flags(data.action)
     out = {}
     for i in range(env.n):
@@ -77,20 +76,21 @@ def markov_test(env: SysAdminRing, data: Transitions) -> dict[str, float]:
     return out
 
 
-def stationarity_test(env: SysAdminRing, data: Transitions) -> dict[str, float]:
+def stationarity_test(env: SysAdminRing, data: Transitions, cols=None) -> dict[str, float]:
     half = (data.t >= (data.t.max() + 1) / 2).astype(np.int64)
-    cols = data.columns(env)
+    cols = data.columns(env) if cols is None else cols
     return {f"m{i}'": invariance_pvalue(cols, f"m{i}'", _inputs(env), half) for i in range(env.n)}
 
 
 def profile_assumptions(env: SysAdminRing, data: Transitions, alpha: float = 0.05) -> AssumptionReport:
-    counts = np.zeros((env.n_states, env.n_actions), dtype=bool)
-    counts[env.index(data.state), data.action] = True
+    from scm_to_mdp.diagnostics import row_counts
+
+    cols = data.columns(env)
     episodes = {int(r): int(np.unique(data.episode[data.regime == r]).size) for r in np.unique(data.regime)}
     return AssumptionReport(
-        gate=confounding_gate(env, data), markov=markov_test(env, data),
-        stationarity=stationarity_test(env, data), episodes=sum(episodes.values()),
-        episodes_per_logger=episodes, joint_coverage=float(counts.mean()), alpha=alpha,
+        gate=confounding_gate(env, data, cols), markov=markov_test(env, data, cols),
+        stationarity=stationarity_test(env, data, cols), episodes=sum(episodes.values()),
+        episodes_per_logger=episodes, joint_coverage=float((row_counts(env, data) > 0).mean()), alpha=alpha,
     )
 
 
@@ -102,8 +102,4 @@ def episode_split(data: Transitions, frac: float = 0.5, seed: int = 0) -> tuple[
         eps = np.unique(data.episode[data.regime == r])
         pick = rng.permutation(eps)[: int(round(frac * eps.size))]
         first |= (data.regime == r) & np.isin(data.episode, pick)
-
-    def take(mask):
-        return Transitions(*(getattr(data, f)[mask] for f in
-                             ("state", "action", "next_state", "regime", "episode", "t", "hidden_load")))
-    return take(first), take(~first)
+    return data.take(first), data.take(~first)

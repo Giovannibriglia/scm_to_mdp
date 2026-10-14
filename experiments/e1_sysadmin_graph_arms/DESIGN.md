@@ -85,10 +85,13 @@ the $N$ targets. ICP's intersection $\hat S$ is *not* used: it controls false pa
 miss true ones. The Bayesian credible set has a posterior level, not a frequentist one.
 
 **ICP test (S2).** For candidate $C$, compare $P(m_i'\mid C=u)$ across loggers within each
-configuration $u$ (G statistic summed over configurations with data from at least two loggers,
-chi-square reference). Given the true parents (or a superset), next states are conditionally
-independent of the past and of the logger, so the test is valid for exactly the sets the guarantee
-needs, even on trajectories. With one logger there are no environments: every set is accepted.
+configuration $u$ (G statistic summed over configurations with data from at least two loggers). The
+reference distribution is a **permutation** of the logger labels within each configuration (each
+configuration's table redrawn with its margins fixed): given the true parents (or a superset), next
+states are conditionally independent of the past and of the logger, so the labels are exchangeable
+there and the level holds on sparse data and on trajectories. The chi-square approximation is not
+used: on sparse cells it rejected 23% of null datasets at a nominal 5% (permutation: 4%). With one
+logger there are no environments: every set is accepted.
 
 **A prediction for the one-graph arm.** BIC keeps a parent roughly when
 $M/\log M \gtrsim \Delta\mathrm{Dim}/(2\Delta)$, with $\Delta$ the conditional mutual information the

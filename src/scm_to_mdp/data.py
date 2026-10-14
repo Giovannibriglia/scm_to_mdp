@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import ClassVar
 
 import numpy as np
 
@@ -38,10 +39,21 @@ class Transitions:
         out["regime"] = self.regime
         return out
 
+    FIELDS: ClassVar[tuple[str, ...]] = ("state", "action", "next_state", "regime", "episode", "t",
+                                         "hidden_load")
+
     @staticmethod
     def concat(parts: list[Transitions]) -> Transitions:
-        names = ("state", "action", "next_state", "regime", "episode", "t", "hidden_load")
-        return Transitions(*(np.concatenate([getattr(p, f) for p in parts]) for f in names))
+        return Transitions(*(np.concatenate([getattr(p, f) for p in parts]) for f in Transitions.FIELDS))
+
+    def take(self, mask: np.ndarray) -> Transitions:
+        """The rows selected by a boolean mask (or an index array)."""
+        return Transitions(*(getattr(self, f)[mask] for f in Transitions.FIELDS))
+
+    def episode_ids(self) -> np.ndarray:
+        """One integer id per (regime, episode) pair, consecutive from 0 (no packing overflow)."""
+        _, ids = np.unique(np.stack([self.regime, self.episode], axis=1), axis=0, return_inverse=True)
+        return ids.reshape(-1)
 
 
 def rollout(env: SysAdminRing, logger: Logger, n_episodes: int, horizon: int,

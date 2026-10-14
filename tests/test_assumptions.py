@@ -74,3 +74,20 @@ def test_profile_and_episode_split():
         ea = set(a.episode[a.regime == r].tolist())
         eb = set(b.episode[b.regime == r].tolist())
         assert not ea & eb and len(ea) == len(eb) == 20
+
+
+def test_previous_step_does_not_mix_episodes_with_long_horizons():
+    """Regression: packed integer keys overlapped once t reached 10 000."""
+    from scm_to_mdp.assumptions import _previous_step
+    from scm_to_mdp.data import Transitions
+
+    env = SysAdminRing(n=2)
+    T = 10_001
+    t = np.concatenate([np.arange(T), np.arange(T)])
+    zeros = np.zeros((2 * T, 2), dtype=np.int8)
+    data = Transitions(zeros, np.zeros(2 * T, dtype=int), zeros, np.repeat([0, 1], T),
+                       np.zeros(2 * T, dtype=int), t, np.zeros(2 * T, dtype=np.int8))
+    prev, has = _previous_step(env, data)
+    assert has.sum() == 2 * (T - 1)
+    assert np.all(data.regime[prev[has]] == data.regime[has])
+    assert np.all(data.t[prev[has]] == data.t[has] - 1)

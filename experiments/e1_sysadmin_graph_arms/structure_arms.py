@@ -46,10 +46,11 @@ SUITES = {  # name -> list of (family, kwargs); the total episodes are shared eq
 }
 EDGES = {"strong": 0.60, "weak": 0.85}
 COLUMNS = ["suite", "episodes", "edge", "seed", "arm", "valid", "family_size", "exact", "missed_parent",
-           "gate_p", "markov_p", "stationarity_p"]
+           "gate_p", "markov_p", "stationarity_p", "alpha", "n_targets", "jpcmci_alpha"]
 
 
-def run_one(suite: str, episodes: int, edge: str, seed: int, alpha: float, d: int, use_jpcmci: bool):
+def run_one(suite: str, episodes: int, edge: str, seed: int, alpha: float, d: int, use_jpcmci: bool,
+            jpcmci_alpha: float = 0.01):
     env = SysAdminRing(n=4, p_bad=EDGES[edge])
     specs = SUITES[suite]
     loggers = [make_logger(f, env, **kw) for f, kw in specs]
@@ -71,20 +72,20 @@ def run_one(suite: str, episodes: int, edge: str, seed: int, alpha: float, d: in
     if use_jpcmci:
         from scm_to_mdp.discovery import jpcmci_parents
 
-        res = jpcmci_parents(env, disc, alpha=0.01)
+        res = jpcmci_parents(env, disc, alpha=jpcmci_alpha)
         families["jpcmci"] = {t: [res.parents[t]] for t in truth}
     rows = []
     s1 = {"gate_p": min(report.gate.values()), "markov_p": min(report.markov.values()),
           "stationarity_p": min(report.stationarity.values())}
     for arm, fam in families.items():
         valid = all(contains_superset(fam[t], truth[t]) for t in truth)
-        single = arm in ("bic", "jpcmci", "oracle")
-        exact = single and all(set(fam[t][0]) == set(truth[t]) for t in truth)
-        missed = single and any(not set(truth[t]) <= set(fam[t][0]) for t in truth)
+        single = arm in ("bic", "jpcmci", "oracle")                 # one parent set per target
+        exact = int(all(set(fam[t][0]) == set(truth[t]) for t in truth)) if single else ""
+        missed = int(any(not set(truth[t]) <= set(fam[t][0]) for t in truth)) if single else ""
         size = sum(len(fam[t]) for t in truth) / len(truth)
         rows.append({"suite": suite, "episodes": episodes, "edge": edge, "seed": seed, "arm": arm,
-                     "valid": int(valid), "family_size": size, "exact": int(exact),
-                     "missed_parent": int(missed), **s1})
+                     "valid": int(valid), "family_size": size, "exact": exact, "missed_parent": missed,
+                     **s1, "alpha": alpha, "n_targets": env.n, "jpcmci_alpha": jpcmci_alpha})
     return rows
 
 
@@ -96,6 +97,7 @@ def main() -> None:
     ap.add_argument("--d", type=int, default=3, help="declared in-degree bound")
     ap.add_argument("--suites", nargs="+", default=list(SUITES))
     ap.add_argument("--no-jpcmci", action="store_true", help="skip J-PCMCI+ (no Tigramite)")
+    ap.add_argument("--jpcmci-alpha", type=float, default=0.01, help="J-PCMCI+ pc_alpha (its own level)")
     ap.add_argument("--out", type=Path, default=Path("results/e1/structure_arms.csv"))
     ap.add_argument("--no-progress", action="store_true")
     args = ap.parse_args()
@@ -112,7 +114,7 @@ def main() -> None:
     bar = tqdm(jobs, desc="structure", unit="run", disable=args.no_progress)
     for suite, episodes, edge, seed in bar:
         bar.set_postfix_str(f"{suite}, {episodes} ep, {edge}, seed {seed}")
-        rows += run_one(suite, episodes, edge, seed, args.alpha, args.d, use_jp)
+        rows += run_one(suite, episodes, edge, seed, args.alpha, args.d, use_jp, args.jpcmci_alpha)
     args.out.parent.mkdir(parents=True, exist_ok=True)
     with args.out.open("w", newline="") as fh:
         w = csv.DictWriter(fh, fieldnames=COLUMNS)

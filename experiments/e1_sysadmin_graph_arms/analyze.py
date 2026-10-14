@@ -136,24 +136,39 @@ def load_structure(path: Path):
         rows = list(csv.DictReader(fh))
     for r in rows:
         r["episodes"] = int(r["episodes"])
-        for k in ("valid", "family_size", "exact", "missed_parent", "gate_p", "markov_p", "stationarity_p"):
+        for k in ("valid", "family_size", "gate_p", "markov_p", "stationarity_p", "alpha", "n_targets"):
             r[k] = float(r[k])
+        for k in ("exact", "missed_parent"):                       # blank for family arms (not applicable)
+            r[k] = float(r[k]) if r[k] != "" else None
     return rows
+
+
+def _level(rows) -> tuple[float, int]:
+    """The family-wise level and the number of targets recorded by the run (one value each)."""
+    alphas, targets = {r["alpha"] for r in rows}, {int(r["n_targets"]) for r in rows}
+    if len(alphas) != 1 or len(targets) != 1:
+        raise ValueError(f"mixed levels or target counts in one results file: {alphas}, {targets}")
+    return alphas.pop(), targets.pop()
 
 
 def _cell(rows, **match):
     return [r for r in rows if all(r[k] == v for k, v in match.items())]
 
 
-def structure_figure(rows, out_path: Path, alpha: float = 0.1) -> list[Path]:
+def structure_figure(rows, out_path: Path) -> list[Path]:
     """(a) missed true parents of the one-graph arms; (b) ICP family size per suite; (c) validity."""
     import matplotlib.pyplot as plt
 
     use_style()
+    alpha, _ = _level(rows)
     episodes = sorted({r["episodes"] for r in rows})
     fig, axes = plt.subplots(1, 3, figsize=(DOUBLE_COLUMN, 3.1), gridspec_kw={"wspace": 0.42})
 
     def line(ax, xs, sets, color, label, ls="-"):
+        keep = [(x, v) for x, v in zip(xs, sets, strict=True) if len(v)]   # skip empty cells
+        if not keep:
+            return
+        xs, sets = [x for x, _ in keep], [v for _, v in keep]
         stats = [bootstrap_mean_ci(v) for v in sets]
         m = [s[0] for s in stats]
         ax.plot(xs, m, ls, color=color, marker="o", ms=3, label=label)
@@ -174,8 +189,7 @@ def structure_figure(rows, out_path: Path, alpha: float = 0.1) -> list[Path]:
     for suite, color in SUITE_STYLE.items():
         sets = [[r["family_size"] for r in _cell(rows, arm="icp", edge="weak", suite=suite, episodes=e)]
                 for e in episodes]
-        if all(sets):
-            line(ax, episodes, sets, color, suite)
+        line(ax, episodes, sets, color, suite)
     ax.set(xscale="log", yscale="log", ylabel="ICP family size per target")
     ax.legend(loc="upper center", bbox_to_anchor=(0.5, -0.24), ncol=1)
 
@@ -200,8 +214,9 @@ def structure_figure(rows, out_path: Path, alpha: float = 0.1) -> list[Path]:
     return paths
 
 
-def structure_tables(rows, out_dir: Path, alpha: float = 0.1) -> list[Path]:
+def structure_tables(rows, out_dir: Path) -> list[Path]:
     out_dir.mkdir(parents=True, exist_ok=True)
+    alpha, n_targets = _level(rows)
     keys = sorted({(r["suite"], r["edge"], r["episodes"], r["arm"]) for r in rows if r["arm"] != "oracle"})
     csv_path = out_dir / "structure_arms.csv"
     with csv_path.open("w", newline="") as fh:
@@ -211,9 +226,10 @@ def structure_tables(rows, out_dir: Path, alpha: float = 0.1) -> list[Path]:
         for k in keys:
             sub = _cell(rows, suite=k[0], edge=k[1], episodes=k[2], arm=k[3])
             v = bootstrap_mean_ci([r["valid"] for r in sub])
+            missed = [r["missed_parent"] for r in sub if r["missed_parent"] is not None]
             w.writerow([*k, len(sub), *(f"{x:.3f}" for x in v),
                         f"{np.mean([r['family_size'] for r in sub]):.2f}",
-                        f"{np.mean([r['missed_parent'] for r in sub]):.2f}"])
+                        f"{np.mean(missed):.2f}" if missed else ""])
     # Compact LaTeX table: weak edge, valid share and family size per arm.
     arms = [a for a in ("bic", "jpcmci", "posterior", "icp") if _cell(rows, arm=a)]
     head = " & ".join(rf"\multicolumn{{2}}{{c}}{{{ARM_STYLE[a][0]}}}" for a in arms)
@@ -243,7 +259,7 @@ def structure_tables(rows, out_dir: Path, alpha: float = 0.1) -> list[Path]:
             sub = _cell(rows, suite=suite, arm="oracle")
             if sub:
                 tests = ("gate_p", "markov_p", "stationarity_p")
-                rate = [np.mean([r[k] <= alpha / 4 for r in sub]) for k in tests]
+                rate = [np.mean([r[k] <= alpha / n_targets for r in sub]) for k in tests]
                 w.writerow([suite, len(sub), *(f"{x:.3f}" for x in rate)])
     return [csv_path, tex_path, s1_path]
 
@@ -253,6 +269,9 @@ def main() -> None:
     ap.add_argument("--results", type=Path, default=Path("results/e1"))
     args = ap.parse_args()
     written: list[Path] = []
+    found = [f for f in ("pilot_loggers.csv", "structure_arms.csv") if (args.results / f).exists()]
+    if not found:
+        raise SystemExit(f"no results in {args.results}: run pilot_loggers.py or structure_arms.py first")
     if (args.results / "pilot_loggers.csv").exists():
         data = load(args.results / "pilot_loggers.csv")
         summary = summarise(data)
