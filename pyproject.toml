@@ -5,16 +5,19 @@ description = "Code and experiments for the SCM -> MDP-family pipeline (paper co
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
+    "gadjid>=0.1.0",
     "matplotlib>=3.7",
-    "nbn>=0.25",
+    "nbn>=0.26",
     "numpy>=1.24",
+    "pandas>=2",
+    "psutil>=7",
     "scipy>=1.10",
     "tqdm>=4.65",
 ]
 
 [project.optional-dependencies]
 discovery = [
-    "joblib>=1.6.0",
+    "pgmpy>=1.1",
     "tigramite>=5.2.10.1",
 ]
 

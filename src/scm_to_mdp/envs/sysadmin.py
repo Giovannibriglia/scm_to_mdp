@@ -1,153 +1,101 @@
-"""SysAdmin ring (Guestrin et al., JAIR 2003): a small, factored, stochastic MDP with an exact model.
+"""SysAdmin: a network of N machines (Guestrin, Koller, Parr, Venkataraman, JAIR 2003,
+https://arxiv.org/abs/1106.1822). Small, factored, stochastic, with a known sparse 2-slice graph.
 
-Pipeline step S0 (the unknown system). ``N`` machines on a one-way ring; machine ``i`` is up (1) or
-down (0). Actions: ``0`` = no-op, ``i + 1`` = repair machine ``i``. The action enters machine ``i`` only
-through the flag ``rep_i = [A = i + 1]`` (declared in S0), so the true 2-slice parents are
+State: machine i is up (1) or down (0). Env actions: 0 = no-op, i + 1 = repair machine i.
+Machine i at the next step depends on itself, its neighbours and whether it is repaired:
 
-    Pa(m_i') = {m_i, m_{i-1}, rep_i}        (in-degree 3)
+    P(m_i' = 1) = 0.95                  if repaired
+                = 0.90                  if up and every neighbour up
+                = 0.60                  if up and some neighbour down
+                = 0.05                  if down and not repaired
 
-Transition of machine ``i`` (given its parents and the hidden load ``w``):
+Topology (who is a neighbour of machine i; our settings):
+    "ring"           one-way ring: machine i-1                  (in-degree 3, the default)
+    "bidirectional"  machines i-1 and i+1                       (in-degree 4)
+    "star"           machine 0 is the hub: every other machine has the hub as its neighbour;
+                     the hub has none                           (in-degree 3, hub 2)
 
-- repaired:                       up with probability ``p_repair - load_effect * w``;
-- up, left neighbour up:          stays up with probability ``p_ok - load_effect * w``;
-- up, left neighbour down:        stays up with probability ``p_bad - load_effect * w``;
-- down, not repaired:             recovers with probability ``p_recover``.
+Reward: number of machines up, minus repair_cost when a repair is made. Every episode starts with
+all machines up.
 
-A high load makes machines fail more often and repairs succeed less often.
-
-The machines move independently given ``(s, a, w)``, so the joint kernel is the product of the
-per-machine factors. The **hidden load** ``w`` (``W_t ~ Bernoulli(load_prob)``, fresh at every step,
-never part of the observed state) matters only when ``load_effect > 0``. Then a logger that reads it
-is confounded (setting 1 assumes no logger does): this is an MDP with unobserved confounders, whose
-exogenous terms are drawn i.i.d. at every step (Bareinboim, *Causal AI* v0.27, Def. 9.4.4, p. 623),
-and the observed kernel ``P(s' | s, a)`` differs from the interventional one (*ibid.*, Eq. 9.137).
-The interventional kernel, which a planner that does not see ``w`` needs, averages ``w`` out:
-``P(s' | s, do(a)) = sum_w P(w) P(s' | s, a, w)`` (*ibid.*, Ex. 7.9, Eqs. 7.44-7.45, p. 524), valid
-because ``W_t`` is independent of ``S_t``.
-
-Reward: the number of machines up, with machine 0 (the server) weighted ``server_weight``.
-State index: C order over ``(m_0, ..., m_{N-1})`` (``m_{N-1}`` fastest), the row layout of NBN.
+Data columns: m0..m{N-1}, a0..a{N-1}, m0'..m{N-1}'. The action is one-hot over a0..a{N-1}, and
+a_j repairs machine repairs[j], a hidden random shuffle: the learner must find which is which.
 """
-from __future__ import annotations
-
-from dataclasses import dataclass
-from functools import cached_property
 
 import numpy as np
 
+from scm_to_mdp.core import Dataset, Reward
+from scm_to_mdp.envs.base import Env
 
-@dataclass(frozen=True)
-class SysAdminRing:
-    n: int = 4
-    p_ok: float = 0.95
-    p_bad: float = 0.60
-    p_repair: float = 0.95
-    p_recover: float = 0.05
-    server_weight: float = 2.0
-    gamma: float = 0.95
-    load_prob: float = 0.5
-    load_effect: float = 0.0
+TOPOLOGIES = ("ring", "bidirectional", "star")
 
-    def __post_init__(self) -> None:
-        if self.n < 2:
-            raise ValueError("a ring needs at least 2 machines")
-        for name in ("p_ok", "p_bad", "p_repair", "p_recover", "load_prob"):
-            v = getattr(self, name)
-            if not 0.0 <= v <= 1.0:
-                raise ValueError(f"{name} must be a probability; got {v}")
-        if not 0.0 <= self.load_effect <= min(self.p_ok, self.p_bad, self.p_repair):
-            raise ValueError("load_effect must keep every probability in [0, 1]")
-        if not 0.0 <= self.gamma < 1.0:
-            raise ValueError("gamma must lie in [0, 1)")
 
-    # ------------------------------------------------------------------ spaces and names
-    @property
-    def n_states(self) -> int:
-        return 2 ** self.n
+def p_up(m_self, any_neighbour_down, repaired):
+    """P(m_i' = 1 | m_i, neighbours, repaired_i), element-wise."""
+    return np.where(repaired, 0.95, np.where(m_self == 1, np.where(any_neighbour_down, 0.60, 0.90), 0.05))
 
-    @property
-    def n_actions(self) -> int:
-        return self.n + 1
 
-    @property
-    def state_vars(self) -> list[str]:
-        return [f"m{i}" for i in range(self.n)]
+def neighbours(n: int, topology: str) -> list[list[int]]:
+    if topology == "ring":
+        return [[(i - 1) % n] for i in range(n)]
+    if topology == "bidirectional":
+        return [sorted({(i - 1) % n, (i + 1) % n} - {i}) for i in range(n)]
+    if topology == "star":
+        return [[]] + [[0] for _ in range(1, n)]
+    raise ValueError(f"topology must be one of {TOPOLOGIES}")
 
-    @property
-    def action_flags(self) -> list[str]:
-        return [f"rep{i}" for i in range(self.n)]
 
-    @cached_property
-    def states(self) -> np.ndarray:
-        """``[S, N]`` bits of every state, C order (row ``s`` is state index ``s``)."""
-        grid = np.indices([2] * self.n).reshape(self.n, -1).T
-        return grid.astype(np.int8)
+class SysAdmin(Env):
+    def __init__(self, n: int, seed: int, topology: str = "ring", repair_cost: float = 0.4):
+        self.n, self.topology, self.repair_cost = n, topology, repair_cost
+        self.rng = np.random.default_rng(seed)
+        self.repairs = [int(i) for i in self.rng.permutation(n)]  # hidden: a_j repairs machine repairs[j]
+        self.neighbours = neighbours(n, topology)
+        self.state_vars = [f"m{i}" for i in range(n)]
+        self.action_vars = [f"a{j}" for j in range(n)]
+        self.cards = dict.fromkeys(self.state_vars + self.action_vars, 2)
+        self.n_actions = n + 1
+        self.policies = {"random": self.random_policy, "repair_broken": self.repair_broken_policy}
+        self.build_model()
 
-    def index(self, bits: np.ndarray) -> np.ndarray:
-        """State index of ``[..., N]`` bits."""
-        return np.ravel_multi_index(np.moveaxis(np.asarray(bits), -1, 0), [2] * self.n)
+    # ---- behaviour policies ------------------------------------------------------------------
+    def random_policy(self, states, rng):
+        """Uniform over the no-op and the N repairs."""
+        return rng.integers(0, self.n + 1, len(states))
 
-    def flags(self, action: np.ndarray) -> np.ndarray:
-        """``[..., N]`` repair flags of actions."""
-        a = np.asarray(action)
-        return (a[..., None] == np.arange(1, self.n + 1)).astype(np.int8)
+    def repair_broken_policy(self, states, rng):
+        """With probability 0.6 repair a random broken machine (if any), otherwise a uniform action."""
+        broken = states == 0
+        pick = np.argmax(rng.random(states.shape) * broken, axis=1) + 1  # a random broken machine
+        uniform = rng.integers(0, self.n + 1, len(states))
+        return np.where(broken.any(1) & (rng.random(len(states)) < 0.6), pick, uniform)
 
-    def true_parents(self) -> dict[str, tuple[str, ...]]:
-        """The true 2-slice parents of every next-state variable."""
-        return {f"m{i}'": (f"m{i}", f"m{(i - 1) % self.n}", f"rep{i}") for i in range(self.n)}
+    # ---- the model ---------------------------------------------------------------------------
+    def next_distributions(self, states, actions):
+        repaired = actions[:, None] == np.arange(self.n)[None, :] + 1  # [E, n]
+        down = states == 0
+        neighbour_down = np.stack([down[:, nb].any(1) for nb in self.neighbours], axis=1)  # [E, n]
+        q = p_up(states, neighbour_down, repaired)  # [E, n]
+        return np.stack([1 - q, q], axis=-1)  # [E, n, 2]
 
-    # ------------------------------------------------------------------ dynamics
-    def p_up(self, up: np.ndarray, left: np.ndarray, rep: np.ndarray,
-             w: np.ndarray | float = 0.0) -> np.ndarray:
-        """Probability that a machine is up next step, given its parents and the hidden load."""
-        up, left, rep = (np.asarray(x) for x in (up, left, rep))
-        drop = self.load_effect * np.asarray(w)
-        stay = np.where(left == 1, self.p_ok, self.p_bad) - drop
-        return np.where(rep == 1, self.p_repair - drop, np.where(up == 1, stay, self.p_recover))
+    def action_columns(self, actions):
+        return np.stack([actions == self.repairs[j] + 1 for j in range(self.n)], axis=1).astype(np.int64)
 
-    def factor_probs(self, w: float | None = None) -> np.ndarray:
-        """``[S, A, N]``: P(m_i' = up | s, a), with the load averaged out when ``w`` is None."""
-        s = self.states[:, None, :]                                   # [S, 1, N]
-        rep = self.flags(np.arange(self.n_actions))[None, :, :]       # [1, A, N]
-        left = np.roll(self.states, 1, axis=1)[:, None, :]            # m_{i-1}
-        if w is None:
-            return sum(prob * self.p_up(s, left, rep, wv) for wv, prob in self._load_values())
-        return self.p_up(s, left, rep, w)
+    def start_distribution(self):
+        start = np.zeros(len(self.B))
+        start[-1] = 1.0  # all machines up (the last state in C order)
+        return start
 
-    def kernel(self, w: float | None = None) -> np.ndarray:
-        """``[S, A, S']`` exact transition kernel (interventional when ``w`` is None).
+    def initial_states(self, n_episodes):
+        return np.ones((n_episodes, self.n), dtype=np.int64)
 
-        With the load averaged out the machines are no longer independent given ``(s, a)`` (they share
-        ``w``), so the joint kernel is the average over ``w`` of the per-``w`` product kernels.
-        """
-        if w is None:
-            return sum(prob * self.kernel(wv) for wv, prob in self._load_values())
-        p = self.factor_probs(w)                                      # [S, A, N]
-        nxt = self.states[None, None, :, :]                           # [1, 1, S', N]
-        per = np.where(nxt == 1, p[:, :, None, :], 1.0 - p[:, :, None, :])
-        return per.prod(-1)
+    # ---- what the learner is given, and what the evaluation needs ----------------------------
+    def reward(self, B, actions):
+        return Reward.immediate(B.sum(1)[:, None] - self.repair_cost * (actions.sum(1)[None, :] > 0))
 
-    def _load_values(self) -> list[tuple[float, float]]:
-        if self.load_effect == 0.0:
-            return [(0.0, 1.0)]
-        return [(0.0, 1.0 - self.load_prob), (1.0, self.load_prob)]
-
-    @cached_property
-    def reward(self) -> np.ndarray:
-        """``[S]`` reward of a state: machines up, the server weighted."""
-        weights = np.ones(self.n)
-        weights[0] = self.server_weight
-        return self.states @ weights
-
-    @property
-    def initial_state(self) -> np.ndarray:
-        return np.ones(self.n, dtype=np.int8)
-
-    def step(self, state: np.ndarray, action: int, rng: np.random.Generator, w: int = 0) -> np.ndarray:
-        """Sample the next state (bits) given the state, the action and the hidden load."""
-        rep = self.flags(action)
-        p = self.p_up(state, np.roll(state, 1), rep, w)
-        return (rng.random(self.n) < p).astype(np.int8)
-
-    def sample_load(self, rng: np.random.Generator) -> int:
-        return int(rng.random() < self.load_prob)
+    def true_parents(self, dataset: Dataset):
+        truth = {
+            f"m{i}": {f"m{i}", f"a{self.repairs.index(i)}"} | {f"m{j}" for j in self.neighbours[i]}
+            for i in range(self.n)
+        }
+        return {v: tuple(x for x in dataset.inputs if x in truth[v]) for v in dataset.state_vars}
