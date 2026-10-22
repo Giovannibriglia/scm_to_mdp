@@ -49,6 +49,7 @@ from scm_to_mdp.core import Dataset, Solution
 
 CHUNK = 1_000  # training steps whose batches are drawn at once
 WARMUP = 20  # ordinary CUDA steps before the training step is recorded as a CUDA graph
+SYNC_EVERY = 32  # graph replays queued at most: then the CPU sleeps until the GPU caught up
 
 
 def _capture(torch, update, opt, i):
@@ -163,6 +164,7 @@ def learn(
     # per step (the same kernels on the same batches; it removes the per-kernel launch cost that
     # dominates for networks this small). Any failure falls back to ordinary steps.
     replay, static_i, static_loss = None, None, None
+    caught_up = torch.cuda.Event(blocking=True) if graph else None  # waits by sleeping, not spinning
     losses = []  # the last 1,000 losses, kept on the device (no synchronisation per step)
     for step in range(steps):
         if step % CHUNK == 0:  # the batches of the next CHUNK steps in one draw (the same numbers)
@@ -175,6 +177,9 @@ def learn(
             static_i.copy_(i)
             replay.replay()
             loss = static_loss.clone()
+            if step % SYNC_EVERY == 0:  # a full launch queue would busy-wait a CPU core per training
+                caught_up.record()
+                caught_up.synchronize()
         else:
             opt.zero_grad()
             loss = update(i)

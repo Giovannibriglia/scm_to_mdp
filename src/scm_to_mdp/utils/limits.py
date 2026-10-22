@@ -59,11 +59,25 @@ def _child(conn, fn, args, parent: int):
         conn.send(("error", repr(err), _peak_rss_gb()))
 
 
-def _memory(proc: psutil.Process) -> int:
+def _memory(proc: psutil.Process, family: list[psutil.Process]) -> int:
+    """Resident memory of proc and of its children (family: listed by the caller, see run_limited)."""
     try:
-        return proc.memory_info().rss + sum(c.memory_info().rss for c in proc.children(recursive=True))
+        total = proc.memory_info().rss
     except psutil.NoSuchProcess:
         return 0
+    for c in family:
+        try:
+            total += c.memory_info().rss
+        except psutil.NoSuchProcess:
+            pass
+    return total
+
+
+def _family(proc: psutil.Process) -> list[psutil.Process]:
+    try:
+        return proc.children(recursive=True)
+    except psutil.NoSuchProcess:
+        return []
 
 
 def _kill(proc: psutil.Process):
@@ -76,22 +90,35 @@ def _kill(proc: psutil.Process):
 
 
 def run_limited(
-    fn, *args, mem_gb: float, timeout_s: float | None = None, poll: float = 0.02, start_method: str = "fork"
+    fn,
+    *args,
+    mem_gb: float,
+    timeout_s: float | None = None,
+    poll: float = 0.02,
+    slow_poll: float = 0.2,
+    start_method: str = "fork",
 ) -> StepResult:
-    """fn(*args) in a child process, stopped above mem_gb of memory or after timeout_s seconds."""
+    """fn(*args) in a child process, stopped above mem_gb of memory or after timeout_s seconds.
+    The monitor reads the memory every `poll` seconds during the first second, then every
+    `slow_poll` seconds, and lists the child's own children once a second: listing them scans every
+    process of the machine on Linux, which at 50 times a second cost each worker half a core."""
     ctx = multiprocessing.get_context(start_method)
     receiver, sender = ctx.Pipe(duplex=False)
     child = ctx.Process(target=_child, args=(sender, fn, args, os.getpid()))
     start = time.monotonic()
     child.start()
     watch = psutil.Process(child.pid)
+    family, listed = [], start
     peak, status, value = 0.0, None, None
     while status is None:
-        if receiver.poll(poll):
+        now = time.monotonic()
+        if receiver.poll(poll if now - start < 1.0 else slow_poll):
             status, value, child_peak = receiver.recv()
-            peak = max(peak, child_peak * 1e9)  # the child's own peak (steps shorter than poll)
+            peak = max(peak, child_peak * 1e9)  # the child's own peak (between two readings too)
             break
-        rss = _memory(watch)
+        if time.monotonic() - listed > 1.0:
+            family, listed = _family(watch), time.monotonic()
+        rss = _memory(watch, family)
         peak = max(peak, rss)
         if rss > mem_gb * 1e9:
             _kill(watch)

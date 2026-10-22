@@ -152,3 +152,22 @@ def test_a_parallel_grid_gives_the_rows_of_a_serial_one(tmp_path):
         tables[workers] = rows.drop(columns=timing).sort_values(keys).reset_index(drop=True)
     assert len(tables["1"]) == 4 * 2 * 2 * 2 * 2 and set(tables["1"]["status"]) == {"ok"}
     pd.testing.assert_frame_equal(tables["1"], tables["3"])
+
+
+def test_cuda_training_uses_a_graph_and_is_reproducible():
+    import numpy as np
+    import torch
+
+    if not torch.cuda.is_available():
+        pytest.skip("no CUDA device")
+    from scm_to_mdp.baselines import offline_q
+    from scm_to_mdp.envs import SysAdmin
+
+    env = SysAdmin(2, 0)
+    data = env.ground_truth().learner_spec.read(env.sample(30, 10, "random"))
+    a = offline_q.learn(data, 0.9, steps=300, hidden=16, device="cuda")
+    b = offline_q.learn(data, 0.9, steps=300, hidden=16, device="cuda")
+    assert a.info["cuda_graph"] and a.info["device"].startswith("cuda")
+    assert np.array_equal(a.Q, b.Q)
+    eager = offline_q.learn(data, 0.9, steps=300, hidden=16, device="cuda", cuda_graph=False)
+    assert not eager.info["cuda_graph"] and np.isfinite(eager.Q).all()

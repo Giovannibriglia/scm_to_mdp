@@ -36,7 +36,8 @@ the choice and save it in each setting's `meta.json` (`"machine"`; `src/scm_to_m
   `LIMITS.mem_gb` for more (the largest step seen so far used 0.5 GB).
 - Only offline DQN / CQL use a GPU: they take most of the run time, everything else is counting work
   on the CPU. On CUDA the training step is recorded once as a CUDA graph and replayed (5x faster
-  alone on a TITAN X). Measured on 2026-10-22 (4,000 steps, two Sepsis datasets): Apple M5, CPU
+  alone on a TITAN X), and a training waits for the GPU by sleeping, so ten trainings sharing one
+  GPU use about 1 s of CPU each instead of a full core. Measured on 2026-10-22 (4,000 steps, two Sepsis datasets): Apple M5, CPU
   4.7 s vs MPS 6.1 s; Xeon E5-2640 v4 + TITAN X, ten trainings at once: CPU 60 s, CUDA 38-40 s.
 - On Linux x86_64, `uv.lock` installs PyTorch built for CUDA 12.6 (`pyproject.toml`): it works with
   NVIDIA drivers from CUDA 12.x on and with GPUs from Pascal to Hopper. For Blackwell GPUs (RTX 50xx,

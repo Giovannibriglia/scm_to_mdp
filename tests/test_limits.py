@@ -41,3 +41,15 @@ def test_error():
 def test_memout():
     out = run_limited(allocate, 1.0, mem_gb=0.4)
     assert out.status == "memout"
+
+
+def allocate_late(gb):
+    time.sleep(1.5)  # past the first second: the monitor reads the memory less often
+    x = np.ones(int(gb * 1e9 / 8))
+    time.sleep(1)
+    return x.sum()
+
+
+def test_memout_after_the_first_second():
+    out = run_limited(allocate_late, 1.0, mem_gb=0.4)
+    assert out.status == "memout"
