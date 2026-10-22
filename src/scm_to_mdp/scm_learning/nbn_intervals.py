@@ -4,7 +4,10 @@ For the chosen parents of every next-state variable, NBN counts the data and bui
 interval for every value of every parent row. The confidence budget delta is split over all
 intervals of all trajectories (union bound, sampling="trajectory"), so all intervals hold together
 with probability >= 1 - delta. A parent row never seen in the data gets [0, 1]. The guarantee holds
-when the parents contain the true parents; with a wrong graph the intervals bound a policy-dependent
+when the parents are fixed before seeing the data (the true graph) and contain the true parents.
+With a graph learned from the same data, the parent set is itself chosen by the data: the 1 - delta
+is then conditional on that choice, not a guarantee (a union bound over every candidate parent set,
+or a split of the data, would restore it). With a wrong graph the intervals bound a policy-dependent
 average, not the mechanism.
 """
 

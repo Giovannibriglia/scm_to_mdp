@@ -10,5 +10,10 @@ def env():
 
 
 @pytest.fixture(scope="session")
+def truth(env):
+    return env.ground_truth()
+
+
+@pytest.fixture(scope="session")
 def dataset(env):
     return read_dataset(env.sample(300, 20, "repair_broken"), env.action_vars, env.cards, env.reward)

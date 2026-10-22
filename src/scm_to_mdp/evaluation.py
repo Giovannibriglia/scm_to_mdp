@@ -1,20 +1,19 @@
-"""Evaluation on the true model (step S9).
+"""Evaluation on the true model (step S9), an MDPGroundTruth (scm_to_mdp/ground_truth.py).
 
 Values of a learned policy:
     promise     the value the method claims (for a robust method: a guaranteed lower bound);
     true value  the exact value of the policy in the true environment;
-    V*          the optimal value (the oracle).
-    regret = V* - true value;  gap = promise - true value (<= 0: the promise holds).
-Each is reported at the nominal start (the environment's start distribution) and averaged over K
+    V_star      the reference values passed by the caller (tool/evaluate.py passes V*_obs, the value
+                of the best policy over the observed state; = V* when nothing is hidden).
+    regret = V_star - true value;  gap = promise - true value (<= 0: the promise holds).
+Each is reported at the nominal start (the environment's start distribution) and averaged over k
 start states drawn uniformly among the non-terminal states.
 
 Validity of the promise, over the non-terminal states S_live of one run:
-    safe              promise(s) <= V^pi(s) for every s (averaged over runs: the coverage, which a valid
-                      robust method keeps >= 1 - delta);
+    safe              promise(s) <= V^pi(s) for every s (averaged over runs: the hold rate of the
+                      promise, which a valid robust method keeps >= 1 - delta);
     violation_rate    share of states with promise(s) > V^pi(s);
     worst_violation   max_s (promise(s) - V^pi(s))^+, in value units (0 when safe).
-A method is "safe" in a run when
-promise <= true value in every non-terminal state.
 
 Structure of a learned 2-slice graph (inputs at t -> state variables at t+1) against the truth:
     SHD   structural Hamming distance = missing + extra edges (edges point forward in time, so no
@@ -24,37 +23,46 @@ Structure of a learned 2-slice graph (inputs at t -> state variables at t+1) aga
           (cause, effect) pairs whose interventional distribution is wrong when one adjusts for the
           learned parents. Here the inputs have no parents, so an extra parent is still a valid
           adjustment set: SID counts only the harm of MISSING parents (SID = 0 iff every learned
-          parent set contains the true one, which is when the robust promise is valid).
+          parent set contains the true one, the structural condition for the factor intervals to bound
+          the true mechanisms).
 """
 
 import gadjid
 import numpy as np
 
 from scm_to_mdp.core import Dataset, Graph, Solution
-from scm_to_mdp.envs.base import Env
+from scm_to_mdp.ground_truth import MDPGroundTruth
 from scm_to_mdp.solving import value_iteration
 
 
 # ---- values -------------------------------------------------------------------------------------
-def optimal_values(env: Env, gamma: float) -> np.ndarray:
+def optimal_values(truth: MDPGroundTruth, gamma: float) -> np.ndarray:
     """V*[s] for every state."""
-    return value_iteration.solve(env.P, env.true_reward, gamma).V
+    return truth.optimal_values(gamma)
 
 
-def random_starts(env: Env, k: int, seed: int) -> np.ndarray:
+def random_starts(truth: MDPGroundTruth, k: int, seed: int) -> np.ndarray:
     """k start states drawn uniformly (without replacement) among the non-terminal states."""
-    live = np.flatnonzero(~env.true_reward.terminal)
+    live = np.flatnonzero(~truth.reward.terminal)
     return np.random.default_rng(seed).choice(live, size=min(k, len(live)), replace=False)
 
 
 def evaluate(
-    env: Env, dataset: Dataset, solution: Solution, gamma: float, V_star: np.ndarray, starts: np.ndarray
+    truth: MDPGroundTruth,
+    dataset: Dataset,
+    solution: Solution,
+    gamma: float,
+    V_star: np.ndarray,
+    starts: np.ndarray,
 ) -> dict:
     """Promise, true value, regret and gap at the nominal start and over `starts`; safety."""
-    env_policy = env.env_actions(dataset)[solution.pi]  # learner action index -> env action
-    V_true = value_iteration.policy_value(env.P, env.true_reward, env_policy, gamma)
-    live = ~env.true_reward.terminal  # a terminal state is never acted in
-    promise, true, best = env.start @ solution.V, env.start @ V_true, env.start @ V_star
+    observed = truth.observed_index()  # full state -> the state the learner sees (identity if none hidden)
+    promised = solution.V[observed]  # [S] the promise in every full state
+    true_policy = truth.actions_of(dataset)[solution.pi[observed]]  # learner action index -> true action
+    V_true = value_iteration.policy_value(truth.P, truth.reward, true_policy, gamma)
+    live = ~truth.reward.terminal  # a terminal state is never acted in
+    promise, true, best = truth.start @ promised, truth.start @ V_true, truth.start @ V_star
+    solution = Solution(promised, solution.pi[observed])  # over the full states, for what follows
     return {
         "promise": float(promise),
         "true": float(true),

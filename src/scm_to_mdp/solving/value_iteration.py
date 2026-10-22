@@ -3,6 +3,7 @@
 import numpy as np
 
 from scm_to_mdp.core import Reward, Solution
+from scm_to_mdp.solving.stopping import stop_at
 
 
 def solve(P: np.ndarray, reward: Reward, gamma: float, tol: float = 1e-8) -> Solution:
@@ -11,7 +12,7 @@ def solve(P: np.ndarray, reward: Reward, gamma: float, tol: float = 1e-8) -> Sol
     while True:
         Q = reward.R + P @ reward.backup(V, gamma)  # [S, A]
         V_new = Q.max(1)
-        if np.abs(V_new - V).max() < tol:
+        if np.abs(V_new - V).max() < stop_at(tol, gamma):
             return Solution(V_new, Q.argmax(1))
         V = V_new
 

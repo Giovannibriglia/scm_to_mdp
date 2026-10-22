@@ -6,15 +6,17 @@ and the kernel is the product of the factors. The expected next value is multili
 (q_1..q_n), so its minimum is at a vertex of the box: we enumerate the 2^n vertices of every (s, a).
 
 Tighter than the interval relaxation (compilation/product_bounds.py), but the kernels need
-S * K * 2^n * 2^n numbers: 1.2 GB at n = 8, 10.7 GB at n = 9.
+S * K * 2^n * 2^n float64 numbers: with K = n + 1 actions (SysAdmin), 1.2 GB at n = 8, 10.7 GB at
+n = 9.
 """
 
 import numpy as np
 
 from scm_to_mdp.core import FactorBounds, Solution, all_states
+from scm_to_mdp.solving.stopping import sound_lower_bound, stop_at
 
 
-def solve(bounds: FactorBounds, gamma: float, tol: float = 1e-6) -> Solution:
+def solve(bounds: FactorBounds, gamma: float, tol: float = 1e-7) -> Solution:
     if any(c != 2 for c in bounds.cards):
         raise ValueError("vertex_robust_vi needs 0/1 state variables")
     B, n = bounds.B, bounds.B.shape[1]
@@ -30,6 +32,7 @@ def solve(bounds: FactorBounds, gamma: float, tol: float = 1e-6) -> Solution:
     while True:
         Q = bounds.reward.R + (kernels @ bounds.reward.backup(V, gamma)).min(-1)  # nature: the worst vertex
         V_new = Q.max(1)
-        if np.abs(V_new - V).max() < tol:
-            return Solution(V_new, Q.argmax(1))
+        step = np.abs(V_new - V).max()
+        if step < stop_at(tol, gamma):
+            return Solution(sound_lower_bound(V_new, step, gamma), Q.argmax(1))
         V = V_new

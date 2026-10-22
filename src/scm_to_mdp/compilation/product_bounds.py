@@ -8,8 +8,9 @@ Each factor lies in its interval, hence
 First every factor's box is tightened with the fact that its probabilities sum to one:
 lo_v >= 1 - sum_{w != v} hi_w and hi_v <= 1 - sum_{w != v} lo_w (as NBN's joint_row_bounds; no
 change for 0/1 variables). This is the interval-arithmetic (IA) relaxation of Schnitzer, Abate,
-Parker (AAAI 2026, arXiv:2508.00707). It forgets that the joint must be a product, so its worst case
-can be worse than any product kernel (solving/vertex_robust_vi.py keeps the product).
+Parker (AAAI 2026, arXiv:2508.00707). It is sound (every product of factors in their intervals lies
+in the box) but forgets that the joint must be a product, so its worst case can be strictly worse
+than that of any product kernel (solving/vertex_robust_vi.py keeps the product, for 0/1 variables).
 """
 
 import numpy as np

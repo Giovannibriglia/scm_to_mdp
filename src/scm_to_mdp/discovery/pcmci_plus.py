@@ -3,9 +3,9 @@
 Each episode is one time series over the slice-t columns (m*, a*); the last row of an episode holds
 the final state and missing actions. Settings: G^2 test, tau_max = 1. Link assumptions (the
 pipeline's): every variable at t may depend on anything at t-1; within a step only state -> action
-(the behaviour policy reads the state). The output is a class of graphs: one DAG is chosen with
-cpdag_to_dag.choose_dag (every DAG enumerated, best BIC). Same-step links can be 'x-x'
-(conflicting); then no orientation avoids every new collider, so only acyclicity is required.
+(the behaviour policy reads the state). The output is a class of graphs (Candidates); one DAG is chosen in
+step S3 (selection/). Same-step links can be 'x-x' (conflicting); then no orientation avoids every
+new collider, so only acyclicity is required (keep_vstructures=False).
 """
 
 import numpy as np
@@ -13,8 +13,7 @@ from tigramite.data_processing import DataFrame
 from tigramite.independence_tests.gsquared import Gsquared
 from tigramite.pcmci import PCMCI
 
-from scm_to_mdp.core import NEXT_MARK, Dataset, Graph
-from scm_to_mdp.discovery.cpdag_to_dag import choose_dag
+from scm_to_mdp.core import NEXT_MARK, Candidates, Dataset
 
 MISSING = -99.0
 
@@ -66,7 +65,7 @@ def mixed_graph(graph, dataset: Dataset):
     return directed, undirected
 
 
-def fit(dataset: Dataset, alpha: float = 0.01) -> Graph:
+def fit(dataset: Dataset, alpha: float = 0.01) -> Candidates:
     data = DataFrame(
         episodes(dataset), analysis_mode="multiple", var_names=dataset.inputs, missing_flag=MISSING
     )
@@ -75,4 +74,4 @@ def fit(dataset: Dataset, alpha: float = 0.01) -> Graph:
         tau_min=0, tau_max=1, pc_alpha=alpha, link_assumptions=link_assumptions(dataset)
     )
     directed, undirected = mixed_graph(result["graph"], dataset)
-    return choose_dag(directed, undirected, dataset, check_vstructures=False)
+    return Candidates("graph_class", frozenset(directed), frozenset(undirected), keep_vstructures=False)

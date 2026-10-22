@@ -1,15 +1,22 @@
-"""How ONE graph is chosen when a discovery algorithm returns a class of graphs (step S3).
+"""Selection rule "bic_best" (step S3): keep the candidate graph with the best BIC on the data.
 
-PCMCI+ and GES return a mixed graph: some edges are directed, others are undirected (the data do
-not tell their direction). The rule used here:
+For scored parent sets (BIC search): the parent set of every x' with the best score.
+
+For a class of graphs (PCMCI+, GES): some edges are directed, others are undirected (the data do
+not tell their direction). The rule:
 
 1. Enumerate every DAG of the class. The undirected edges split into connected "chain components";
    each component is oriented on its own, and an orientation comes from an order of its nodes.
    For a GES CPDAG, keep only orientations that create no new v-structure (a -> c <- b with a, b
    not adjacent). A component with more than MAX_ORDERS node orders is sampled, not enumerated.
 2. Score every DAG with BIC on the data and keep the best.
-3. BIC is score-equivalent: the DAGs of one Markov equivalence class tie. Ties are broken by the
-   BIC of the transition model, sum_i BIC(m_i' | its slice-t parents), which is not invariant.
+3. With table CPDs and complete data BIC is score-equivalent: the DAGs of one Markov equivalence
+   class get the same BIC (Koller & Friedman, 2009, Thm 18.3, p. 807). Our penalty counts only the
+   parent rows that can occur (discovery/bic_search.py), so two DAGs of a class can differ by their
+   penalty alone, and the best one is then kept. Exact ties are broken by the BIC of the transition
+   model, sum_i BIC(x_i' | its slice-t parents), which is not invariant;
+   scores within 1e-6 count as equal, and a remaining tie goes to the orientation whose sorted
+   edge list comes first (so the choice does not depend on the order of Python sets).
 
 The full BIC is a sum over families, and a family depends on the orientation of one component only,
 so the best DAG is the best orientation of every component, chosen separately.
@@ -20,20 +27,34 @@ import itertools
 import numpy as np
 import pandas as pd
 
-from scm_to_mdp.core import NEXT_MARK, Dataset, Graph, encode
-from scm_to_mdp.discovery.bic_search import bic
+from scm_to_mdp.core import NEXT_MARK, Candidates, Dataset, Graph, encode
+from scm_to_mdp.discovery.bic_search import bic, feasible_rows
 
 MAX_ORDERS = 20_000  # node orders tried per chain component
 
 
-def family_bic(df: pd.DataFrame, node: str, parents: tuple[str, ...], cards: dict[str, int]) -> float:
-    """BIC of one family, from the data. cards: number of values of every column."""
+def select(candidates: Candidates, dataset: Dataset) -> Graph:
+    """The graph with the best BIC among the candidates."""
+    if candidates.kind == "scored_sets":
+        parents = {v: max(scored, key=lambda t: t[1])[0] for v, scored in candidates.scores.items()}
+        return Graph(parents, report=dict(candidates.report))
+    graph = choose_dag(
+        set(candidates.directed), set(candidates.undirected), dataset, candidates.keep_vstructures
+    )
+    return Graph(graph.parents, report={**candidates.report, **graph.report})
+
+
+def family_bic(
+    df: pd.DataFrame, node: str, parents: tuple[str, ...], cards: dict[str, int], n_rows: int | None = None
+) -> float:
+    """BIC of one family, from the data. cards: number of values of every column; n_rows: the rows of
+    the parent table that can occur (bic_search.feasible_rows; default: all)."""
     y = df[node].values
     parent_cards = [cards[p] for p in parents]
     rows = encode(df[list(parents)].values, parent_cards) if parents else np.zeros(len(y), dtype=np.int64)
     counts = np.zeros((int(np.prod(parent_cards)), cards[node]))
     np.add.at(counts, (rows, y), 1)
-    return bic(counts)
+    return bic(counts, n_rows)
 
 
 def chain_components(undirected: set[frozenset]) -> list[set[str]]:
@@ -95,37 +116,46 @@ def choose_dag(
     directed: set[tuple], undirected: set[frozenset], dataset: Dataset, check_vstructures: bool, seed: int = 0
 ) -> Graph:
     """The DAG of the class with the best BIC (ties: best transition BIC). Returns the slice-t parents
-    of every m_i' and a report: number of DAGs in the class, number tied, edges among next-state nodes."""
+    of every x_i' (its neighbours among the slice-t inputs, whatever the direction of the edge) and a
+    report: number of DAGs in the class, number tied, edges among next-state nodes."""
     df, rng = dataset.df, np.random.default_rng(seed)
     cards = {c: dataset.cards[c.removesuffix(NEXT_MARK)] for c in df.columns}
     adjacent = {frozenset(e) for e in directed} | set(undirected)
-    next_nodes, inputs = set(dataset.next_vars), set(dataset.inputs)
+    next_nodes, actions = set(dataset.next_vars), dataset.action_vars
 
     def parents_of(node, edges):
         return tuple(sorted(a for a, b in edges if b == node))
 
+    def slice_t_neighbours(node, edges):  # the time order: an input next to x' is a parent of x'
+        return tuple(x for x in dataset.inputs if (x, node) in edges or (node, x) in edges)
+
+    def family(v, parents):  # penalty on the rows that can occur (one-hot actions: bic_search)
+        return family_bic(df, v, parents, cards, feasible_rows(parents, cards, actions, dataset.actions))
+
     def scores(edges, nodes):
-        full = sum(family_bic(df, v, parents_of(v, edges), cards) for v in nodes)
-        transition = sum(
-            family_bic(df, v, tuple(p for p in parents_of(v, edges) if p in inputs), cards)
-            for v in nodes
-            if v in next_nodes
-        )
+        full = sum(family(v, parents_of(v, edges)) for v in nodes)
+        transition = sum(family(v, slice_t_neighbours(v, edges)) for v in nodes if v in next_nodes)
         return full, transition
 
     chosen, n_dags, n_tied = set(directed), 1, 1
     for component in chain_components(undirected):
         options = orientations(component, undirected, directed, adjacent, check_vstructures, rng)
-        n_dags *= max(len(options), 1)
+        if not options:  # a large component whose sampled orders all made a new v-structure
+            options = orientations(component, undirected, directed, adjacent, False, rng)
+        n_dags *= len(options)
         touched = component | {b for a, b in directed if a in component}  # families that change
         scored = [(scores(set(directed) | set(o), touched), o) for o in options]
         best_full = max(score[0] for score, _ in scored)
         tied = [(score, o) for score, o in scored if score[0] >= best_full - 1e-6]
         n_tied *= len(tied)
-        chosen |= set(max(tied, key=lambda t: t[0][1])[1])  # tie-break: transition BIC
+        best_transition = max(score[1] for score, _ in tied)  # tie-break: transition BIC, then
+        still = [o for score, o in tied if score[1] >= best_transition - 1e-6]  # the first edge list
+        chosen |= set(min(still, key=lambda o: sorted(o)))  # (deterministic, whatever the set order)
 
+    # GES does not know the time order, so it may orient an edge x' -> x: an edge is a time step, and
+    # every slice-t neighbour of x' is a parent of x' whatever its direction (PCMCI+ only has x -> x')
     parents = {
-        v: tuple(x for x in dataset.inputs if (x, v_next) in chosen)
+        v: slice_t_neighbours(v_next, chosen)
         for v, v_next in zip(dataset.state_vars, dataset.next_vars, strict=True)
     }
     intra_next = sum(1 for a, b in chosen if a in next_nodes and b in next_nodes)

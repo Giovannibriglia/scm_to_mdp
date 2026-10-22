@@ -12,16 +12,16 @@ def test_flat_mdp_rows_are_distributions(dataset):
     assert np.allclose(mdp.L.sum(-1), 1.0)
 
 
-def test_flat_rmdp_is_valid(env, dataset):
+def test_flat_rmdp_is_valid(truth, dataset):
     mdp = flat_rmdp.learn(dataset, delta=0.05)
     assert np.all(mdp.L <= mdp.U)
     assert evaluate(
-        env,
+        truth,
         dataset,
         robust_vi.solve(mdp, GAMMA),
         GAMMA,
-        optimal_values(env, GAMMA),
-        random_starts(env, 20, 0),
+        optimal_values(truth, GAMMA),
+        random_starts(truth, 20, 0),
     )["safe"]
 
 

@@ -39,6 +39,8 @@ def g2_pvalue(x: np.ndarray, y: np.ndarray, strata: np.ndarray) -> float:
 def groups(dataset: Dataset, p_threshold: float = 0.005) -> list[list[int]]:
     """Groups of sub-actions (indices into dataset.action_vars), by union-find over dependent pairs."""
     df = dataset.df
+    if not all(dataset.cards[a] == 2 for a in dataset.action_vars):
+        raise ValueError("DiFaRL here needs 0/1 action columns (its G^2 tables and Q-tables are binary)")
     both = np.hstack([df[dataset.state_vars].values, df[dataset.next_vars].values])
     strata = encode(both, dataset.state_cards * 2)  # one stratum per (s, s')
     actions = dataset.action_vars

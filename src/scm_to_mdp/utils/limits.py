@@ -2,7 +2,10 @@
 
 The step runs in a forked child process. A monitor in the parent reads the child's memory (resident
 set size, with the child's own children) and kills it above the limit ("memout"), or when it runs
-longer than the time limit ("timeout"). macOS does not enforce RLIMIT_AS, hence the monitor.
+longer than the time limit ("timeout"). macOS does not enforce RLIMIT_AS, hence the monitor. A child
+killed by another process with SIGKILL (on Linux, the out-of-memory killer) also counts as "memout".
+Time is time.monotonic(), which does not advance while the computer sleeps (macOS and Linux): a
+laptop going to sleep in the middle of a step must not turn that step into a timeout.
 
 Fork is used because it starts at once and the child shares the parent's data. It is safe only if
 the parent never ran PyTorch computations itself: forking a process whose PyTorch thread pool was
@@ -13,6 +16,7 @@ uses NBN / torch must run through run_limited, and the parent must only prepare 
 import multiprocessing
 import os
 import resource
+import signal
 import sys
 import time
 from dataclasses import dataclass
@@ -65,7 +69,7 @@ def run_limited(fn, *args, mem_gb: float, timeout_s: float | None = None, poll: 
     ctx = multiprocessing.get_context("fork")
     receiver, sender = ctx.Pipe(duplex=False)
     child = ctx.Process(target=_child, args=(sender, fn, args))
-    start = time.time()
+    start = time.monotonic()
     child.start()
     watch = psutil.Process(child.pid)
     peak, status, value = 0.0, None, None
@@ -79,10 +83,13 @@ def run_limited(fn, *args, mem_gb: float, timeout_s: float | None = None, poll: 
         if rss > mem_gb * 1e9:
             _kill(watch)
             status = "memout"
-        elif timeout_s is not None and time.time() - start > timeout_s:
+        elif timeout_s is not None and time.monotonic() - start > timeout_s:
             _kill(watch)
             status = "timeout"
         elif not child.is_alive() and not receiver.poll():
-            status, value = "error", f"child exited with code {child.exitcode}"
+            if child.exitcode == -signal.SIGKILL:  # killed by someone else: on Linux, the OOM killer
+                status, value = "memout", "killed by the operating system (SIGKILL: out of memory?)"
+            else:
+                status, value = "error", f"child exited with code {child.exitcode}"
     child.join()
-    return StepResult(value, status, peak / 1e9, time.time() - start)
+    return StepResult(value, status, peak / 1e9, time.monotonic() - start)
