@@ -24,7 +24,7 @@ that is more than 80% of the RAM.
 ## Experiment 1: complete grids
 
 `experiments/exp1/` holds one script per environment. Each runs every problem size × knob ×
-behaviour policy × number of rollouts × seed with the 10–11 standard methods (`standard_methods(...)`):
+behaviour policy × number of rollouts × seed with the 12–13 standard methods (`standard_methods(..., deep=True)`):
 
 - ours: BIC / PCMCI+ / GES → a robust MDP over the box of the factor intervals;
 - the oracle: the true graph with that box (the interval-arithmetic (IA) relaxation of Schnitzer,
@@ -32,8 +32,8 @@ behaviour policy × number of rollouts × seed with the 10–11 standard methods
 - baselines: flat RMDP (one interval per transition); flat MDP (the plug-in estimate); DiFaRL
   (Ehrlichman et al., CLeaR 2026); flat SPIBB (Laroche et al., ICML 2019) and SL-SPIBB (Simão &
   Spaan, IJCAI 2019), safe improvement over the behaviour policy estimated from the data; FOCUS
-  (Zhu et al., 2025), CI-test structure and a MOPO-penalised model, in a discrete version; with
-  `DEEP_BASELINES = True` in a script, also offline DQN and offline CQL (Kumar et al., NeurIPS 2020).
+  (Zhu et al., 2025), CI-test structure and a MOPO-penalised model, in a discrete version; offline DQN
+  and offline CQL (Kumar et al., NeurIPS 2020), switched off with `DEEP_BASELINES = False` in a script.
 
 Every baseline's choices and fixed parameters (and how a pilot chose CQL's α and FOCUS's λ) are in
 the docstring of its module in `src/scm_to_mdp/baselines/`. Each script states its expectations

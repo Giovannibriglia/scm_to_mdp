@@ -75,7 +75,8 @@ def run_one(script: str, size, knob, n_rollouts, out_dir: Path) -> tuple[bool, s
 
     m = importlib.import_module(script)
     quick = {"steps": 300, "hidden": 32}  # offline DQN / CQL: only that they train, not how well
-    methods = dict(m.GRID.methods) | {
+    assert {"offline DQN", "offline CQL"} <= set(m.GRID.methods), "the grid should run offline DQN and CQL"
+    methods = dict(m.GRID.methods) | {  # the same learners, trained briefly
         "offline DQN": Method("offline_dqn", "greedy_q", solver_options=quick),
         "offline CQL": Method("offline_cql", "greedy_q", solver_options=quick),
     }

@@ -8,8 +8,8 @@
                 expert       the best policy over the observed state, a uniform action w.p. 0.05
                 confounded   the expert, but a diabetic gets vasopressors w.p. 0.95 (the clinician
                              sees diabetes); skipped when diabetes is absent (it would be the expert)
-    rollouts    100 ... 4000 patients (at most 20 steps), 3 seeds, 10 standard methods (no exact
-                solver: the vitals are not 0/1; offline DQN and CQL too with DEEP_BASELINES)
+    rollouts    100 ... 4000 patients (at most 20 steps), 3 seeds, 12 standard methods (no exact
+                solver: the vitals are not 0/1; offline DQN and CQL included: DEEP_BASELINES)
 
 Diabetes changes how blood pressure and glucose respond to vasopressors (Oberst & Sontag's
 simulator, src/scm_to_mdp/envs/sepsis.py). DIABETES_EFFECT scales that difference (ours; 1 = the
@@ -52,7 +52,7 @@ POLICIES = [
 N_ROLLOUTS = [100, 250, 500, 1000, 2000, 4000]
 SEEDS = [0, 1, 2]
 HORIZON, GAMMA, DELTA = 20, 0.9, 0.05
-DEEP_BASELINES = False  # True: also offline DQN and offline CQL (about 15 s each per run on a laptop)
+DEEP_BASELINES = True  # offline DQN and offline CQL (about 15 s each per run on a laptop, ~45 s on a server)
 DIABETES_EFFECT = 1.5  # the diabetic response, scaled away from the non-diabetic one (1 = original)
 LIMITS = Limits(
     mem_gb=8.0, timeout_s={"discovery": 60.0, "selection": 60.0, "solve": 120.0, "training": 600.0}

@@ -14,8 +14,14 @@ GRID_CODE = """
 import dataclasses, sys
 sys.path.insert(0, "experiments/exp1")
 import {module} as m
+from scm_to_mdp.tool import Method
+quick = {{"steps": 300, "hidden": 32}}  # offline DQN / CQL: only that they train inside the grid
+methods = dict(m.GRID.methods)
+for name, learner in (("offline DQN", "offline_dqn"), ("offline CQL", "offline_cql")):
+    assert name in methods  # the grid runs them
+    methods[name] = Method(learner, "greedy_q", solver_options=quick)
 grid = dataclasses.replace(m.GRID, sizes=[{size!r}], knobs=[{knob!r}], n_rollouts=[15, 30], seeds=[1],
-                           workers=1, out_dir=__import__("pathlib").Path("{out}"))
+                           workers=1, out_dir=__import__("pathlib").Path("{out}"), methods=methods)
 m.run_grid(grid)
 m.report_grid(grid.out_dir)
 """

@@ -6,8 +6,8 @@
                 expert       the best policy over the observed state, a uniform action w.p. 0.05:
                              partial coverage (the expert's actions are frequent, the others rare)
                 confounded   the expert, but during a hidden storm it repairs machine 0 w.p. 0.95
-    rollouts    10 ... 1600 (horizon 20), 3 seeds, the 11 standard methods
-                (README; offline DQN and CQL too with DEEP_BASELINES)
+    rollouts    10 ... 1600 (horizon 20), 3 seeds, the 13 standard methods
+                (README; offline DQN and CQL included: DEEP_BASELINES)
 
 The storm (src/scm_to_mdp/envs/sysadmin.py) is in every setting: drawn afresh at every step
 (p = 0.3), it hits machine 0 only (a machine that is not repaired fails more: P(up) x 0.2), and it
@@ -42,7 +42,7 @@ from scm_to_mdp.tool import Grid, Limits, Policy, report_grid, run_folder, run_g
 
 warnings.filterwarnings("ignore", category=FutureWarning)
 
-SIZES = [2, 3, 4, 5, 6, 7, 8, 9]
+SIZES = [2, 3, 4, 5, 6, 7, 8, 9, 10]
 TOPOLOGIES = ["ring", "bidirectional", "star"]
 POLICIES = [
     Policy("uniform"),
@@ -52,7 +52,7 @@ POLICIES = [
 N_ROLLOUTS = [10, 25, 50, 100, 200, 400, 1600]
 SEEDS = [0, 1, 2]
 HORIZON, GAMMA, DELTA = 20, 0.9, 0.05
-DEEP_BASELINES = False  # True: also offline DQN and offline CQL (about 15 s each per run on a laptop)
+DEEP_BASELINES = True  # offline DQN and offline CQL (about 15 s each per run on a laptop, ~45 s on a server)
 STORM, STORM_EFFECT = 0.3, 0.8  # P(storm) at every step; a storm multiplies machine 0's P(up) by 1 - 0.8
 LIMITS = Limits(
     mem_gb=8.0, timeout_s={"discovery": 60.0, "selection": 60.0, "solve": 60.0, "training": 600.0}
