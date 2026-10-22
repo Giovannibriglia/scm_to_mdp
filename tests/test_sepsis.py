@@ -9,6 +9,7 @@ from scm_to_mdp.envs import Sepsis
 from scm_to_mdp.envs.sepsis import state_index
 from scm_to_mdp.evaluation import evaluate, optimal_values, random_starts
 from scm_to_mdp.scm_learning import nbn_intervals
+from scm_to_mdp.selection import given
 from scm_to_mdp.solving import robust_vi, value_iteration
 
 GAMMA = 0.9
@@ -48,7 +49,7 @@ def test_true_parents_are_exact(full):
     """Changing a non-parent never changes a variable's next distribution; every parent matters."""
     rng = np.random.default_rng(0)
     data = read_dataset(full.sample(50, 5, "random"), full.action_vars, full.cards, full.reward)
-    parents = full.true_parents(data)
+    parents = full.true_parents()
     states = full.B[rng.integers(len(full.B), size=300)]
     actions = rng.integers(0, 8, 300)
     base = full.next_distributions(states, actions)
@@ -97,10 +98,16 @@ def test_policy_value_matches_simulation():
 def test_true_graph_gives_a_valid_promise():
     env = Sepsis("small", seed=0)
     data = read_dataset(env.sample(2000, 20, "random"), env.action_vars, env.cards, env.reward)
-    bounds = nbn_intervals.learn(data, oracle.fit(data, env.true_parents(data)), 0.05)
+    bounds = nbn_intervals.learn(data, given.select(oracle.fit(data, env.true_parents()), data), 0.05)
     mdp = product_bounds.compile(bounds)
-    P = env.P[:, env.env_actions(data)]
+    truth = env.ground_truth()
+    P = truth.P[:, truth.actions_of(data)]
     assert np.all(mdp.L <= P + 1e-12) and np.all(P <= mdp.U + 1e-12)
     assert evaluate(
-        env, data, robust_vi.solve(mdp, GAMMA), GAMMA, optimal_values(env, GAMMA), random_starts(env, 20, 0)
+        truth,
+        data,
+        robust_vi.solve(mdp, GAMMA),
+        GAMMA,
+        optimal_values(truth, GAMMA),
+        random_starts(truth, 20, 0),
     )["safe"]

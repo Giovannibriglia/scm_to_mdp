@@ -43,11 +43,30 @@ min(3, number of vitals) abnormal vitals):
     medium  hr, sysbp, o2; no diabetes                144 states
     full    hr, sysbp, o2, glucose; diabetes observed  1440 states (the original)
     custom  Sepsis(vitals=(...), diabetes=True / False)
+
+What the paper states (Oberst & Sontag, Sec. 5.1): the variables and their levels, the three
+treatments, the reward and the end rules, diabetes w.p. 0.2, at most 20 steps, and a behaviour
+policy (policy iteration on the full model, a random action w.p. 0.05). The transition and start
+probabilities above are only in their code. In their experiment the learner sees neither glucose nor
+diabetes; here hide_diabetes hides diabetes only.
+
+Confounded data (hide_diabetes=True, with diabetes=True): diabetes stays in the true model but is not in the
+data, and the behaviour policy "diabetes_aware" gives vasopressors more often to diabetics (0.8 vs 0.2).
+Diabetes then causes both the treatment and the response to it (blood pressure, glucose): the counts
+confound the effect of vasopressors (an MDP with unobserved confounders, which none of the methods here
+corrects for). The observed process is also not Markov (diabetes is a constant of the episode that the
+learner cannot see).
+
+Strength of the diabetes effect (ours; diabetes_effect=k, default 1 = the original): every
+probability that differs for a diabetic becomes p_nd + k (p_d - p_nd), with p_nd its value for a
+non-diabetic and p_d the original diabetic value. k = 0: diabetes changes nothing (a negative
+control); k up to 1.5 keeps every probability in [0, 1]. The "confounded" logger of
+Env.behaviour gives vasopressors to a diabetic w.p. strength (the rest follows the expert).
 """
 
 import numpy as np
 
-from scm_to_mdp.core import Dataset, Reward, encode
+from scm_to_mdp.core import Reward, encode
 from scm_to_mdp.envs.base import Env
 
 VITALS = {"hr": 3, "sysbp": 3, "o2": 2, "glucose": 5}  # number of values
@@ -102,7 +121,15 @@ class Sepsis(Env):
         diabetes: bool | None = None,
         p_diabetes: float = 0.2,
         glucose_bug: bool = False,
+        hide_diabetes: bool = False,
+        diabetes_effect: float = 1.0,
+        max_model_gb: float | None = None,
     ):
+        if not 0.0 <= diabetes_effect <= 1.5:
+            raise ValueError("diabetes_effect must lie in [0, 1.5] (probabilities stay in [0, 1])")
+        self.k = diabetes_effect
+        if max_model_gb is not None:
+            self.max_model_gb = max_model_gb
         if size not in SIZES and size != "custom":
             raise ValueError(f"size must be one of {list(SIZES)} or 'custom'")
         spec = SIZES.get(size, SIZES["full"])  # "custom" starts from full
@@ -117,12 +144,37 @@ class Sepsis(Env):
         self.cards = {"diabetic": 2, **VITALS, **dict.fromkeys(TREATMENT_FLAGS + ACTIONS, 2)}
         self.cards = {v: self.cards[v] for v in self.state_vars + self.action_vars}
         self.n_actions = 8
-        self.policies = {"random": self.random_policy}
+        self.policies = {"random": self.random_policy, "diabetes_aware": self.diabetes_aware_policy}
+        if hide_diabetes and not self.diabetes:
+            raise ValueError("hide_diabetes needs diabetes=True")
+        self.hidden_vars = ("diabetic",) if hide_diabetes else ()
+        self.confounder = "diabetic" if self.diabetes else None
         self.build_model()
 
     # ---- behaviour policies ------------------------------------------------------------------
     def random_policy(self, states, rng):
         return rng.integers(0, 8, len(states))
+
+    def diabetes_aware_policy(self, states, rng):
+        """Antibiotics and ventilation w.p. 0.5 each; vasopressors w.p. 0.8 for a diabetic, 0.2 otherwise."""
+        diabetic = self.column(states, "diabetic") == 1 if self.diabetes else np.zeros(len(states), bool)
+        abx, vent = rng.random(len(states)) < 0.5, rng.random(len(states)) < 0.5
+        vaso = rng.random(len(states)) < np.where(diabetic, 0.8, 0.2)
+        return (4 * abx + 2 * vent + vaso).astype(np.int64)
+
+    def confounded_probs(self, expert, strength):
+        """For a diabetic: w.p. strength the expert's antibiotics and ventilation, with vasopressors on."""
+        if not self.diabetes:
+            raise ValueError("the confounded logger needs diabetes=True")
+        vaso_on = np.zeros_like(expert)
+        for a in range(8):
+            vaso_on[:, a | 1] += expert[:, a]  # bit 0 of the env action is vasopressors
+        diabetic = self.B[:, self.state_vars.index("diabetic")] == 1
+        return np.where(diabetic[:, None], strength * vaso_on + (1 - strength) * expert, expert)
+
+    def mix(self, p_nd: float, p_d: float) -> float:
+        """A diabetic's probability at strength k: p_nd + k (p_d - p_nd)."""
+        return p_nd + self.k * (p_d - p_nd)
 
     # ---- the model ---------------------------------------------------------------------------
     def column(self, states: np.ndarray, name: str) -> np.ndarray:
@@ -153,7 +205,7 @@ class Sepsis(Env):
         )
         # blood pressure: antibiotics, then vasopressors, then fluctuation
         on_nd, on_d = vaso_on & ~diab, vaso_on & diab
-        falls = 0.1 * f(vaso_stopped & ~diab) + 0.05 * f(vaso_stopped & diab)
+        falls = 0.1 * f(vaso_stopped & ~diab) + self.mix(0.1, 0.05) * f(vaso_stopped & diab)
         sysbp_still = abx_still & ~vaso_on & ~vaso_stopped
         M["sysbp"] = (
             stage(E, 3, [(2, 1, 0.5 * f(abx_starts_or_on))])
@@ -162,9 +214,9 @@ class Sepsis(Env):
                 E,
                 3,
                 [
-                    (0, 1, 0.7 * f(on_nd) + 0.5 * f(on_d)),
-                    (0, 2, 0.4 * f(on_d)),
-                    (1, 2, 0.7 * f(on_nd) + 0.9 * f(on_d)),
+                    (0, 1, 0.7 * f(on_nd) + self.mix(0.7, 0.5) * f(on_d)),
+                    (0, 2, self.mix(0.0, 0.4) * f(on_d)),
+                    (1, 2, 0.7 * f(on_nd) + self.mix(0.7, 0.9) * f(on_d)),
                 ],
             )
             @ stage(E, 3, [(1, 0, falls), (2, 1, falls)])
@@ -179,11 +231,11 @@ class Sepsis(Env):
         )
         # glucose: vasopressors raise it (diabetic only); otherwise it fluctuates. The "up" move of
         # a non-diabetic is built apart, because the original code caps it at 1 (glucose_bug).
-        down = 0.1 * f(~vaso_on & ~diab) + 0.3 * f(~vaso_on & diab)
-        up_d, up_nd = 0.3 * f(~vaso_on & diab), 0.1 * f(~vaso_on & ~diab)
+        down = 0.1 * f(~vaso_on & ~diab) + self.mix(0.1, 0.3) * f(~vaso_on & diab)
+        up_d, up_nd = self.mix(0.1, 0.3) * f(~vaso_on & diab), 0.1 * f(~vaso_on & ~diab)
         up_nd_moves = fluctuate(E, 5, 0 * up_nd, up_nd, up_cap=1 if self.glucose_bug else 4) - stay(E, 5)
         fluct = fluctuate(E, 5, down, up_d) + up_nd_moves
-        M["glucose"] = stage(E, 5, [(v, v + 1, 0.5 * f(on_d)) for v in range(4)]) @ fluct
+        M["glucose"] = stage(E, 5, [(v, v + 1, self.mix(0.0, 0.5) * f(on_d)) for v in range(4)]) @ fluct
 
         C = max(self.state_cards)
         dist = np.zeros((E, len(self.state_vars), C))
@@ -233,7 +285,7 @@ class Sepsis(Env):
         r_next = np.where(abnormal >= self.death, -1.0, np.where((abnormal == 0) & ~treated, 1.0, 0.0))
         return Reward(np.zeros((len(B), len(actions))), r_next, r_next != 0)
 
-    def true_parents(self, dataset: Dataset):
+    def true_parents(self):
         d = ("diabetic",) if self.diabetes else ()
         truth = {
             "hr": ("hr", "antibiotics", "abx_on"),
@@ -245,10 +297,11 @@ class Sepsis(Env):
             "vaso_on": ("vasopressors",),
             "diabetic": ("diabetic",),
         }
-        return {v: tuple(x for x in dataset.inputs if x in truth[v]) for v in dataset.state_vars}
+        inputs = self.state_vars + self.action_vars
+        return {v: tuple(x for x in inputs if x in truth[v]) for v in self.state_vars}
 
 
 def state_index(env: Sepsis, **values) -> int:
-    """Index of the state given by name=value (helper for tests and examples)."""
+    """Index of the state given by name=value (helper for tests and experiments)."""
     vector = np.array([values[v] for v in env.state_vars])
     return int(encode(vector, env.state_cards))

@@ -3,8 +3,18 @@
 An environment is a factored MDP: given the state and the action, the next value of every state
 variable is drawn independently from next_distributions(). From that one function the base class
 builds the exact model (to evaluate policies) and the simulator (to produce data). The learner
-never sees the model: it gets only the table returned by sample() and what read_dataset needs
-(action columns, numbers of values, reward).
+never sees the model: it gets only the table returned by sample() and the DataSpec (spec()).
+ground_truth() packs the exact model as an MDPGroundTruth, the input of the evaluation (S9).
+
+The dense model has S x A x S numbers: building it is refused above max_model_gb (ModelTooLarge).
+
+Behaviour policies shared by every environment (behaviour(name, gamma, ...), exact tables over the
+full state, see scm_to_mdp/behaviour.py):
+    "uniform"     every action equally likely;
+    "expert"      the best policy over the observed state, with a uniform action w.p. epsilon;
+    "confounded"  the expert, except in states where the environment's confounder (a hidden
+                  variable that also changes the dynamics) is "on": there it takes the
+                  environment's confounded action w.p. strength (confounded_probs).
 """
 
 from collections.abc import Callable
@@ -12,7 +22,10 @@ from collections.abc import Callable
 import numpy as np
 import pandas as pd
 
-from scm_to_mdp.core import NEXT_MARK, Dataset, Reward, all_states, encode
+from scm_to_mdp import behaviour
+from scm_to_mdp.core import NEXT_MARK, Reward, all_states, encode
+from scm_to_mdp.data import DataSpec
+from scm_to_mdp.ground_truth import MAX_MODEL_GB, MDPGroundTruth, dense_transitions
 
 # a behaviour policy: (states [E, n], rng) -> env actions [E]
 BehaviourPolicy = Callable[[np.ndarray, np.random.Generator], np.ndarray]
@@ -25,6 +38,9 @@ class Env:
     n_actions: int  # env actions are 0..n_actions-1
     policies: dict[str, BehaviourPolicy]  # the named behaviour policies of this env
     rng: np.random.Generator
+    max_model_gb: float = MAX_MODEL_GB  # refuse to build a dense true model above this
+    hidden_vars: tuple[str, ...] = ()  # state variables in the true model but not in the data
+    confounder: str | None = None  # the variable the "confounded" logger reads (hidden or not)
 
     # ---- to implement in every environment --------------------------------------------------
     def next_distributions(self, states: np.ndarray, actions: np.ndarray) -> np.ndarray:
@@ -39,13 +55,19 @@ class Env:
         """The reward in the learner's terms, for states B and action vectors (data columns)."""
         raise NotImplementedError
 
-    def true_parents(self, dataset: Dataset) -> dict[str, tuple[str, ...]]:
-        """The true slice-t parents of every next-state variable, in data column names."""
+    def true_parents(self) -> dict[str, tuple[str, ...]]:
+        """The true slice-t parents of every next-state variable (state and action column names,
+        in the order state_vars + action_vars)."""
         raise NotImplementedError
 
     def start_distribution(self) -> np.ndarray:
         """[S] the distribution of the first state of an episode."""
         raise NotImplementedError
+
+    def confounded_probs(self, expert: np.ndarray, strength: float) -> np.ndarray:
+        """[S, A] the "confounded" logger from the expert's table [S, A]: in the states where the
+        confounder is on, the confounded action w.p. strength. Only environments with a confounder."""
+        raise NotImplementedError(f"{type(self).__name__} has no confounder")
 
     # ---- shared ------------------------------------------------------------------------------
     @property
@@ -55,22 +77,62 @@ class Env:
     def build_model(self):
         """Set self.B, self.P [S, A, S'], self.true_reward and self.start from next_distributions."""
         self.B = all_states(self.state_cards)  # [S, n]
-        S, A = len(self.B), self.n_actions
-        states = np.repeat(self.B, A, axis=0)  # every (s, a) pair, s major
-        actions = np.tile(np.arange(A), S)
-        dist = self.next_distributions(states, actions)  # [S * A, n, C]
-        P = np.ones((S * A, S))
-        for i in range(self.B.shape[1]):  # the variables move independently: product of factors
-            P *= dist[:, i, self.B[:, i]]  # [S * A, S']
-        self.P = P.reshape(S, A, S)
-        self.true_reward = self.reward(self.B, self.action_columns(np.arange(A)))
+        self.P = dense_transitions(self.B, self.n_actions, self.next_distributions, self.max_model_gb)
+        self.true_reward = self.reward(self.B, self.action_columns(np.arange(self.n_actions)))
         self.start = self.start_distribution()
 
-    def env_actions(self, dataset: Dataset) -> np.ndarray:
-        """[K] the env action of every action vector of the dataset (to evaluate learned policies)."""
-        columns = self.action_columns(np.arange(self.n_actions))
-        lookup = {tuple(c): a for a, c in enumerate(columns)}
-        return np.array([lookup[tuple(a)] for a in dataset.actions], dtype=np.int64)
+    def full_spec(self) -> DataSpec:
+        """Every state variable of the true model, with the reward."""
+        return DataSpec(list(self.state_vars), list(self.action_vars), dict(self.cards), self.reward)
+
+    def spec(self) -> DataSpec:
+        """What the learner is told: the observed variables, numbers of values, action columns and
+        the reward (which may not depend on a hidden variable)."""
+        if not self.hidden_vars:
+            return self.full_spec()
+        observed = [v for v in self.state_vars if v not in self.hidden_vars]
+        cards = {v: c for v, c in self.cards.items() if v not in self.hidden_vars}
+        return DataSpec(observed, list(self.action_vars), cards, self.observed_reward)
+
+    def observed_reward(self, B_observed: np.ndarray, actions: np.ndarray) -> Reward:
+        """The reward over observed states: the hidden variables set to 0 (the reward does not read them)."""
+        full = np.zeros((len(B_observed), len(self.state_vars)), dtype=np.int64)
+        observed = [i for i, v in enumerate(self.state_vars) if v not in self.hidden_vars]
+        full[:, observed] = B_observed
+        return self.reward(full, actions)
+
+    def hide(self, df: pd.DataFrame) -> pd.DataFrame:
+        """The table without the hidden variables (what the learner gets)."""
+        return df.drop(columns=[c for v in self.hidden_vars for c in (v, v + NEXT_MARK)])
+
+    def ground_truth(self) -> MDPGroundTruth:
+        """The exact model of this environment, for the evaluation (built once, then cached)."""
+        if getattr(self, "_truth", None) is None:
+            self._truth = self._make_truth()
+        return self._truth
+
+    def _make_truth(self) -> MDPGroundTruth:
+        return MDPGroundTruth(
+            spec=self.full_spec(),
+            P=self.P,
+            actions=self.action_columns(np.arange(self.n_actions)),
+            start=self.start,
+            true_parents=self.true_parents(),
+            state_names=[self.state_label(b) for b in self.B],
+            observed=self.spec() if self.hidden_vars else None,
+        )
+
+    def behaviour(self, name: str, gamma: float, epsilon: float = 0.05, strength: float = 0.95) -> np.ndarray:
+        """[S, A] a shared behaviour policy as an exact table over the full states (module docstring)."""
+        truth = self.ground_truth()
+        if name == "uniform":
+            return behaviour.uniform(truth)
+        expert = behaviour.expert(truth, gamma, epsilon)
+        if name == "expert":
+            return expert
+        if name == "confounded":
+            return self.confounded_probs(expert, strength)
+        raise ValueError(f"behaviour must be 'uniform', 'expert' or 'confounded', not {name!r}")
 
     def state_label(self, values: np.ndarray) -> str:
         """A short name of a state, for pictures (default: its values, e.g. "101")."""
@@ -98,10 +160,15 @@ class Env:
         block |= {v + NEXT_MARK: next_states[:, i] for i, v in enumerate(self.state_vars)}
         return pd.DataFrame(block)
 
-    def sample(self, n_episodes: int, horizon: int, policy: str | BehaviourPolicy = "random") -> pd.DataFrame:
+    def sample(
+        self, n_episodes: int, horizon: int, policy: str | BehaviourPolicy | np.ndarray = "random"
+    ) -> pd.DataFrame:
         """Run n_episodes episodes of at most horizon steps with a behaviour policy (a name in
-        self.policies, or a function); an episode stops when it reaches a terminal state.
+        self.policies, a function, or a table [S, A] from behaviour()); an episode stops when it
+        reaches a terminal state.
         Returns every transition as one table, indexed by (episode, t)."""
+        if isinstance(policy, np.ndarray):  # a table [S, A] over the full states (behaviour())
+            policy = behaviour.sampler(policy, self.state_cards)
         act = self.policies[policy] if isinstance(policy, str) else policy
         s = self.initial_states(n_episodes)
         alive = np.ones(n_episodes, dtype=bool)

@@ -30,14 +30,14 @@ def test_reward_and_inputs(env, dataset):
     assert np.array_equal(X[:, 0, :3], dataset.B)
 
 
-def test_true_parents_follow_the_hidden_mapping(env, dataset):
-    parents = env.true_parents(dataset)
+def test_true_parents_follow_the_hidden_mapping(env):
+    parents = env.true_parents()
     for i in range(3):
         assert set(parents[f"m{i}"]) == {f"m{i}", f"m{(i - 1) % 3}", f"a{env.repairs.index(i)}"}
 
 
-def test_env_actions_map_back(env, dataset):
-    mapped = env.env_actions(dataset)
+def test_true_actions_map_back(env, truth, dataset):
+    mapped = truth.actions_of(dataset)
     for a, k in zip(dataset.actions, mapped, strict=True):
         assert k == (0 if a.sum() == 0 else env.repairs[int(np.argmax(a))] + 1)
 
