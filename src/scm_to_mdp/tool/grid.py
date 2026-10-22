@@ -1,0 +1,170 @@
+"""Grids of experiments: every combination of problem size x knob x behaviour policy x rollouts.
+
+A Grid names one problem and what to vary:
+
+    Grid(
+        name="SysAdmin",
+        make_env=make_env,              # (size, knob, seed) -> Env, a top-level function
+        sizes=[2, 3, 4], size_name="N",
+        knobs=["ring", "star"], knob_name="topology",
+        policies=[Policy("uniform"), Policy("expert", epsilon=0.05), Policy("confounded")],
+        n_rollouts=[10, 50, 200], seeds=[0, 1, 2], horizon=20,
+        methods=standard_methods(...),
+    )
+
+experiments(grid) turns it into one Experiment (tool/sweep.py) per (knob, policy), each in its own
+folder <out_dir>/<knob_name>=<knob>/<policy key>/ with its own results.csv, so a stopped grid
+resumes setting by setting. The data of a setting are drawn by the behaviour policy (Env.behaviour:
+"uniform", "expert", "confounded"), and every row gets the logger's coverage and confounding bias.
+run_grid runs them one after another and writes grid.json (the order of everything, for the report);
+report_grid (tool/report_grid.py) reads only the results.csv files and grid.json.
+"""
+
+import json
+from collections.abc import Callable
+from dataclasses import asdict, dataclass, field
+from functools import partial
+from pathlib import Path
+from typing import Any
+
+from scm_to_mdp.tool.methods import Limits, Method
+from scm_to_mdp.tool.sweep import Experiment, run_experiment
+
+
+@dataclass(frozen=True)
+class Policy:
+    """A behaviour policy of Env.behaviour: "uniform", "expert" (epsilon: share of uniform actions)
+    or "confounded" (the expert, plus the confounded action w.p. strength when the confounder is on)."""
+
+    name: str
+    epsilon: float = 0.05
+    strength: float = 0.95
+
+    def __post_init__(self):
+        if self.name not in ("uniform", "expert", "confounded"):
+            raise ValueError(f"policy must be 'uniform', 'expert' or 'confounded', not {self.name!r}")
+
+    @property
+    def label(self) -> str:
+        if self.name == "uniform":
+            return "uniform"
+        if self.name == "expert":
+            return f"expert ε={self.epsilon:g}"
+        return f"confounded ε={self.epsilon:g} s={self.strength:g}"
+
+    @property
+    def key(self) -> str:
+        """A folder name."""
+        if self.name == "uniform":
+            return "uniform"
+        if self.name == "expert":
+            return f"expert_eps{self.epsilon:g}"
+        return f"confounded_eps{self.epsilon:g}_s{self.strength:g}"
+
+
+@dataclass(frozen=True)
+class Grid:
+    name: str
+    make_env: Callable[[Any, Any, int], Any]  # (size, knob, seed) -> Env; defined at module top level
+    sizes: list
+    knobs: list
+    policies: list[Policy]
+    n_rollouts: list[int]
+    seeds: list[int]
+    methods: dict[str, Method]
+    horizon: int
+    gamma: float = 0.9
+    limits: Limits | None = field(default_factory=Limits)
+    workers: int = 3
+    out_dir: Path = Path("results")
+    size_name: str = "size"
+    knob_name: str = "knob"
+    n_starts: int = 20
+    skip: Callable[[Any, Policy], bool] | None = None  # (knob, policy) -> True: not a valid setting
+    constants: dict = field(default_factory=dict)  # the script's constants used by make_env (grid.json)
+    save_models: str = "largest"  # first seed: save the models (tool/store.py): "largest" n, "all", "none"
+    pictures_max_states: int = 16  # draw the MDPs of problems with at most this many states
+
+
+# ---- the pieces an Experiment needs (top-level, so that worker processes can receive them) ----------
+def env_at(make_env, knob, size, seed):
+    return make_env(size, knob, seed)
+
+
+def logger_table(policy: Policy, gamma: float, env):
+    """The behaviour policy of a setting as a table [S, A] over the full states."""
+    return env.behaviour(policy.name, gamma, policy.epsilon, policy.strength)
+
+
+def collect_with(policy: Policy, gamma: float, horizon: int, env, n_rollouts: int):
+    """n_rollouts rollouts of the setting's behaviour policy, without the hidden columns."""
+    return env.hide(env.sample(n_rollouts, horizon, logger_table(policy, gamma, env)))
+
+
+def settings(grid: Grid) -> list[tuple[Any, Policy]]:
+    """Every valid (knob, policy), in the grid's order."""
+    return [(k, p) for k in grid.knobs for p in grid.policies if grid.skip is None or not grid.skip(k, p)]
+
+
+def folder(grid: Grid, knob, policy: Policy) -> Path:
+    return Path(grid.out_dir) / f"{grid.knob_name}={knob}" / policy.key
+
+
+def experiments(grid: Grid) -> list[Experiment]:
+    return [
+        Experiment(
+            name=f"{grid.name}, {grid.knob_name}={knob}, {policy.label}",
+            make_env=partial(env_at, grid.make_env, knob),
+            collect=partial(collect_with, policy, grid.gamma, grid.horizon),
+            sizes=list(grid.sizes),
+            n_rollouts=list(grid.n_rollouts),
+            seeds=list(grid.seeds),
+            methods=grid.methods,
+            gamma=grid.gamma,
+            n_starts=grid.n_starts,
+            limits=grid.limits,
+            workers=grid.workers,
+            out_dir=folder(grid, knob, policy),
+            size_name=grid.size_name,
+            knob=str(knob),
+            policy=policy.label,
+            behaviour=partial(logger_table, policy, grid.gamma),
+            horizon=grid.horizon,
+            settings={"policy": asdict(policy), **grid.constants},
+            save_models=grid.save_models,
+            pictures_max_states=grid.pictures_max_states,
+        )
+        for knob, policy in settings(grid)
+    ]
+
+
+def write_grid_file(grid: Grid) -> None:
+    """grid.json: the names and the order of sizes, knobs and policies (read by report_grid)."""
+    out = Path(grid.out_dir)
+    out.mkdir(parents=True, exist_ok=True)
+    description = {
+        "name": grid.name,
+        "size_name": grid.size_name,
+        "sizes": [str(s) for s in grid.sizes],
+        "knob_name": grid.knob_name,
+        "knobs": [str(k) for k in grid.knobs],
+        "policies": [p.label for p in grid.policies],
+        "n_rollouts": sorted(grid.n_rollouts),
+        "seeds": list(grid.seeds),
+        "horizon": grid.horizon,
+        "gamma": grid.gamma,
+        "constants": grid.constants,
+        "settings": [
+            {"knob": str(k), "policy": p.label, "folder": str(folder(grid, k, p).relative_to(out))}
+            for k, p in settings(grid)
+        ],
+    }
+    (out / "grid.json").write_text(json.dumps(description, indent=2))
+
+
+def run_grid(grid: Grid, resume: bool = True) -> None:
+    """Run every setting of the grid, one after another (each with grid.workers processes)."""
+    write_grid_file(grid)
+    for exp in experiments(grid):
+        print(f"\n===== {exp.name} =====")
+        run_experiment(exp, resume=resume)
