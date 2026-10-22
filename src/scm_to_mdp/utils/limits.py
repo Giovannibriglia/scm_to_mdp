@@ -10,7 +10,11 @@ laptop going to sleep in the middle of a step must not turn that step into a tim
 Fork is used because it starts at once and the child shares the parent's data. It is safe only if
 the parent never ran PyTorch computations itself: forking a process whose PyTorch thread pool was
 used makes large torch operations fail in the child ("Invalid thread pool"). So every step that
-uses NBN / torch must run through run_limited, and the parent must only prepare data.
+uses NBN / torch must run through run_limited, and the parent must only prepare data. Training a
+neural network (offline DQN / CQL) needs more: on macOS a forked child that trains is killed by the
+Objective-C runtime once the parent has started initialising PyTorch's Metal backend ("MPSGraph ...
+initialize may have been in progress in another thread when fork() was called"), so those steps
+use start_method="spawn" (a fresh process; fn and its arguments must then be picklable).
 """
 
 import multiprocessing
@@ -64,9 +68,11 @@ def _kill(proc: psutil.Process):
         pass
 
 
-def run_limited(fn, *args, mem_gb: float, timeout_s: float | None = None, poll: float = 0.02) -> StepResult:
+def run_limited(
+    fn, *args, mem_gb: float, timeout_s: float | None = None, poll: float = 0.02, start_method: str = "fork"
+) -> StepResult:
     """fn(*args) in a child process, stopped above mem_gb of memory or after timeout_s seconds."""
-    ctx = multiprocessing.get_context("fork")
+    ctx = multiprocessing.get_context(start_method)
     receiver, sender = ctx.Pipe(duplex=False)
     child = ctx.Process(target=_child, args=(sender, fn, args))
     start = time.monotonic()

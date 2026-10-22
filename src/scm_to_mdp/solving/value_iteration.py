@@ -18,9 +18,13 @@ def solve(P: np.ndarray, reward: Reward, gamma: float, tol: float = 1e-8) -> Sol
 
 
 def policy_value(P: np.ndarray, reward: Reward, policy: np.ndarray, gamma: float) -> np.ndarray:
-    """Exact value of a deterministic policy: V = R_pi + P_pi (r_next + gamma * c * V), with c = 0 on
-    terminal states, i.e. solve (I - gamma P_pi diag(c)) V = R_pi + P_pi r_next."""
+    """Exact value of a policy: V = R_pi + P_pi (r_next + gamma * c * V), with c = 0 on terminal
+    states, i.e. solve (I - gamma P_pi diag(c)) V = R_pi + P_pi r_next. policy: [S] action indices
+    (deterministic) or [S, A] action probabilities (stochastic)."""
     states = np.arange(P.shape[0])
-    P_pi, R_pi = P[states, policy], reward.R[states, policy]
+    if policy.ndim == 2:
+        P_pi, R_pi = np.einsum("sa,sat->st", policy, P), (policy * reward.R).sum(1)
+    else:
+        P_pi, R_pi = P[states, policy], reward.R[states, policy]
     goes_on = np.where(reward.terminal, 0.0, 1.0)
     return np.linalg.solve(np.eye(len(states)) - gamma * P_pi * goes_on[None, :], R_pi + P_pi @ reward.r_next)

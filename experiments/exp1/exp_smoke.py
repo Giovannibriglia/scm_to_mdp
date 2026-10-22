@@ -4,8 +4,8 @@
 
 It checks that every dependency imports, prints the machine (CPUs, RAM, Python), then runs each
 complete grid (sysadmin_complete.py, sepsis_complete.py, chemistry_complete.py) on one tiny setting
-with every behaviour policy and every method, with 2 worker processes (as the real runs do), and
-writes the report. It ends with a PASS / FAIL line per grid.
+with every behaviour policy and every method (offline DQN and CQL included, briefly trained), with
+2 worker processes (as the real runs do), and writes the report. It ends with a PASS / FAIL line per grid.
 
 Output: results/exp1/smoke_<date>_<time>/<grid>/ (safe to delete). Nothing runs on the GPU: the
 pipeline uses NumPy and PyTorch on the CPU, so a GPU is neither needed nor used.
@@ -71,9 +71,23 @@ def machine():
 def run_one(script: str, size, knob, n_rollouts, out_dir: Path) -> tuple[bool, str]:
     import pandas as pd
 
+    from scm_to_mdp.tool import Method
+
     m = importlib.import_module(script)
+    quick = {"steps": 300, "hidden": 32}  # offline DQN / CQL: only that they train, not how well
+    methods = dict(m.GRID.methods) | {
+        "offline DQN": Method("offline_dqn", "greedy_q", solver_options=quick),
+        "offline CQL": Method("offline_cql", "greedy_q", solver_options=quick),
+    }
     grid = dataclasses.replace(
-        m.GRID, sizes=[size], knobs=[knob], n_rollouts=n_rollouts, seeds=[0], workers=WORKERS, out_dir=out_dir
+        m.GRID,
+        sizes=[size],
+        knobs=[knob],
+        n_rollouts=n_rollouts,
+        seeds=[0],
+        workers=WORKERS,
+        out_dir=out_dir,
+        methods=methods,
     )
     m.run_grid(grid)
     m.report_grid(grid.out_dir, delta=m.DELTA)

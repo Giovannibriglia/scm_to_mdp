@@ -24,12 +24,21 @@ that is more than 80% of the RAM.
 ## Experiment 1: complete grids
 
 `experiments/exp1/` holds one script per environment. Each runs every problem size × knob ×
-behaviour policy × number of rollouts × seed with the 7–8 standard methods
-(`standard_methods(...)`: BIC / PCMCI+ / GES → a robust MDP over the box of the factor intervals; the
-true graph with that box (the interval-arithmetic (IA) relaxation of Schnitzer, Abate & Parker,
-AAAI 2026) and, for 0/1 variables, the exact product set; flat RMDP (one interval per transition);
-flat MDP (the plug-in estimate); DiFaRL (Ehrlichman et al., CLeaR 2026)). Each script
-states its expectations (H1–H5) in its docstring, before any run.
+behaviour policy × number of rollouts × seed with the 10–11 standard methods (`standard_methods(...)`):
+
+- ours: BIC / PCMCI+ / GES → a robust MDP over the box of the factor intervals;
+- the oracle: the true graph with that box (the interval-arithmetic (IA) relaxation of Schnitzer,
+  Abate & Parker, AAAI 2026) and, for 0/1 variables, the exact product set;
+- baselines: flat RMDP (one interval per transition); flat MDP (the plug-in estimate); DiFaRL
+  (Ehrlichman et al., CLeaR 2026); flat SPIBB (Laroche et al., ICML 2019) and SL-SPIBB (Simão &
+  Spaan, IJCAI 2019), safe improvement over the behaviour policy estimated from the data; FOCUS
+  (Zhu et al., 2025), CI-test structure and a MOPO-penalised model, in a discrete version; with
+  `DEEP_BASELINES = True` in a script, also offline DQN and offline CQL (Kumar et al., NeurIPS 2020).
+
+Every baseline's choices and fixed parameters (and how a pilot chose CQL's α and FOCUS's λ) are in
+the docstring of its module in `src/scm_to_mdp/baselines/`. Each script states its expectations
+(H1–H5) in its docstring, before any run. Every row of `results.csv` also holds the true value of
+the behaviour policy (`V_logger`), the reference for SPIBB.
 
 | Script | Size | Knob | Hidden variable (never in the data) | Output |
 |---|---|---|---|---|
@@ -119,6 +128,9 @@ result.solution.pi, result.solution.V                # the policy and its promis
 | `flat_rmdp` | one interval per (s, a, s′) | `robust_vi` | baseline |
 | `flat_mdp` | the plug-in MDP from counts (no guarantee) | `vi`, `robust_vi` | baseline |
 | `difarl` | DiFaRL's action groups (model-free, no guarantee) | `fqi` | baseline |
+| `offline_dqn`, `offline_cql` | a Q-network trained on the logged data (model-free, no guarantee) | `greedy_q` | baseline |
+| `spibb`, `sl_spibb` | the estimated MDP, flat or with SL structure learning, and the bootstrapped pairs | `spibb` (a stochastic policy) | baseline |
+| `focus` | FOCUS's CI-test graph, the factored model with MOPO's penalised reward | `vi` | baseline |
 
 **2. Evaluate.** The ground truth is used only here. `MDPGroundTruth` holds the `DataSpec`
 and the true `P [S, A, S']`, the action columns of every true action, the start distribution and,
@@ -179,7 +191,7 @@ Baselines are dashed, oracle methods dotted, ours solid.
 | `src/scm_to_mdp/scm_learning/` | S4: `nbn_intervals`, a Clopper–Pearson interval per factor row with a union bound |
 | `src/scm_to_mdp/compilation/` | S7: `product_bounds`, factor intervals → their box, an interval MDP (the relaxation the box solvers use in S8) |
 | `src/scm_to_mdp/solving/` | S8: `value_iteration`, `robust_vi`, `vertex_robust_vi` (`tol` = distance to the fixed point, `stopping.py`) |
-| `src/scm_to_mdp/baselines/` | `flat_mdp`, `flat_rmdp`, `difarl` |
+| `src/scm_to_mdp/baselines/` | `flat_mdp`, `flat_rmdp`, `difarl`, `offline_q` (offline DQN / CQL), `spibb` (flat and SL-SPIBB), `focus` |
 | `src/scm_to_mdp/evaluation.py` | S9: V*, the true value of a policy, promise, safety, SHD and SID |
 | `src/scm_to_mdp/plotting/` | result figures (from `results.csv`) and pictures of MDPs |
 | `experiments/exp1/` | experiment 1: the three complete grids (tables above) and `exp_smoke.py` (a check of the installation, 2-8 minutes) |

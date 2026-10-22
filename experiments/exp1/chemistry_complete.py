@@ -6,7 +6,8 @@
                 expert       the best policy over the observed state, a uniform action w.p. 0.05
                 confounded   the expert, but while a hidden catalyst is on it waits (does nothing)
                              w.p. 0.95
-    rollouts    10 ... 1600 (horizon 20), 3 seeds, 7 standard methods (no exact solver: 3 colours)
+    rollouts    10 ... 1600 (horizon 20), 3 seeds, 10 standard methods (no exact solver: 3 colours;
+                offline DQN and CQL too with DEEP_BASELINES)
 
 The catalyst (src/scm_to_mdp/envs/chemistry.py) is in every setting: drawn afresh at every step
 (p = 0.3), it drives the reaction of one object (w.p. 0.95 with it, 0.3 without), and it is never in
@@ -47,8 +48,11 @@ POLICIES = [
 N_ROLLOUTS = [10, 25, 50, 100, 200, 400, 800, 1600]
 SEEDS = [0, 1, 2]  # the seed also draws the graph and the target colours
 HORIZON, GAMMA, DELTA = 20, 0.9, 0.05
+DEEP_BASELINES = False  # True: also offline DQN and offline CQL (about 15 s each per run on a laptop)
 CATALYST = 0.3  # P(catalyst on) at every step
-LIMITS = Limits(mem_gb=8.0, timeout_s={"discovery": 60.0, "selection": 60.0, "solve": 120.0})
+LIMITS = Limits(
+    mem_gb=8.0, timeout_s={"discovery": 60.0, "selection": 60.0, "solve": 120.0, "training": 600.0}
+)
 OUT_DIR = Path(__file__).resolve().parents[2] / "results" / "exp1" / "chemistry_complete"
 
 
@@ -70,7 +74,9 @@ GRID = Grid(
     seeds=SEEDS,
     horizon=HORIZON,
     gamma=GAMMA,
-    methods=standard_methods(max_parents=4, delta=DELTA, exact=False),  # itself, its push, 2 parents
+    methods=standard_methods(
+        max_parents=4, delta=DELTA, exact=False, deep=DEEP_BASELINES, state_parents=3
+    ),  # itself, its push, 2 parents
     limits=LIMITS,
     workers=3,
     out_dir=OUT_DIR,

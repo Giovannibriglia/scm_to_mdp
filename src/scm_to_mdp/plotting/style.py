@@ -21,6 +21,11 @@ ARM_STYLE = {
     "flat RMDP": {"color": "#E69F00", "marker": "v"},
     "flat MDP": {"color": "#7F7F7F", "marker": "v"},
     "DiFaRL": {"color": "#D55E00", "marker": "P"},
+    "offline DQN": {"color": "#56B4E9", "marker": "X"},
+    "offline CQL": {"color": "#000000", "marker": "*"},
+    "flat SPIBB": {"color": "#9467BD", "marker": "<"},
+    "SL-SPIBB": {"color": "#9467BD", "marker": ">"},
+    "FOCUS": {"color": "#17BECF", "marker": "h"},
 }
 ARM_LABEL = {
     "BIC -> RMDP": "BIC → RMDP",
@@ -34,7 +39,7 @@ ARM_LABEL = {
 }
 FULL_WIDTH = 7.0  # inches, a two-column paper's text width
 ROLE_LINE = {"ours": "-", "oracle": ":", "baseline": "--"}
-EXTRA_COLOURS = ["#56B4E9", "#F0E442", "#000000", "#9467BD", "#17BECF", "#BCBD22"]
+EXTRA_COLOURS = ["#F0E442", "#BCBD22", "#8C8C00", "#E377C2"]
 EXTRA_MARKERS = ["h", "*", "p", "<", ">", "X"]
 
 

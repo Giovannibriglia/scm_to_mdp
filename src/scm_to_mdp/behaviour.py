@@ -7,6 +7,7 @@ simulator samples from it (sampler), and the exact model gives what the data wil
     data_occupancy(truth, probs, horizon)   nu(s, a): share of the logged transitions at (s, a)
     coverage(truth, probs, horizon, gamma)  how well the data cover the target policy and all
                                             reachable (observed state, action) pairs
+    logger_value(truth, probs, gamma)       the logger's own true value at the start (V_logger)
     confounding_bias(truth, probs, horizon) how far the kernel the data show is from the
                                             interventional one (0 when the logger ignores the
                                             hidden variables)
@@ -150,6 +151,14 @@ def confounding_bias(truth: MDPGroundTruth, probs: np.ndarray, horizon: int) -> 
     }
 
 
+def logger_value(truth: MDPGroundTruth, probs: np.ndarray, gamma: float) -> float:
+    """The true discounted value of the logger itself at the nominal start (what SPIBB improves on)."""
+    from scm_to_mdp.solving.value_iteration import policy_value
+
+    return float(truth.start @ policy_value(truth.P, truth.reward, probs, gamma))
+
+
 def behaviour_metrics(truth: MDPGroundTruth, probs: np.ndarray, horizon: int, gamma: float) -> dict:
-    """Coverage and confounding bias of a logger, from the exact model (the columns of results.csv)."""
-    return coverage(truth, probs, horizon, gamma) | confounding_bias(truth, probs, horizon)
+    """Coverage, confounding bias and value of a logger, from the exact model (columns of results.csv)."""
+    metrics = coverage(truth, probs, horizon, gamma) | confounding_bias(truth, probs, horizon)
+    return metrics | {"V_logger": logger_value(truth, probs, gamma)}

@@ -58,7 +58,12 @@ def evaluate(
     """Promise, true value, regret and gap at the nominal start and over `starts`; safety."""
     observed = truth.observed_index()  # full state -> the state the learner sees (identity if none hidden)
     promised = solution.V[observed]  # [S] the promise in every full state
-    true_policy = truth.actions_of(dataset)[solution.pi[observed]]  # learner action index -> true action
+    to_true = truth.actions_of(dataset)  # learner action index -> true action
+    if solution.probs is None:
+        true_policy = to_true[solution.pi[observed]]
+    else:  # a stochastic policy, as probabilities over the true actions in every full state
+        true_policy = np.zeros((len(observed), truth.P.shape[1]))
+        true_policy[:, to_true] = solution.probs[observed]
     V_true = value_iteration.policy_value(truth.P, truth.reward, true_policy, gamma)
     live = ~truth.reward.terminal  # a terminal state is never acted in
     promise, true, best = truth.start @ promised, truth.start @ V_true, truth.start @ V_star

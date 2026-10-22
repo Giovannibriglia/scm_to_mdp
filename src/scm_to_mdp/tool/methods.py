@@ -8,6 +8,14 @@ A Method names one choice per step. The learner is one of:
     "flat_rmdp"  baseline: one interval per (s, a, s'), no structure      -> an interval MDP
     "flat_mdp"   baseline: the plug-in MDP from counts, no guarantee      -> an exact MDP (L == U)
     "difarl"     baseline: DiFaRL's action groups, model-free, no guarantee -> action groups
+    "offline_dqn", "offline_cql"
+                 baselines: offline deep Q-learning on the logged data (baselines/offline_q.py),
+                 model-free, no guarantee; nothing to learn before the solver, which trains
+    "spibb", "sl_spibb"
+                 baselines: safe policy improvement over the (estimated) behaviour policy, flat
+                 (Laroche et al.) or with structure learning (Simao & Spaan; baselines/spibb.py)
+    "focus"      baseline: FOCUS's CI-test structure + a MOPO-penalised factored model (discrete
+                 version, baselines/focus.py) -> an exact MDP with a penalised reward
 
 and the solver one of (which ones fit which learner: SOLVERS_FOR):
 
@@ -16,6 +24,8 @@ and the solver one of (which ones fit which learner: SOLVERS_FOR):
     "robust_vi"         robust VI on an interval MDP
     "vi"                value iteration on an exact MDP
     "fqi"               DiFaRL's decomposed fitted Q iteration (uses the data again)
+    "greedy_q"          train the Q-network on the data (step "training"), then its greedy policy
+    "spibb"             Pi_b-SPIBB policy iteration (a stochastic policy)
 
 Every step runs either in this process (limits=None) or in its own process with a memory and time
 limit (Limits). A step that fails stops the method: Result.status says how ("memout", "timeout",
@@ -27,11 +37,12 @@ import math
 import time
 import warnings
 from dataclasses import dataclass, field
+from functools import partial
 from typing import Any
 
 import numpy as np
 
-from scm_to_mdp.baselines import difarl, flat_mdp, flat_rmdp
+from scm_to_mdp.baselines import difarl, flat_mdp, flat_rmdp, focus, offline_q, spibb
 from scm_to_mdp.compilation import product_bounds
 from scm_to_mdp.core import ActionGroups, Dataset, Graph, Solution
 from scm_to_mdp.scm_learning import nbn_intervals
@@ -39,8 +50,20 @@ from scm_to_mdp.selection import bic_best, given
 from scm_to_mdp.solving import robust_vi, value_iteration, vertex_robust_vi
 from scm_to_mdp.utils.limits import run_limited
 
-LEARNERS = ("causal", "flat_rmdp", "flat_mdp", "difarl")
-BASELINES = ("flat_rmdp", "flat_mdp", "difarl")
+LEARNERS = (
+    "causal",
+    "flat_rmdp",
+    "flat_mdp",
+    "difarl",
+    "offline_dqn",
+    "offline_cql",
+    "spibb",
+    "sl_spibb",
+    "focus",
+)
+BASELINES = LEARNERS[1:]
+OFFLINE_Q = ("offline_dqn", "offline_cql")
+CQL_ALPHA = 0.1  # offline CQL's penalty weight (baselines/offline_q.py says how it was chosen)
 DISCOVERY = ("bic", "pcmci+", "ges", "oracle")
 SELECTION = {"bic_best": bic_best.select, "given": given.select}
 SOLVERS_FOR = {
@@ -48,9 +71,14 @@ SOLVERS_FOR = {
     "flat_rmdp": ("robust_vi",),
     "flat_mdp": ("vi", "robust_vi"),
     "difarl": ("fqi",),
+    "offline_dqn": ("greedy_q",),
+    "offline_cql": ("greedy_q",),
+    "spibb": ("spibb",),
+    "sl_spibb": ("spibb",),
+    "focus": ("vi",),
 }
 ROBUST_SOLVERS = ("box_robust_vi", "vertex_robust_vi", "robust_vi")
-STEPS = ("discovery", "selection", "learning", "relax", "solve")  # every step a method can have
+STEPS = ("discovery", "selection", "learning", "relax", "training", "solve")  # every step a method can have
 STOPPED = ("timeout", "memout")
 
 
@@ -121,13 +149,20 @@ class Method:
                 _check_options(difarl.groups, self.discovery_options, 1, "discovery (DiFaRL groups)")
             elif self.discovery_options:
                 raise ValueError(f"learner {self.learner!r} takes no discovery options")
-            learn_fn = {"flat_rmdp": flat_rmdp.learn, "flat_mdp": flat_mdp.learn, "difarl": None}[
-                self.learner
-            ]
+            learn_fn = {
+                "flat_rmdp": flat_rmdp.learn,
+                "flat_mdp": flat_mdp.learn,
+                "spibb": spibb.flat_model,
+                "sl_spibb": spibb.sl_model,
+            }.get(self.learner)
+            if self.learner == "focus":
+                learn_fn = focus.penalised_mdp
+                _check_options(learn_fn, self.learning_options, 2, "learning (FOCUS)")
+                learn_fn = None
             if learn_fn is not None:
                 _check_options(learn_fn, self.learning_options, 1, "learning")
-            elif self.learning_options:
-                raise ValueError("DiFaRL takes no learning options (its FQI options are solver options)")
+            elif self.learning_options and self.learner != "focus":
+                raise ValueError(f"{self.learner} takes no learning options (its options are solver options)")
         solver_fn = {
             "box_robust_vi": robust_vi.solve,
             "vertex_robust_vi": vertex_robust_vi.solve,
@@ -136,6 +171,12 @@ class Method:
         }.get(self.solver)
         if solver_fn is not None:
             _check_options(solver_fn, self.solver_options, 3 if self.solver == "vi" else 2, "solver")
+        elif self.solver == "spibb":
+            _check_options(spibb.solve, self.solver_options, 2, "solver (SPIBB)")
+        elif self.solver == "greedy_q":
+            _check_options(offline_q.learn, self.solver_options, 2, "solver (offline Q-learning)")
+            if self.learner == "offline_dqn" and "cql_alpha" in self.solver_options:
+                raise ValueError("offline DQN has no CQL penalty (use learner 'offline_cql')")
         else:
             _check_options(difarl.fqi, self.solver_options, 3, "solver (FQI)")
 
@@ -213,7 +254,10 @@ def _run_step(result: Result, name: str, fn, x, limits: Limits | None):
             value, status = repr(err), "error"
         seconds, gb = time.monotonic() - start, math.nan
     else:
-        out = run_limited(fn, x, mem_gb=limits.mem_gb, timeout_s=limits.timeout_s.get(name))
+        start = "spawn" if name == "training" else "fork"  # a network trains in a fresh process (limits.py)
+        out = run_limited(
+            fn, x, mem_gb=limits.mem_gb, timeout_s=limits.timeout_s.get(name), start_method=start
+        )
         value, status, seconds, gb = out.value, out.status, out.seconds, out.peak_gb
     result.steps[name] = {"status": status, "seconds": seconds, "gb": gb}
     if status == "ok":
@@ -250,6 +294,17 @@ def learning_steps(data: Dataset, method: Method, true_parents: dict | None = No
         return [("learning", lambda d: flat_rmdp.learn(d, **m.learning_options))]
     if m.learner == "flat_mdp":
         return [("learning", lambda d: flat_mdp.learn(d, **m.learning_options))]
+    if m.learner in OFFLINE_Q:
+        return []  # model-free: the solver trains on the data
+    if m.learner == "spibb":
+        return [("learning", lambda d: spibb.flat_model(d, **m.learning_options))]
+    if m.learner == "sl_spibb":
+        return [("learning", lambda d: spibb.sl_model(d, **m.learning_options))]
+    if m.learner == "focus":
+        return [
+            ("discovery", focus.discover),
+            ("learning", lambda graph: focus.penalised_mdp(data, graph, **m.learning_options)),
+        ]
     return [("discovery", lambda d: ActionGroups(difarl.groups(d, **m.discovery_options)))]
 
 
@@ -270,7 +325,19 @@ def solver_steps(data: Dataset, method: Method, gamma: float) -> list:
             return value_iteration.solve(mdp.L, mdp.reward, gamma, **opts)
 
         return [("solve", vi)]
+    if method.solver == "spibb":
+        return [("solve", lambda model: spibb.solve(model, gamma, **opts))]
+    if method.solver == "greedy_q":
+        alpha = {"cql_alpha": CQL_ALPHA} if method.learner == "offline_cql" else {}
+        return [
+            ("training", partial(_train_q, data, gamma, alpha | opts)),  # picklable: it runs in a new process
+            ("solve", offline_q.greedy),
+        ]
     return [("solve", lambda groups: difarl.fqi(data, groups.groups, gamma, **opts))]
+
+
+def _train_q(data: Dataset, gamma: float, options: dict, _model=None):
+    return offline_q.learn(data, gamma, **options)
 
 
 def learn(
@@ -278,7 +345,10 @@ def learn(
 ) -> Result:
     """Learn a model from the data. true_parents is used only by discovery "oracle"."""
     result, x = Result(method), data
-    for name, step in learning_steps(data, method, true_parents):
+    steps = learning_steps(data, method, true_parents)
+    if not steps:
+        return result  # model-free: nothing before the solver
+    for name, step in steps:
         x = _run_step(result, name, step, x, limits)
         if x is None:
             return result
@@ -300,16 +370,24 @@ def solve(result: Result, data: Dataset, gamma: float, limits: Limits | None = N
         x = _run_step(result, name, step, x, limits)
         if x is None:
             return result
+        if isinstance(x, offline_q.QTable):
+            result.model = x  # what was learned: the Q-table (kept and saved)
     result.solution = x
     return result
 
 
 def standard_methods(
-    max_parents: int | None = 3, delta: float = 0.05, exact: bool = True
+    max_parents: int | None = 3,
+    delta: float = 0.05,
+    exact: bool = True,
+    deep: bool = False,
+    state_parents: int = 3,
 ) -> dict[str, Method]:
     """The methods of experiment 1 (used by experiments/exp1/*_complete.py):
     ours (BIC / PCMCI+ / GES -> RMDP), the oracle (Schnitzer et al.: IA, and exact if `exact`, which
-    needs 0/1 state variables) and the baselines (flat RMDP, flat MDP, DiFaRL)."""
+    needs 0/1 state variables) and the baselines (flat RMDP, flat MDP, DiFaRL, flat SPIBB, SL-SPIBB
+    with candidate parent sets of `state_parents` state variables, FOCUS; with `deep`, also offline
+    DQN and offline CQL). Every baseline uses the defaults of its module in baselines/."""
     causal = {"selection": "bic_best", "learning_options": {"delta": delta}}
     oracle = {"discovery": "oracle", "selection": "given", "learning_options": {"delta": delta}}
     methods = {
@@ -332,6 +410,12 @@ def standard_methods(
             "difarl", "fqi", discovery_options={"p_threshold": 0.005}, solver_options={"max_iter": 30}
         ),
     }
+    methods["flat SPIBB"] = Method("spibb", "spibb")
+    methods["SL-SPIBB"] = Method("sl_spibb", "spibb", learning_options={"d": state_parents})
+    methods["FOCUS"] = Method("focus", "vi")
     if not exact:
         del methods["Schnitzer exact"]
+    if deep:
+        methods["offline DQN"] = Method("offline_dqn", "greedy_q")
+        methods["offline CQL"] = Method("offline_cql", "greedy_q")
     return methods

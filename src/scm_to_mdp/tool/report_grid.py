@@ -87,7 +87,16 @@ def edges_table(runs: pd.DataFrame) -> pd.DataFrame:
 
 def behaviour_table(runs: pd.DataFrame) -> pd.DataFrame:
     columns = ["n_states", "n_observed_states", "true_rows", "true_params", "n_true_edges", "V_star_obs"]
-    columns += ["V_star", "V_random", "C_star", "C_all_bound", "unvisited_pairs", "bias_max", "bias_mean"]
+    columns += [
+        "V_star",
+        "V_random",
+        "V_logger",
+        "C_star",
+        "C_all_bound",
+        "unvisited_pairs",
+        "bias_max",
+        "bias_mean",
+    ]
     present = [c for c in columns if c in runs]
     return runs.drop_duplicates(SETTING + ["size", "seed"])[SETTING + ["size", "seed"] + present]
 

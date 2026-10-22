@@ -171,7 +171,9 @@ class IntervalMDP:
 
 @dataclass(frozen=True)
 class Solution:
-    """Values and a deterministic policy (an action index k per state)."""
+    """Values and a policy: deterministic (an action index k per state), or stochastic when `probs`
+    is given (SPIBB copies the behaviour policy's probabilities on uncertain pairs)."""
 
     V: np.ndarray  # [S] the value the method promises (for a robust method: a lower bound)
-    pi: np.ndarray  # [S]
+    pi: np.ndarray  # [S] the action (for a stochastic policy: its most likely action)
+    probs: np.ndarray | None = None  # [S, K] a stochastic policy over the data's action vectors

@@ -6,8 +6,9 @@ number: Experiment(save_models="all")), every method's model goes to
     <out_dir>/models/<size_label>/n=<n_rollouts>/<method>/
         model.npz      the model the solver used, the policy and its promise: the factor intervals
                        (lo, hi [S, K, n, C], FactorBounds) for a causal method, the transition
-                       intervals (L, U [S, K, S], IntervalMDP) for flat RMDP and flat MDP, nothing
-                       for DiFaRL (model-free: its action groups are in info.json); with the reward
+                       intervals (L, U [S, K, S], IntervalMDP) for flat RMDP and flat MDP, the
+                       Q-table (Q [S, K]) for offline DQN and CQL, nothing for DiFaRL (its action
+                       groups are in results.csv); with the reward
                        (R, r_next, terminal), the action vectors and pi, V
         cbn.json       a causal method: the learned causal Bayesian network over the observed
                        columns (below), with the true parents for comparison
@@ -139,6 +140,8 @@ def save(folder: Path, result, data, truth, info: dict, pictures_max_states: int
     arrays: dict = {}
     if solution is not None:
         arrays |= {"pi": solution.pi, "V": solution.V}
+        if solution.probs is not None:
+            arrays["probs"] = solution.probs
     reward = getattr(model, "reward", None)
     if reward is not None:
         arrays |= {"R": reward.R, "r_next": reward.r_next, "terminal": reward.terminal}
@@ -173,6 +176,8 @@ def save(folder: Path, result, data, truth, info: dict, pictures_max_states: int
         else:
             arrays |= {"kind": "IntervalMDP (L, U not saved: too large)"}
             info = info | {"note": f"L and U have {model.L.size:,} entries each; not saved"}
+    elif type(model).__name__ == "QTable":  # offline DQN / CQL: the learned Q on every observed state
+        arrays |= {"kind": "QTable", "Q": model.Q}
     else:
         arrays |= {"kind": "none"}
     np.savez_compressed(folder / "model.npz", **arrays)
@@ -239,5 +244,9 @@ def load(folder) -> dict:
         model = FactorBounds(z["lo"], z["hi"], [int(c) for c in z["cards"]], z["B"], reward)
     elif kind == "IntervalMDP":
         model = IntervalMDP(z["L"], z["U"] if "U" in z else z["L"], reward)
-    solution = Solution(z["V"], z["pi"]) if "pi" in z else None
+    elif kind == "QTable":
+        from scm_to_mdp.baselines.offline_q import QTable
+
+        model = QTable(z["Q"], {})
+    solution = Solution(z["V"], z["pi"], z["probs"] if "probs" in z else None) if "pi" in z else None
     return {"model": model, "solution": solution, "cbn": network, "info": info}
