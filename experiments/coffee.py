@@ -10,7 +10,7 @@ moves; delivering matters only in the office with coffee) in a problem small eno
 learned graph by hand (results/.../tables.md, SHD per method).
 
 Run from the repository root (about 15 minutes):
-    .venv/bin/python experiments/coffee.py [--resume | --report-only]
+    .venv/bin/python experiments/coffee.py [--resume | --report-only] [--workers N] [--device D]
 Output: results/experiments/coffee_<date>_<time>/ (one folder per run; tool/runs.py)
 """
 
@@ -52,7 +52,7 @@ EXPERIMENT = Experiment(
     methods=METHODS,
     gamma=GAMMA,
     limits=LIMITS,
-    workers=3,
+    workers="auto",  # what the machine allows (utils/compute.py); --workers N overrides
     out_dir=OUT_DIR,
     settings={"horizon": HORIZON},  # checked when a run resumes
     size_name="domain",

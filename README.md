@@ -16,10 +16,36 @@ uv sync --extra discovery                                   # environment (uv; P
 ```
 
 Tested on macOS (arm64) and Linux (Ubuntu 20.04, x86_64). Without `uv`: `pip install --user uv`.
-Everything runs on the CPU (NumPy, and PyTorch on the CPU inside NBN): a GPU is not needed and not
-used, and PyTorch's warning about an old NVIDIA driver, if any, can be ignored. Each grid uses
-`workers=3` processes and up to `LIMITS.mem_gb` = 8 GB per step; the scripts refuse to start when
-that is more than 80% of the RAM.
+
+### How a run uses the machine
+
+The scripts run as they are on a laptop or a server: at start they look at the machine, choose, print
+the choice and save it in each setting's `meta.json` (`"machine"`; `src/scm_to_mdp/utils/compute.py`).
+
+| | default (`auto`) | override |
+|---|---|---|
+| parallel jobs | one per physical core, but at most 80% of the RAM / `LIMITS.mem_gb` (8 GB per step) | `--workers N` or `SCM_TO_MDP_WORKERS=N` |
+| offline DQN / CQL training | CUDA if a test step runs on it, else the CPU; never Apple's MPS (slower here) | `--device cpu\|cuda\|cuda:N\|mps` or `SCM_TO_MDP_DEVICE` |
+| threads | one per process (torch and BLAS) | `SCM_TO_MDP_THREADS` |
+
+- All the settings of a grid share one pool of workers: a free worker takes the next (size, seed) of
+  any setting, so a machine with more cores finishes sooner. The rows do not depend on the number
+  of workers (tested: `tests/test_compute.py`).
+- The RAM rule guarantees that a step is never killed because other steps used the memory, so a
+  `memout` means the same on every machine. On a 34 GB laptop it gives 3 workers; lower
+  `LIMITS.mem_gb` for more (the largest step seen so far used 0.5 GB).
+- Only offline DQN / CQL use a GPU: they take most of the run time, everything else is counting work
+  on the CPU. On CUDA the training step is recorded once as a CUDA graph and replayed (5x faster
+  alone on a TITAN X). Measured on 2026-10-22 (4,000 steps, two Sepsis datasets): Apple M5, CPU
+  4.7 s vs MPS 6.1 s; Xeon E5-2640 v4 + TITAN X, ten trainings at once: CPU 60 s, CUDA 38-40 s.
+- On Linux x86_64, `uv.lock` installs PyTorch built for CUDA 12.6 (`pyproject.toml`): it works with
+  NVIDIA drivers from CUDA 12.x on and with GPUs from Pascal to Hopper. For Blackwell GPUs (RTX 50xx,
+  B200) change `cu126` to `cu128` there and run `uv lock`.
+- A run's numbers are reproducible on the same machine and device. A GPU and a CPU training agree up
+  to float rounding, which a DQN amplifies (the greedy action differs in about 10-20% of the states
+  in our check), so do not mix devices within one run; `meta.json` records the device.
+- Stopping a run (IDE stop button, Ctrl+C, kill) stops its workers and their steps too; continue it
+  with `--resume`.
 
 ## Experiment 1: complete grids
 
@@ -64,8 +90,8 @@ distribution, with the true parents), `cbn.png` (the learned graph against the t
 problems with at most 16 states, `mdp.png`. The data determine a causal Bayesian network, not a
 structural causal model: many SCMs induce the same network, and the network is what the pipeline
 uses. To change a grid,
-edit the constants at the top of its script (`SIZES` or `VITALS`, `N_ROLLOUTS`, `SEEDS`, `LIMITS`) and
-`workers=` in `Grid(...)`.
+edit the constants at the top of its script (`SIZES` or `VITALS`, `N_ROLLOUTS`, `SEEDS`, `LIMITS`);
+the number of workers is a command-line choice (`--workers N`, above).
 If you change anything other than adding sizes, seeds or budgets, use a new output folder:
 otherwise the old rows are kept and mixed with the new ones.
 

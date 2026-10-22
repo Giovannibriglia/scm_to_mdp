@@ -16,7 +16,9 @@ experiments(grid) turns it into one Experiment (tool/sweep.py) per (knob, policy
 folder <out_dir>/<knob_name>=<knob>/<policy key>/ with its own results.csv, so a stopped grid
 resumes setting by setting. The data of a setting are drawn by the behaviour policy (Env.behaviour:
 "uniform", "expert", "confounded"), and every row gets the logger's coverage and confounding bias.
-run_grid runs them one after another and writes grid.json (the order of everything, for the report);
+run_grid runs them all in one pool of workers (a free worker takes a job of any setting; each
+setting keeps its own folder and its waves of sizes) and writes grid.json (the order of everything,
+for the report);
 report_grid (tool/report_grid.py) reads only the results.csv files and grid.json.
 """
 
@@ -28,7 +30,7 @@ from pathlib import Path
 from typing import Any
 
 from scm_to_mdp.tool.methods import Limits, Method
-from scm_to_mdp.tool.sweep import Experiment, run_experiment
+from scm_to_mdp.tool.sweep import Experiment, run_sweeps
 
 
 @dataclass(frozen=True)
@@ -75,7 +77,7 @@ class Grid:
     horizon: int
     gamma: float = 0.9
     limits: Limits | None = field(default_factory=Limits)
-    workers: int = 3
+    workers: int | str = "auto"  # parallel jobs: "auto" = what the machine allows (utils/compute.py)
     out_dir: Path = Path("results")
     size_name: str = "size"
     knob_name: str = "knob"
@@ -163,8 +165,10 @@ def write_grid_file(grid: Grid) -> None:
 
 
 def run_grid(grid: Grid, resume: bool = True) -> None:
-    """Run every setting of the grid, one after another (each with grid.workers processes)."""
+    """Run every setting of the grid in one pool of grid.workers processes."""
     write_grid_file(grid)
-    for exp in experiments(grid):
-        print(f"\n===== {exp.name} =====")
-        run_experiment(exp, resume=resume)
+    exps = experiments(grid)
+    print(f"\n===== {grid.name}: {len(exps)} settings -> {grid.out_dir} =====")
+    for exp in exps:
+        print(f"  {exp.name}")
+    run_sweeps(exps, resume=resume, title=grid.name)

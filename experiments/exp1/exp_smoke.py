@@ -2,13 +2,15 @@
 
     .venv/bin/python experiments/exp1/exp_smoke.py    (2 minutes on a recent laptop, 8 on an older server)
 
-It checks that every dependency imports, prints the machine (CPUs, RAM, Python), then runs each
-complete grid (sysadmin_complete.py, sepsis_complete.py, chemistry_complete.py) on one tiny setting
-with every behaviour policy and every method (offline DQN and CQL included, briefly trained), with
-2 worker processes (as the real runs do), and writes the report. It ends with a PASS / FAIL line per grid.
+It checks that every dependency imports, prints the machine and the plan the real runs would use
+(workers, training device: utils/compute.py), then runs each complete grid (sysadmin_complete.py,
+sepsis_complete.py, chemistry_complete.py) on one tiny setting with every behaviour policy and every
+method (offline DQN and CQL included, briefly trained) with that plan, in parallel worker processes
+as the real runs do, and writes the report. It ends with a PASS / FAIL line per grid.
+--workers N and --device D override the plan, as in the grid scripts.
 
-Output: results/exp1/smoke_<date>_<time>/<grid>/ (safe to delete). Nothing runs on the GPU: the
-pipeline uses NumPy and PyTorch on the CPU, so a GPU is neither needed nor used.
+Output: results/exp1/smoke_<date>_<time>/<grid>/ (safe to delete). Only offline DQN / CQL can use a
+GPU (CUDA, when a test step runs on it); everything else runs on the CPU.
 """
 
 import dataclasses
@@ -33,7 +35,7 @@ TINY = [
     ("sepsis_complete", 2, "hidden", [50, 100]),
     ("chemistry_complete", 4, "0.4", [15, 30]),
 ]
-WORKERS = 2
+WORKERS = "auto"  # as the grids: what the machine allows
 
 
 def check_imports() -> bool:
@@ -62,10 +64,17 @@ def check_imports() -> bool:
 def machine():
     import psutil
 
+    from scm_to_mdp.utils import compute
+
+    sys.path.insert(0, str(HERE))
+    import sepsis_complete
+
     ram = psutil.virtual_memory()
-    print(f"  Python {platform.python_version()} on {platform.system()} {platform.machine()}")
-    print(f"  {os.cpu_count()} CPUs, {ram.total / 1e9:.0f} GB RAM ({ram.available / 1e9:.0f} GB free)")
-    print("  The full grids use workers=3 and up to 8 GB per step (LIMITS in each script): about 24 GB.")
+    print(f"  Python {platform.python_version()}, {ram.available / 1e9:.0f} GB RAM free")
+    mem_gb = sepsis_complete.LIMITS.mem_gb
+    p = compute.plan(mem_gb, workers=os.environ.get(compute.ENV_WORKERS) or WORKERS)
+    print("  " + p.describe().replace("\n", "\n  "))
+    print(f"  (the full grids: up to {mem_gb:g} GB per step, so {p.workers} x {mem_gb:g} GB at most)")
 
 
 def run_one(script: str, size, knob, n_rollouts, out_dir: Path) -> tuple[bool, str]:
@@ -113,15 +122,24 @@ def run_one(script: str, size, knob, n_rollouts, out_dir: Path) -> tuple[bool, s
 
 
 def main():
+    import argparse
     from datetime import datetime
 
+    parser = argparse.ArgumentParser(description="Smoke test of experiment 1.")
+    parser.add_argument("--workers", metavar="N", help="parallel jobs: a number or 'auto'")
+    parser.add_argument("--device", metavar="D", help="training device: auto, cpu, cuda, cuda:N, mps")
+    args = parser.parse_args()
+    if args.workers:
+        os.environ["SCM_TO_MDP_WORKERS"] = args.workers
+    if args.device:
+        os.environ["SCM_TO_MDP_DEVICE"] = args.device
     print("1. Dependencies")
     if not check_imports():
         sys.exit("FAIL: install the missing packages first")
     print("2. Machine")
     machine()
     out = ROOT / "results" / "exp1" / f"smoke_{datetime.now():%Y-%m-%d_%H-%M-%S}"
-    print(f"3. Tiny grids ({WORKERS} workers) -> {out}")
+    print(f"3. Tiny grids -> {out}")
     summary = []
     for script, size, knob, n in TINY:
         start = time.monotonic()

@@ -5,12 +5,18 @@
     (no option)              a new folder  <base>_2026-10-22_15-30-12
     --resume [FOLDER]        continue a stopped run: FOLDER, or the latest <base>_* folder
     --report-only [FOLDER]   only the tables and figures of FOLDER, or of the latest <base>_* folder
+    --workers N|auto         parallel jobs (default: the script's, "auto" = what the machine allows)
+    --device auto|cpu|cuda|cuda:N|mps   where offline DQN / CQL train (default auto: CUDA if usable)
+
+--workers and --device set SCM_TO_MDP_WORKERS / SCM_TO_MDP_DEVICE for the run (utils/compute.py);
+they never change the results' configuration, so a run may resume with other values.
 
 A run resumes only in its own folder (results.csv and meta.json are there), so a stopped run must be
 continued with --resume, not started again.
 """
 
 import argparse
+import os
 import sys
 from datetime import datetime
 from pathlib import Path
@@ -42,7 +48,15 @@ def run_folder(base, argv: list[str] | None = None) -> tuple[Path, bool]:
     group.add_argument(
         "--report-only", nargs="?", const="latest", metavar="FOLDER", help="tables and figures only"
     )
+    parser.add_argument("--workers", metavar="N", help="parallel jobs: a number or 'auto'")
+    parser.add_argument("--device", metavar="D", help="training device: auto, cpu, cuda, cuda:N, mps")
     args = parser.parse_args(sys.argv[1:] if argv is None else argv)
+    if args.workers is not None:
+        if args.workers != "auto" and not (args.workers.isdigit() and int(args.workers) >= 1):
+            parser.error(f"--workers must be a positive number or 'auto', not {args.workers!r}")
+        os.environ["SCM_TO_MDP_WORKERS"] = args.workers
+    if args.device is not None:
+        os.environ["SCM_TO_MDP_DEVICE"] = args.device
     chosen = args.resume or args.report_only
     if chosen is None:
         return Path(f"{base}_{datetime.now().strftime(STAMP)}"), False

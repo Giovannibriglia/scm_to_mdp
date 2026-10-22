@@ -15,6 +15,10 @@ neural network (offline DQN / CQL) needs more: on macOS a forked child that trai
 Objective-C runtime once the parent has started initialising PyTorch's Metal backend ("MPSGraph ...
 initialize may have been in progress in another thread when fork() was called"), so those steps
 use start_method="spawn" (a fresh process; fn and its arguments must then be picklable).
+
+The child exits by itself when the process that started it is gone (a daemon thread: the child
+never forks), and the guard of utils/parallel.py stops the pool workers, so stopping a run (IDE
+stop button, Ctrl+C, kill) never leaves a step computing in the background.
 """
 
 import multiprocessing
@@ -42,7 +46,10 @@ def _peak_rss_gb() -> float:
     return peak / 1e9 if sys.platform == "darwin" else peak * 1024 / 1e9  # bytes on macOS, KiB on Linux
 
 
-def _child(conn, fn, args):
+def _child(conn, fn, args, parent: int):
+    from scm_to_mdp.utils.parallel import exit_with
+
+    exit_with(parent)
     os.environ["TQDM_DISABLE"] = "1"  # silence the progress bars of the libraries
     try:
         conn.send(("ok", fn(*args), _peak_rss_gb()))
@@ -74,7 +81,7 @@ def run_limited(
     """fn(*args) in a child process, stopped above mem_gb of memory or after timeout_s seconds."""
     ctx = multiprocessing.get_context(start_method)
     receiver, sender = ctx.Pipe(duplex=False)
-    child = ctx.Process(target=_child, args=(sender, fn, args))
+    child = ctx.Process(target=_child, args=(sender, fn, args, os.getpid()))
     start = time.monotonic()
     child.start()
     watch = psutil.Process(child.pid)

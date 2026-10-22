@@ -25,6 +25,8 @@ Run from the repository root (many hours; a stopped run resumes setting by setti
     .venv/bin/python experiments/exp1/chemistry_complete.py                 # a new run
     .venv/bin/python experiments/exp1/chemistry_complete.py --resume        # continue the latest run
     .venv/bin/python experiments/exp1/chemistry_complete.py --report-only   # tables and figures only
+    .venv/bin/python experiments/exp1/chemistry_complete.py --workers 8 --device cpu  # own plan
+The machine plan (workers, training device) is chosen at start, printed, and saved in meta.json.
 Output: results/exp1/chemistry_complete_<date>_<time>/ (one folder per run): summary/ for the whole
 grid, models/ of the first seed and one folder per setting (tool/runs.py, tool/store.py).
 """
@@ -48,7 +50,7 @@ POLICIES = [
 N_ROLLOUTS = [10, 25, 50, 100, 200, 400, 800, 1600]
 SEEDS = [0, 1, 2]  # the seed also draws the graph and the target colours
 HORIZON, GAMMA, DELTA = 20, 0.9, 0.05
-DEEP_BASELINES = True  # offline DQN and offline CQL (about 15 s each per run on a laptop, ~45 s on a server)
+DEEP_BASELINES = True  # offline DQN and CQL (a run: M5 CPU ~12 s; Xeon E5 CPU ~100 s, CUDA ~10 s)
 CATALYST = 0.3  # P(catalyst on) at every step
 LIMITS = Limits(
     mem_gb=8.0, timeout_s={"discovery": 60.0, "selection": 60.0, "solve": 120.0, "training": 600.0}
@@ -78,7 +80,7 @@ GRID = Grid(
         max_parents=4, delta=DELTA, exact=False, deep=DEEP_BASELINES, state_parents=3
     ),  # itself, its push, 2 parents
     limits=LIMITS,
-    workers=3,
+    workers="auto",  # what the machine allows (utils/compute.py); --workers N overrides
     out_dir=OUT_DIR,
     constants={"catalyst": CATALYST, "n_colours": 3, "max_parents": 2},  # checked when a run resumes
 )

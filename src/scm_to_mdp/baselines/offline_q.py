@@ -15,7 +15,10 @@ interact with the environment: no new rollouts, no early stopping or tuning on t
 Choices (fixed for every environment and grid, before any run):
     input       the state variables, each one-hot, concatenated (the network sees the factored state)
     output      Q(s, a_k) for the K action vectors seen in the data (the argmax is over those)
-    network     MLP, 2 hidden layers of `hidden` units, ReLU; PyTorch on the CPU, one thread, seeded
+    network     MLP, 2 hidden layers of `hidden` units, ReLU, float32; PyTorch, seeded. The weights are
+                initialised on the CPU and the batches drawn by numpy, so every device starts from the
+                same network and sees the same batches; the CPU run is bit-for-bit reproducible, a GPU
+                run agrees with it up to float rounding (utils/compute.py chooses the device)
     targets     Double DQN: y = r + gamma * Q_target(s', argmax_a Q(s', a)), 0 after a terminal state;
                 Huber loss; the target network is copied every `target_every` steps
     training    Adam (lr), `steps` gradient steps of `batch` transitions drawn uniformly from the data;
@@ -37,11 +40,30 @@ not a certified bound. A tabular offline DQN would converge to the optimum of th
 flat MDP baseline: the point of these baselines is a network that generalises across states.
 """
 
+import warnings
 from dataclasses import dataclass
 
 import numpy as np
 
 from scm_to_mdp.core import Dataset, Solution
+
+CHUNK = 1_000  # training steps whose batches are drawn at once
+WARMUP = 20  # ordinary CUDA steps before the training step is recorded as a CUDA graph
+
+
+def _capture(torch, update, opt, i):
+    """Record update(i) as a CUDA graph: (graph, its input tensor, its loss), or Nones on failure."""
+    try:
+        static_i = i.clone()
+        opt.zero_grad(set_to_none=True)  # the graph allocates the gradients and overwrites them
+        g = torch.cuda.CUDAGraph()
+        with torch.cuda.graph(g):
+            static_loss = update(static_i)
+        return g, static_i, static_loss
+    except Exception as err:  # noqa: BLE001 - a GPU without graph support trains step by step
+        warnings.warn(f"CUDA graph capture failed, training step by step: {err!r}", stacklevel=2)
+        opt.zero_grad(set_to_none=True)
+        return None, None, None
 
 
 @dataclass(frozen=True)
@@ -73,12 +95,18 @@ def learn(
     lr: float = 3e-4,
     target_every: int = 1_000,
     seed: int = 0,
+    device: str | None = None,
+    cuda_graph: bool = True,
 ) -> QTable:
-    """Train offline DQN (cql_alpha = 0) or offline CQL (cql_alpha > 0) on the dataset."""
+    """Train offline DQN (cql_alpha = 0) or offline CQL (cql_alpha > 0) on the dataset.
+    device: cpu, cuda, cuda:N, mps; None = SCM_TO_MDP_DEVICE, else the CPU (utils/compute.py)."""
     import torch
     from torch import nn
 
-    torch.set_num_threads(1)
+    from scm_to_mdp.utils.compute import training_device, training_threads
+
+    dev = training_device(device)
+    torch.set_num_threads(training_threads())
     torch.manual_seed(seed)
     rng = np.random.default_rng(seed)
 
@@ -89,14 +117,14 @@ def learn(
     reward = dataset.reward
     r = reward.R[s, k] + reward.r_next[s_next]
     goes_on = (~reward.terminal[s_next]).astype(np.float32)
-    X = torch.from_numpy(features(dataset))
+    X = torch.from_numpy(features(dataset)).to(dev)
     K = len(dataset.actions)
     data = {
-        "s": torch.from_numpy(s.astype(np.int64)),
-        "k": torch.from_numpy(k.astype(np.int64)),
-        "r": torch.from_numpy(r.astype(np.float32)),
-        "s_next": torch.from_numpy(s_next.astype(np.int64)),
-        "goes_on": torch.from_numpy(goes_on),
+        "s": torch.from_numpy(s.astype(np.int64)).to(dev),
+        "k": torch.from_numpy(k.astype(np.int64)).to(dev),
+        "r": torch.from_numpy(r.astype(np.float32)).to(dev),
+        "s_next": torch.from_numpy(s_next.astype(np.int64)).to(dev),
+        "goes_on": torch.from_numpy(goes_on).to(dev),
     }
 
     def network():
@@ -108,14 +136,16 @@ def learn(
             nn.Linear(hidden, K),
         )
 
-    q, target = network(), network()
+    q, target = network().to(dev), network().to(dev)  # initialised on the CPU: the same on every device
     target.load_state_dict(q.state_dict())
-    opt = torch.optim.Adam(q.parameters(), lr=lr)
+    graph = cuda_graph and dev.type == "cuda"
+    opt = torch.optim.Adam(q.parameters(), lr=lr, capturable=graph)  # capturable: its step lives on the GPU
     huber = nn.SmoothL1Loss()
     n = len(s)
-    losses = []
-    for step in range(steps):
-        i = torch.from_numpy(rng.integers(0, n, size=min(batch, n)))
+    b = min(batch, n)
+
+    def update(i):
+        """One gradient step on the transitions i (grads must be None or zero before)."""
         si, ki, ri, s2, cont = (data[c][i] for c in ("s", "k", "r", "s_next", "goes_on"))
         with torch.no_grad():
             best = q(X[s2]).argmax(1, keepdim=True)  # Double DQN: the online net chooses
@@ -125,16 +155,38 @@ def learn(
         loss = huber(q_data, y)
         if cql_alpha > 0:
             loss = loss + cql_alpha * (torch.logsumexp(logits, 1) - q_data).mean()
-        opt.zero_grad()
         loss.backward()
         opt.step()
+        return loss.detach()
+
+    # CUDA graph: after WARMUP ordinary steps, one step is recorded and then replayed with one launch
+    # per step (the same kernels on the same batches; it removes the per-kernel launch cost that
+    # dominates for networks this small). Any failure falls back to ordinary steps.
+    replay, static_i, static_loss = None, None, None
+    losses = []  # the last 1,000 losses, kept on the device (no synchronisation per step)
+    for step in range(steps):
+        if step % CHUNK == 0:  # the batches of the next CHUNK steps in one draw (the same numbers)
+            block = torch.from_numpy(rng.integers(0, n, size=(min(CHUNK, steps - step), b))).to(dev)
+        i = block[step % CHUNK]
+        if graph and step == WARMUP:
+            replay, static_i, static_loss = _capture(torch, update, opt, i)
+            graph = replay is not None
+        if replay is not None:
+            static_i.copy_(i)
+            replay.replay()
+            loss = static_loss.clone()
+        else:
+            opt.zero_grad()
+            loss = update(i)
         if (step + 1) % target_every == 0:
-            target.load_state_dict(q.state_dict())
+            target.load_state_dict(q.state_dict())  # in place: the recorded graph sees the new weights
         if step >= steps - 1_000:
-            losses.append(float(loss))
+            losses.append(loss)
     with torch.no_grad():
-        Q = q(X).double().numpy()
-    info = {"final_loss": float(np.mean(losses)), "transitions": n, "steps": steps}
+        Q = q(X).cpu().double().numpy()
+    final = float(torch.stack(losses).cpu().double().mean()) if losses else float("nan")
+    info = {"final_loss": final, "transitions": n, "steps": steps, "device": str(dev)}
+    info["cuda_graph"] = replay is not None
     return QTable(Q, info)
 
 

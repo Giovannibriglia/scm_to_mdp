@@ -29,6 +29,8 @@ Run from the repository root (several hours; a stopped run resumes setting by se
     .venv/bin/python experiments/exp1/sepsis_complete.py                 # a new run
     .venv/bin/python experiments/exp1/sepsis_complete.py --resume        # continue the latest run
     .venv/bin/python experiments/exp1/sepsis_complete.py --report-only   # tables and figures only
+    .venv/bin/python experiments/exp1/sepsis_complete.py --workers 8 --device cpu  # own plan
+The machine plan (workers, training device) is chosen at start, printed, and saved in meta.json.
 Output: results/exp1/sepsis_complete_<date>_<time>/ (one folder per run): summary/ for the whole
 grid, models/ of the first seed and one folder per setting (tool/runs.py, tool/store.py).
 """
@@ -52,7 +54,7 @@ POLICIES = [
 N_ROLLOUTS = [100, 250, 500, 1000, 2000, 4000]
 SEEDS = [0, 1, 2]
 HORIZON, GAMMA, DELTA = 20, 0.9, 0.05
-DEEP_BASELINES = True  # offline DQN and offline CQL (about 15 s each per run on a laptop, ~45 s on a server)
+DEEP_BASELINES = True  # offline DQN and CQL (a run: M5 CPU ~12 s; Xeon E5 CPU ~100 s, CUDA ~10 s)
 DIABETES_EFFECT = 1.5  # the diabetic response, scaled away from the non-diabetic one (1 = original)
 LIMITS = Limits(
     mem_gb=8.0, timeout_s={"discovery": 60.0, "selection": 60.0, "solve": 120.0, "training": 600.0}
@@ -86,7 +88,7 @@ GRID = Grid(
         max_parents=6, delta=DELTA, exact=False, deep=DEEP_BASELINES, state_parents=4
     ),  # true in-degree <= 6
     limits=LIMITS,
-    workers=3,
+    workers="auto",  # what the machine allows (utils/compute.py); --workers N overrides
     out_dir=OUT_DIR,
     constants={"vitals": VITALS, "diabetes_effect": DIABETES_EFFECT},  # checked when a run resumes
     skip=no_confounder,

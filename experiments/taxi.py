@@ -20,7 +20,7 @@ needs V* > 0. With V* this close to 0, 95% of V* is a near-optimal bar (the rand
 -370); - DiFaRL's action groups are about actions that act together; here exactly one action is taken.
 
 Run from the repository root (about 1 hour; gamma 0.99 makes value iteration slow):
-    .venv/bin/python experiments/taxi.py [--resume | --report-only]
+    .venv/bin/python experiments/taxi.py [--resume | --report-only] [--workers N] [--device D]
 Output: results/experiments/taxi_<date>_<time>/ (one folder per run; tool/runs.py)
 """
 
@@ -66,7 +66,7 @@ EXPERIMENT = Experiment(
     methods=METHODS,
     gamma=GAMMA,
     limits=LIMITS,
-    workers=3,
+    workers="auto",  # what the machine allows (utils/compute.py); --workers N overrides
     out_dir=OUT_DIR,
     settings={"horizon": HORIZON},  # checked when a run resumes
     size_name="navigation",

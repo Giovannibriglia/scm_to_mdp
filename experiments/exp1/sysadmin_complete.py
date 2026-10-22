@@ -29,6 +29,8 @@ Run from the repository root (several hours; a stopped run resumes setting by se
     .venv/bin/python experiments/exp1/sysadmin_complete.py                 # a new run
     .venv/bin/python experiments/exp1/sysadmin_complete.py --resume        # continue the latest run
     .venv/bin/python experiments/exp1/sysadmin_complete.py --report-only   # tables and figures only
+    .venv/bin/python experiments/exp1/sysadmin_complete.py --workers 8 --device cpu  # own plan
+The machine plan (workers, training device) is chosen at start, printed, and saved in meta.json.
 Output: results/exp1/sysadmin_complete_<date>_<time>/ (one folder per run): summary/ for the whole
 grid, models/ of the first seed and one folder per setting (tool/runs.py, tool/store.py).
 """
@@ -52,7 +54,7 @@ POLICIES = [
 N_ROLLOUTS = [10, 25, 50, 100, 200, 400, 1600]
 SEEDS = [0, 1, 2]
 HORIZON, GAMMA, DELTA = 20, 0.9, 0.05
-DEEP_BASELINES = True  # offline DQN and offline CQL (about 15 s each per run on a laptop, ~45 s on a server)
+DEEP_BASELINES = True  # offline DQN and CQL (a run: M5 CPU ~12 s; Xeon E5 CPU ~100 s, CUDA ~10 s)
 STORM, STORM_EFFECT = 0.3, 0.8  # P(storm) at every step; a storm multiplies machine 0's P(up) by 1 - 0.8
 LIMITS = Limits(
     mem_gb=8.0, timeout_s={"discovery": 60.0, "selection": 60.0, "solve": 60.0, "training": 600.0}
@@ -80,7 +82,7 @@ GRID = Grid(
         max_parents=4, delta=DELTA, exact=True, deep=DEEP_BASELINES, state_parents=3
     ),  # true in-degree <= 4
     limits=LIMITS,
-    workers=3,
+    workers="auto",  # what the machine allows (utils/compute.py); --workers N overrides
     out_dir=OUT_DIR,
     constants={"storm": STORM, "storm_effect": STORM_EFFECT},  # checked when a run resumes
 )

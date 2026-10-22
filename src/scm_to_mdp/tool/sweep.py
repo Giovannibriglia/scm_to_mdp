@@ -36,7 +36,11 @@ Rules:
 - With workers > 1 the (size, seed) run in parallel processes; then make_env and collect must be
   functions defined at the top level of a module (not lambdas), because they are sent to the
   workers. Every worker may use up to Limits.mem_gb per step: the sweep refuses to start when
-  workers x mem_gb is more than 80% of the RAM.
+  workers x mem_gb is more than 80% of the RAM. workers="auto" takes as many as the machine allows
+  (utils/compute.py); SCM_TO_MDP_WORKERS or the script's --workers N override it.
+- run_sweeps runs several Experiments (the settings of a grid) in one pool: a free worker takes the
+  next job of any setting, while each setting keeps its waves (a size starts when the smaller size
+  of that setting is finished, so the limits' stops above still apply).
 """
 
 import io
@@ -90,7 +94,7 @@ class Experiment:
     gamma: float = 0.9
     n_starts: int = 20  # K start states for regret_K / gap_K, drawn per seed among non-terminal states
     limits: Limits | None = field(default_factory=Limits)
-    workers: int = 1
+    workers: int | str = 1  # parallel (size, seed) jobs, or "auto" (utils/compute.py); --workers overrides
     out_dir: Path = Path("results")
     size_name: str = "size"  # the name of the size on the figures, e.g. "N"
     save_models: str = "largest"  # first seed: save every model at the largest n ("all": every n; "none")
@@ -200,7 +204,7 @@ def run_point(exp: Experiment, size, seed: int, stopped_from: dict) -> list[dict
             if result.status != "ok":
                 detail = f": {result.error}" if result.error else ""
                 tqdm.write(
-                    f"   {base['size_label']} seed={seed} n={n} {name}: "
+                    f"   [{exp.name}] {base['size_label']} seed={seed} n={n} {name}: "
                     f"{result.failed_step} -> {result.status}{detail}"
                 )
         small = truth.n_states <= exp.pictures_max_states and not truth.hidden
@@ -256,15 +260,15 @@ def _git_commit() -> str | None:
         return None
 
 
-def _check_memory(exp: Experiment):
-    if exp.limits is None:
+def _check_memory(exp: Experiment, workers: int):
+    if exp.limits is None or workers == 1:
         return
     ram = psutil.virtual_memory().total / 1e9
-    need = exp.workers * exp.limits.mem_gb
+    need = workers * exp.limits.mem_gb
     if need > 0.8 * ram:
         raise ValueError(
-            f"{exp.workers} workers x {exp.limits.mem_gb:g} GB per step = {need:g} GB, more than 80% of the "
-            f"RAM ({ram:.0f} GB): use fewer workers or a lower Limits.mem_gb"
+            f"{workers} workers x {exp.limits.mem_gb:g} GB per step = {need:g} GB, more than 80% of the "
+            f"RAM ({ram:.0f} GB): use fewer workers (--workers) or a lower Limits.mem_gb"
         )
 
 
@@ -316,79 +320,145 @@ def _write_text(path: Path, text: str):
     os.replace(tmp, path)
 
 
-def run_experiment(exp: Experiment, resume: bool = True) -> pd.DataFrame:
-    """Run the sweep (resuming from results.csv when resume) and return every row."""
-    _check_memory(exp)
-    out = Path(exp.out_dir)
-    out.mkdir(parents=True, exist_ok=True)
-    csv, meta_path = out / "results.csv", out / "meta.json"
-    config = _config(exp)
-    old = read_results(out) if resume else pd.DataFrame(columns=COLUMNS)
-    if resume and meta_path.exists() and len(old):
-        before = json.loads(meta_path.read_text())["config"]
-        if before != json.loads(json.dumps(config)):
-            raise ValueError(
-                f"{out} holds results of a different configuration: use another out_dir or resume=False"
-            )
-    # a (size, seed) is finished when it has a row for every number of rollouts and method
-    need = {(n, m) for n in exp.n_rollouts for m in exp.methods}
-    finished = {
-        key
-        for key, g in old.groupby(["size", "seed"])
-        if need <= set(zip(g["n_rollouts"], g["method"], strict=True))
-    }
-    old = old[[(s, d) in finished for s, d in zip(old["size"], old["seed"], strict=True)]]
-    _write(csv, old.to_dict("records"), append=False)
-    meta = {
-        "config": config,
-        "sizes": [str(s) for s in exp.sizes],
-        "size_name": exp.size_name,
-        "knob": exp.knob,
-        "policy": exp.policy,
-        "size_labels": [f"{exp.size_name}={s}" for s in exp.sizes],
-        "n_rollouts": sorted(exp.n_rollouts),
-        "seeds": list(exp.seeds),
-        "git_commit": _git_commit(),
-        "started": datetime.now().isoformat(timespec="seconds"),
-    }
-    _write_text(meta_path, json.dumps(meta, indent=2, default=str))
+class _Sweep:
+    """The state of one Experiment while it runs: its folder, what is finished, the limits' stops,
+    and the waves of (size, seed) jobs still to run (a wave = one size; see the module docstring)."""
 
-    # method -> smallest n at which a limit stopped it, per size. A (size, seed) gets the stops of the
-    # smaller sizes only (also on a resume, where rows of the same size may already exist).
-    stops: dict[str, dict[str, float]] = {}
+    def __init__(self, exp: Experiment, resume: bool, machine: dict | None = None):
+        self.exp = exp
+        out = Path(exp.out_dir)
+        out.mkdir(parents=True, exist_ok=True)
+        self.csv, meta_path = out / "results.csv", out / "meta.json"
+        config = _config(exp)
+        old = read_results(out) if resume else pd.DataFrame(columns=COLUMNS)
+        if resume and meta_path.exists() and len(old):
+            before = json.loads(meta_path.read_text())["config"]
+            if before != json.loads(json.dumps(config)):
+                raise ValueError(
+                    f"{out} holds results of a different configuration: use another out_dir or resume=False"
+                )
+        # a (size, seed) is finished when it has a row for every number of rollouts and method
+        need = {(n, m) for n in exp.n_rollouts for m in exp.methods}
+        self.finished = {
+            key
+            for key, g in old.groupby(["size", "seed"])
+            if need <= set(zip(g["n_rollouts"], g["method"], strict=True))
+        }
+        old = old[[(s, d) in self.finished for s, d in zip(old["size"], old["seed"], strict=True)]]
+        _write(self.csv, old.to_dict("records"), append=False)
+        meta = {
+            "config": config,
+            "sizes": [str(s) for s in exp.sizes],
+            "size_name": exp.size_name,
+            "knob": exp.knob,
+            "policy": exp.policy,
+            "size_labels": [f"{exp.size_name}={s}" for s in exp.sizes],
+            "n_rollouts": sorted(exp.n_rollouts),
+            "seeds": list(exp.seeds),
+            "git_commit": _git_commit(),
+            "started": datetime.now().isoformat(timespec="seconds"),
+            "machine": machine,  # how the run used the machine (utils/compute.py); not checked on resume
+        }
+        _write_text(meta_path, json.dumps(meta, indent=2, default=str))
+        # method -> smallest n at which a limit stopped it, per size. A (size, seed) gets the stops of
+        # the smaller sizes only (also on a resume, where rows of the same size may already exist).
+        self.stops: dict[str, dict[str, float]] = {}
+        self.note(old.to_dict("records"))
+        self.sizes = list(exp.sizes)  # sizes whose wave has not started
+        self.running = 0  # jobs of the current wave not finished
 
-    def note(rows):
+    @property
+    def todo(self) -> int:
+        return sum(
+            (str(size), seed) not in self.finished for size in self.exp.sizes for seed in self.exp.seeds
+        )
+
+    def note(self, rows):
         for r in rows:
             if r.get("status") in STOPPED:
-                at = stops.setdefault(str(r["size"]), {})
+                at = self.stops.setdefault(str(r["size"]), {})
                 at[r["method"]] = min(at.get(r["method"], math.inf), r["n_rollouts"])
 
-    def stops_before(size) -> dict:
+    def stops_before(self, size) -> dict:
         out: dict[str, float] = {}
-        for smaller in exp.sizes[: [str(x) for x in exp.sizes].index(str(size))]:
-            for method, n in stops.get(str(smaller), {}).items():
+        for smaller in self.exp.sizes[: [str(x) for x in self.exp.sizes].index(str(size))]:
+            for method, n in self.stops.get(str(smaller), {}).items():
                 out[method] = min(out.get(method, math.inf), n)
         return out
 
-    note(old.to_dict("records"))
-    todo = [(size, seed) for size in exp.sizes for seed in exp.seeds if (str(size), seed) not in finished]
-    bar = tqdm(total=len(todo), desc=f"{exp.name} ({exp.workers} workers)", unit="run", dynamic_ncols=True)
-    for size in exp.sizes:  # waves from the smallest size to the largest
-        before = stops_before(size)
-        jobs = [(exp, size, seed, dict(before)) for seed in exp.seeds if (str(size), seed) not in finished]
-        if exp.workers == 1:
-            done = ((job, run_point(*job)) for job in jobs)
-        else:
-            from scm_to_mdp.utils.parallel import run_jobs
+    def next_wave(self) -> list[tuple]:
+        """The jobs (exp, size, seed, stops) of the next size with unfinished seeds; [] when done."""
+        while self.sizes:
+            size = self.sizes.pop(0)
+            before = self.stops_before(size)
+            jobs = [
+                (self.exp, size, seed, dict(before))
+                for seed in self.exp.seeds
+                if (str(size), seed) not in self.finished
+            ]
+            if jobs:
+                self.running = len(jobs)
+                return jobs
+        return []
 
-            done = run_jobs(run_point, jobs, exp.workers, bar=bar)
-        for job, rows in done:
-            if isinstance(rows, dict):  # the worker died twice (e.g. killed by the OS) or raised
-                error = rows.get("error", "the worker process died twice (killed by the operating system?)")
-                rows = _rows_without_runs(exp, job[1], job[2], "crashed", "worker", error)
-            _write(csv, rows, append=True)
-            note(rows)
-            if exp.workers == 1:
-                bar.update(1)
+    def record(self, job: tuple, rows) -> list[tuple]:
+        """Write the rows of a finished job; returns the next wave when this one is complete."""
+        if isinstance(rows, dict):  # the worker died twice (e.g. killed by the OS) or raised
+            error = rows.get("error", "the worker process died twice (killed by the operating system?)")
+            rows = _rows_without_runs(self.exp, job[1], job[2], "crashed", "worker", error)
+        _write(self.csv, rows, append=True)
+        self.note(rows)
+        self.finished.add((str(job[1]), job[2]))
+        self.running -= 1
+        return self.next_wave() if self.running == 0 else []
+
+
+def plan_for(exps: list[Experiment], n_jobs: int):
+    """The machine plan of a run (utils/compute.py): the script's workers ("auto" or a number),
+    overridden by SCM_TO_MDP_WORKERS / --workers; refuses workers x mem_gb above 80% of the RAM."""
+    from scm_to_mdp.utils import compute
+
+    limits = [e.limits for e in exps if e.limits is not None]
+    mem_gb = max((lim.mem_gb for lim in limits), default=None)
+    spec = os.environ.get(compute.ENV_WORKERS) or exps[0].workers
+    p = compute.plan(mem_gb, workers=spec, n_jobs=n_jobs)
+    for e in exps:
+        _check_memory(e, p.workers)
+    compute.apply(p)
+    return p
+
+
+def run_sweeps(exps: list[Experiment], resume: bool = True, title: str | None = None) -> None:
+    """Run several Experiments in one pool of workers: a worker that frees up takes a job of any
+    setting, so a large machine stays busy (each setting still runs its sizes in waves)."""
+    from scm_to_mdp.utils import compute
+
+    todo = sum(len(e.sizes) * len(e.seeds) for e in exps)  # an upper bound before the folders are read
+    p = plan_for(exps, todo)
+    print(p.describe())
+    sweeps = [_Sweep(e, resume, compute.as_record(p)) for e in exps]
+    total = sum(s.todo for s in sweeps)
+    name = title or (exps[0].name if len(exps) == 1 else f"{len(exps)} settings")
+    bar = tqdm(total=total, desc=f"{name} ({p.workers} workers)", unit="run", dynamic_ncols=True)
+    first = [job for s in sweeps for job in s.next_wave()]
+    owner = {id(s.exp): s for s in sweeps}
+    if p.workers == 1:
+        queue = first
+        while queue:
+            job = queue.pop(0)
+            queue.extend(owner[id(job[0])].record(job, run_point(*job)))
+            bar.update(1)
+    else:
+        from scm_to_mdp.utils.parallel import run_dynamic
+
+        for _ in run_dynamic(
+            run_point, first, p.workers, then=lambda j, r: owner[id(j[0])].record(j, r), bar=bar
+        ):
+            pass
     bar.close()
-    return read_results(out)
+
+
+def run_experiment(exp: Experiment, resume: bool = True) -> pd.DataFrame:
+    """Run the sweep (resuming from results.csv when resume) and return every row."""
+    run_sweeps([exp], resume=resume)
+    return read_results(Path(exp.out_dir))
