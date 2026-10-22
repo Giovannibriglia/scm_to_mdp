@@ -1,53 +1,199 @@
-# scm_to_mdp
+# Learning Robust Markov Decision Processes from Data through Structural Causal Models
 
 Code and experiments for the SCM → MDP-family pipeline: from offline data to a policy with a
 guarantee on its value. The pipeline learns the causal structure of the transitions from data,
-learns probability intervals for each causal mechanism, compiles them into a robust (interval) MDP
+learns probability intervals for each causal mechanism, turns them into a robust (interval) MDP
 and solves it. Probability sets come from the [NBN](https://github.com/Giovannibriglia/NeuralBayesianNetworks)
 library (`nbn>=0.26`).
 
-## Pipeline
+## Quick start
+
+```bash
+uv sync --extra discovery                                   # environment (uv; Python 3.12, from uv.lock)
+.venv/bin/python experiments/exp1/exp_smoke.py              # is everything installed? (2-8 minutes)
+.venv/bin/python -m pytest -q                               # the tests (6 minutes on a recent laptop, ~20 on an older server)
+.venv/bin/python experiments/exp1/sysadmin_complete.py      # experiment 1, SysAdmin grid (hours)
+```
+
+Tested on macOS (arm64) and Linux (Ubuntu 20.04, x86_64). Without `uv`: `pip install --user uv`.
+Everything runs on the CPU (NumPy, and PyTorch on the CPU inside NBN): a GPU is not needed and not
+used, and PyTorch's warning about an old NVIDIA driver, if any, can be ignored. Each grid uses
+`workers=3` processes and up to `LIMITS.mem_gb` = 8 GB per step; the scripts refuse to start when
+that is more than 80% of the RAM.
+
+## Experiment 1: complete grids
+
+`experiments/exp1/` holds one script per environment. Each runs every problem size × knob ×
+behaviour policy × number of rollouts × seed with the 7–8 standard methods
+(`standard_methods(...)`: BIC / PCMCI+ / GES → a robust MDP over the box of the factor intervals; the
+true graph with that box (the interval-arithmetic (IA) relaxation of Schnitzer, Abate & Parker,
+AAAI 2026) and, for 0/1 variables, the exact product set; flat RMDP (one interval per transition);
+flat MDP (the plug-in estimate); DiFaRL (Ehrlichman et al., CLeaR 2026)). Each script
+states its expectations (H1–H5) in its docstring, before any run.
+
+| Script | Size | Knob | Hidden variable (never in the data) | Output |
+|---|---|---|---|---|
+| `sysadmin_complete.py` | N = 2–9 machines | topology: ring / bidirectional / star | a storm that hits machine 0, fresh at every step | `results/exp1/sysadmin_complete/` |
+| `sepsis_complete.py` | vitals: 2 / 3 / 4 | diabetes: absent / observed / hidden | diabetes (persists over the episode) | `results/exp1/sepsis_complete/` |
+| `chemistry_complete.py` | objects: 4–7 | graph density: 0 / 0.4 / 1 | a catalyst of one reaction, fresh at every step | `results/exp1/chemistry_complete/` |
+
+```bash
+.venv/bin/python experiments/exp1/sepsis_complete.py                 # a new run
+.venv/bin/python experiments/exp1/sepsis_complete.py --resume        # continue the latest run
+.venv/bin/python experiments/exp1/sepsis_complete.py --report-only   # tables and figures of the latest run
+```
+
+Every run gets its own folder, `results/exp1/<name>_<date>_<time>/`, so no run overwrites another;
+`--resume FOLDER` and `--report-only FOLDER` pick an older one (`tool/runs.py`). A run writes
+`results.csv` row by row, so a stopped run resumes where it stopped (with `--resume`).
+
+For the first seed, every method's learned model is saved at every size and at the largest number
+of rollouts, in `<setting>/models/<size>/n=<n>/<method>/` (`tool/store.py`): `model.npz` (the
+model the solver used, the policy and its promise; `load_model(folder)` reads it back), `cbn.json`
+(the learned causal Bayesian network: graph, counts, estimates and intervals of every conditional
+distribution, with the true parents), `cbn.png` (the learned graph against the true one) and, for
+problems with at most 16 states, `mdp.png`. The data determine a causal Bayesian network, not a
+structural causal model: many SCMs induce the same network, and the network is what the pipeline
+uses. To change a grid,
+edit the constants at the top of its script (`SIZES` or `VITALS`, `N_ROLLOUTS`, `SEEDS`, `LIMITS`) and
+`workers=` in `Grid(...)`.
+If you change anything other than adding sizes, seeds or budgets, use a new output folder:
+otherwise the old rows are kept and mixed with the new ones.
+
+Two single experiments (one behaviour policy, sizes × rollouts × seeds), not yet on the grid:
+
+| Script | Environment | What it tests | Output |
+|---|---|---|---|
+| `experiments/coffee.py` | coffee robot (Dearden & Boutilier, UAI 1994) | a hand-written factored MDP with context-specific effects | `results/experiments/coffee/` |
+| `experiments/taxi.py` | Taxi (Dietterich, JAIR 2000) | a 25-valued variable with 4 one-hot action parents; where the guarantee is empty | `results/experiments/taxi/` |
+
+The three behaviour policies of every grid (`Env.behaviour`, exact tables over the full state):
+**uniform** (every action equally likely), **expert** (the best policy over the observed state, a
+uniform action w.p. 0.05: partial coverage) and **confounded** (the expert, but when the hidden
+variable is on it takes one action w.p. 0.95: the data then show a biased kernel). Every row of
+`results.csv` also holds the logger's coverage (`C_star`, `C_all_bound`, `unvisited_pairs`) and
+confounding bias (`bias_max`, `bias_mean`), computed exactly in `scm_to_mdp/behaviour.py`.
+
+## Pipeline steps
+
+The code names the steps of the pipeline S0–S9: S0 the unknown system (an environment and its true
+model), S1 data collection, S2 causal discovery, S3 hypotheses (here one graph, chosen by a fixed
+rule), S4 parameter learning (probability intervals per factor), S5–S6 merging hypotheses and the
+decision criterion over several of them (not used here), S7 compilation to an MDP model, S8 solving
+(exact, or on a relaxation), S9 checking the policy and its promise against the true model.
+
+## The tool in three parts
 
 ```
-env.sample ──► read_dataset ──► discovery ──► scm_learning ──► compilation ──► solving ──► evaluation
- (S0, S1)        Dataset          Graph        FactorBounds      IntervalMDP      Solution     (S9)
-                                 (S2–S3)          (S4)              (S7)            (S8)
+            ┌───────────── 1. learn + solve (S1–S8) ─────────────┐
+DataFrame ─▶│ spec.read(df) → learn(data, method) → solve(...)    │─▶ policy + promise
+            └─────────────────────────────────────────────────────┘
+            ┌──────────────── 2. evaluate (S9) ───────────────────┐
+            │ evaluate(result, data, truth)   truth: MDPGroundTruth│─▶ true value, regret, validity, SHD/SID
+            └─────────────────────────────────────────────────────┘
+            ┌──────────────── 3. report ──────────────────────────┐
+            │ run_experiment(Experiment(...)) → report(out_dir)    │─▶ results.csv, tables.md, figures/
+            └─────────────────────────────────────────────────────┘
 ```
 
-The data classes passed between steps are in `src/scm_to_mdp/core.py`.
+**1. Learn and solve.** Learning sees only the data and a `DataSpec`, i.e. what the learner is
+told: the state variables, the action columns, the number of values of each variable and the
+reward. A `Method` names one choice per step:
+
+```python
+from scm_to_mdp.tool import Method, learn, solve
+
+method = Method("causal", "box_robust_vi",           # learner, solver
+                discovery="pcmci+",                  # S2: bic | pcmci+ | ges | oracle
+                selection="bic_best",                # S3: how ONE graph is chosen (oracle: "given")
+                discovery_options={"alpha": 0.01},
+                learning_options={"delta": 0.05})    # S4: confidence of the intervals
+data = spec.read(df)                                 # df: columns x, a, x'; index (episode, t)
+result = solve(learn(data, method), data, gamma=0.9)
+result.solution.pi, result.solution.V                # the policy and its promise (a lower bound)
+```
+
+| learner | what it learns | solvers | role |
+|---|---|---|---|
+| `causal` | S2 discovery → S3 selection → S4 intervals per factor: a factored interval MDP | `box_robust_vi` (relax to the box, Schnitzer et al.'s IA), `vertex_robust_vi` (exact, 0/1 variables) | ours (`oracle`: given the true graph) |
+| `flat_rmdp` | one interval per (s, a, s′) | `robust_vi` | baseline |
+| `flat_mdp` | the plug-in MDP from counts (no guarantee) | `vi`, `robust_vi` | baseline |
+| `difarl` | DiFaRL's action groups (model-free, no guarantee) | `fqi` | baseline |
+
+**2. Evaluate.** The ground truth is used only here. `MDPGroundTruth` holds the `DataSpec`
+and the true `P [S, A, S']`, the action columns of every true action, the start distribution and,
+optionally, the true parents:
+
+```python
+from scm_to_mdp.tool import DataSpec, MDPGroundTruth, evaluate
+
+truth = MDPGroundTruth(spec=DataSpec(state_vars, action_vars, cards, reward),
+                       P=P, actions=actions, start=start, true_parents=None)
+metrics = evaluate(result, data, truth, gamma=0.9)   # promise, true, regret, optimal_share, gap, safe, shd, ...
+```
+
+States are every combination of the state variables in C order (`scm_to_mdp.core.all_states`).
+For a factored model use `MDPGroundTruth.from_factored(spec, next_distributions, actions, start)`.
+Our environments give `env.spec()` and `env.ground_truth()`.
+**Hidden variables:** pass `observed=DataSpec(...)` with a subset of the state variables (e.g. a
+confounder kept out of the data). A policy over the observed state is evaluated exactly in the full
+model, and V* is that of an agent who also sees the hidden variables. A dense `P` grows as $S^2$: building one
+that needs more than 4 GB is refused (`ModelTooLarge`). Without a truth, `evaluate(result, data)`
+returns only the promise.
+
+**3. Report.** An `Experiment` sweeps problem sizes × numbers of rollouts × seeds (with nested
+datasets: smaller budgets use the first rollouts of one table). Each step runs in its own process
+with a memory limit and, for discovery, selection and solving, a time limit. Rows are written to `results.csv` as each (size, seed) finishes, and
+a second run resumes. `report(out_dir)` writes:
+
+- `figures/rollouts=<n>/{performance,validity,structure,time,memory}` over the problem size, one
+  folder per number of rollouts;
+- `figures/sample_efficiency`: x = number of states, y = rollouts needed for a policy that is at
+  least 95% optimal ($V^\pi \ge 0.95\,V^\star_{obs}$ at the start, at that number of rollouts and every
+  larger one; median over seeds, quartile bars); $V^\star_{obs}$ is the best policy over the observed
+  state (= $V^\star$ when nothing is hidden);
+- `tables.md` with every table.
+
+A grid (`Grid`, `run_grid`, `report_grid` in `tool/grid.py`, `tool/report_grid.py`) runs one
+Experiment per (knob, behaviour policy) and writes `summary/`, built level by level from the most
+atomic records, every level saved as CSV: `runs.csv` (one row per run), `edges.csv` (one row per
+run and edge: in the true graph? in the learned one?), `behaviour.csv` (one row per logger), then
+`rollouts_needed_by_seed.csv`, `cells.csv` (mean / s.e. / min / max over seeds), `rollouts_needed.csv`,
+`promise_held.csv`, `best_method.csv` and `method_rank.csv`; every figure has the exact numbers it
+draws in `figure_data/`. `summary/README.md` lists every file.
+
+Baselines are dashed, oracle methods dotted, ours solid.
 
 ## Layout
 
 | Path | Content |
 |---|---|
-| `src/scm_to_mdp/core.py` | `Dataset`, `Graph`, `FactorBounds`, `IntervalMDP`, `Solution`, `Reward` (step reward + reward on arrival + terminal states) |
-| `src/scm_to_mdp/data.py` | table of transitions → `Dataset` (the learner is told which columns are actions, that `x'` is the next value of `x`, the number of values of each variable, and the reward) |
-| `src/scm_to_mdp/envs/` | factored environments with their exact model and behaviour policies, `env.sample(episodes, horizon, policy="random")`: `SysAdmin(n, seed, topology, repair_cost)` and `Sepsis(size)` (Oberst & Sontag 2019; `small` 72, `medium` 144, `full` 1440 states, or `custom`) |
-| `src/scm_to_mdp/discovery/` | `bic_search`, `pcmci_plus`, `ges`, `oracle`; `cpdag_to_dag` = how one DAG is chosen from a class |
-| `src/scm_to_mdp/scm_learning/` | `nbn_intervals`: Clopper–Pearson interval per factor row, union bound |
-| `src/scm_to_mdp/compilation/` | `product_bounds`: factor intervals → interval MDP |
-| `src/scm_to_mdp/solving/` | `value_iteration`, `robust_vi`, `vertex_robust_vi` (exact over factor boxes, 0/1 variables) |
+| `src/scm_to_mdp/tool/` | the tool: `methods.py` (Method, learn, solve), `evaluate.py`, `sweep.py` (Experiment, run_experiment), `report.py`; grids: `grid.py` (Grid, Policy, run_grid), `report_grid.py`; `store.py` (saved models, `load_model`), `runs.py` (one folder per run) |
+| `src/scm_to_mdp/behaviour.py` | behaviour policies as exact tables; data occupancy, coverage ($C^\star$) and confounding bias of a logger |
+| `src/scm_to_mdp/core.py` | data passed between steps: `Dataset`, `Candidates`, `Graph`, `FactorBounds`, `IntervalMDP`, `ActionGroups`, `Solution`, `Reward` |
+| `src/scm_to_mdp/data.py` | `DataSpec`: table of transitions → `Dataset`, with checks |
+| `src/scm_to_mdp/ground_truth.py` | `MDPGroundTruth`, `from_factored`, the size check |
+| `src/scm_to_mdp/envs/` | `SysAdmin(n, seed, topology, repair_cost)`, `Sepsis(size, hide_diabetes=...)`, `Coffee(size)`, `Chemistry(density, seed)`, `Taxi(size)`, with `spec()`, `ground_truth()`, `sample(rollouts, horizon, policy)`, `hide(df)` |
+| `src/scm_to_mdp/discovery/` | S2: `bic_search`, `pcmci_plus`, `ges`, `oracle` → `Candidates` |
+| `src/scm_to_mdp/selection/` | S3: `bic_best` (best BIC in the class; ties: transition BIC, then a fixed order), `given` |
+| `src/scm_to_mdp/scm_learning/` | S4: `nbn_intervals`, a Clopper–Pearson interval per factor row with a union bound |
+| `src/scm_to_mdp/compilation/` | S7: `product_bounds`, factor intervals → their box, an interval MDP (the relaxation the box solvers use in S8) |
+| `src/scm_to_mdp/solving/` | S8: `value_iteration`, `robust_vi`, `vertex_robust_vi` (`tol` = distance to the fixed point, `stopping.py`) |
 | `src/scm_to_mdp/baselines/` | `flat_mdp`, `flat_rmdp`, `difarl` |
-| `src/scm_to_mdp/evaluation.py` | V*, true value of a policy, promise, safety, structure score |
-| `src/scm_to_mdp/utils/` | `limits` (memory and time limit per step), `parallel` (pool of runs) |
-| `experiments/exp1/` | experiment 1, discovery algorithms and baselines: `sysadmin.py` (over N), `sepsis.py` (over sizes), `common.py` (step runner, tables, figure) |
-| `tests/` | one test file per step, plus a smoke test of exp1 |
+| `src/scm_to_mdp/evaluation.py` | S9: V*, the true value of a policy, promise, safety, SHD and SID |
+| `src/scm_to_mdp/plotting/` | result figures (from `results.csv`) and pictures of MDPs |
+| `experiments/exp1/` | experiment 1: the three complete grids (tables above) and `exp_smoke.py` (a check of the installation, 2-8 minutes) |
+| `experiments/` | single experiments: `coffee.py`, `taxi.py` |
+| `tests/` | one test file per step, the tool and the grid; smoke tests of every script (`test_exp1_smoke.py`) |
 | `results/` | outputs (git-ignored) |
-
-## Usage
-
-```bash
-uv sync --extra discovery                              # environment (uv)
-.venv/bin/python -m pytest -q                          # tests
-.venv/bin/python experiments/exp1/sysadmin.py              # -> results/exp1/sysadmin/
-.venv/bin/python experiments/exp1/sepsis.py                # -> results/exp1/sepsis/
-.venv/bin/python experiments/exp1/sepsis.py --plot-only    # tables and figure from the saved CSV
-```
 
 ## Adding things
 
-- **An environment:** a file in `envs/` that subclasses `Env` and brings its behaviour policies.
-- **A method:** a file in the folder of its step, with `fit` / `learn` / `compile` / `solve`.
-- **An experiment:** a folder `experiments/expK/` with one script per environment, each with the same
-  sections as `exp1/sysadmin.py` (config, arms, pipeline, report); results go to `results/expK/<env>/`.
-  An arm is a list of steps.
+- **Your own problem:** write `make_env(size, seed)`, returning an object with `ground_truth()`, and
+  `collect(env, n_rollouts)`, returning the table, as in `experiments/coffee.py`. Or subclass `Env`
+  (`envs/base.py`) and implement `next_distributions`, `action_columns`, `reward`, `true_parents`
+  and `start_distribution`.
+- **A method for a step:** a module in the folder of its step with the same signature as its
+  neighbours, plus its name in `tool/methods.py`.
+- **An experiment:** a folder `experiments/expK/` with one config script per environment, like
+  `exp1/sysadmin_complete.py`; results go to `results/expK/<name>/`.
