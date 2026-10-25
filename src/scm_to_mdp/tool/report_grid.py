@@ -22,6 +22,20 @@ Every table is built from lower levels only, and every level is saved in <out_di
            promise_held.csv per (knob, policy, size, method): attempted runs (every status but
                            "skipped"), finished runs ("runs", status ok), runs whose promise holds in
                            every state, and the share among the finished runs
+           validity.csv    per (knob, policy, size, n_rollouts, method with a promise): runs, held
+                           (the promise held in every state), its share with a two-sided 95%
+                           Clopper-Pearson interval, and the verdict against 1 - delta: "confirmed"
+                           (lower end >= 1 - delta), "refuted" (upper end < 1 - delta), else
+                           "undecided" (5 seeds can only describe: 5/5 gives a lower end of 0.48);
+                           contain_all_share (every row of the learned set contains the true one: the
+                           event the promise relies on); conditional: the graph was chosen from the
+                           same data, so the 1 - delta is conditional on that choice
+           box_looseness.csv  per (knob, policy, size, n_rollouts), on 0/1 domains: the promise and
+                           the true value of true graph -> RMDP with the per-(s,a) product set minus
+                           the same with the box, and the share of the box's conservatism (true -
+                           promise) due to the box; mean over the seeds
+           coverage.csv    per (knob, policy, size, n_rollouts): the data's coverage of the best
+                           policy's rows (cov_*, evaluation.coverage), mean over the seeds
   level 3  best_method.csv per (knob, policy, size): the method with the fewest rollouts among those
                            whose promise held in >= 95% of the cell's runs
            method_rank.csv mean rank of every method's n* over the cells, and how often it is best
@@ -45,6 +59,9 @@ from scm_to_mdp.tool.sweep import read_results
 SETTING = ["knob", "policy"]
 METRICS = ["optimal_share", "regret", "norm_regret", "gap", "safe", "violation_rate", "worst_violation"]
 METRICS += ["missing_share", "extra_per_variable", "shd", "sid", "discovery_s", "learning_s", "solve_s"]
+METRICS += [f"{m}_{w}" for m in ("tv", "kl", "contain") for w in ("data", "task", "uniform")]
+METRICS += ["width_seen", "width_unseen", "lcov_factor_1", "lcov_alt", "cert_gap"]
+BOX, PRODUCT = "true graph -> RMDP", "true graph -> RMDP (per-(s,a) product)"
 VALID_SHARE = 0.95  # a method is "valid" in a cell when its promise held in at least this share of runs
 
 
@@ -142,6 +159,74 @@ def promise_held(runs: pd.DataFrame) -> pd.DataFrame:
     return out[keys + ["attempted", "runs", "held", "share"]]
 
 
+def clopper_pearson(k: int, n: int, level: float = 0.95) -> tuple[float, float]:
+    """Two-sided exact binomial interval for a share k / n."""
+    from scipy.stats import beta
+
+    if n == 0:
+        return float("nan"), float("nan")
+    a = (1 - level) / 2
+    lo = 0.0 if k == 0 else float(beta.ppf(a, k, n - k + 1))
+    hi = 1.0 if k == n else float(beta.ppf(1 - a, k + 1, n - k))
+    return lo, hi
+
+
+def validity_table(runs: pd.DataFrame, delta: float) -> pd.DataFrame:
+    keys = SETTING + ["size", "n_rollouts", "method"]
+    done = runs[(runs["status"] == "ok") & runs["guarantee"].astype(bool)].copy()
+    done["contain_all"] = pd.to_numeric(done.get("contain_all"), errors="coerce")
+    rows = []
+    for key, g in done.groupby(keys, sort=False):
+        n, k = len(g), int(g["safe"].sum())
+        lo, hi = clopper_pearson(k, n)
+        verdict = "confirmed" if lo >= 1 - delta else "refuted" if hi < 1 - delta else "undecided"
+        rows.append(
+            dict(zip(keys, key, strict=True))
+            | {"runs": n, "held": k, "share": k / n, "cp_low": lo, "cp_high": hi, "verdict": verdict,
+               "contain_all_share": g["contain_all"].mean(), "conditional": g["role"].iloc[0] == "ours"}
+        )  # fmt: skip
+    columns = keys + [
+        "runs",
+        "held",
+        "share",
+        "cp_low",
+        "cp_high",
+        "verdict",
+        "contain_all_share",
+        "conditional",
+    ]
+    return pd.DataFrame(rows, columns=columns)
+
+
+def box_looseness(runs: pd.DataFrame) -> pd.DataFrame:
+    keys = SETTING + ["size", "n_rollouts", "seed"]
+    ok = runs[runs["status"] == "ok"]
+    box, product = (ok[ok["method"] == m].set_index(keys) for m in (BOX, PRODUCT))
+    if box.empty or product.empty:
+        return pd.DataFrame(columns=keys[:-1] + ["promise_gain", "true_gain", "box_share", "seeds"])
+    num = lambda f, c: pd.to_numeric(f[c], errors="coerce")  # noqa: E731
+    both = pd.DataFrame(
+        {
+            "promise_gain": num(product, "promise") - num(box, "promise"),
+            "true_gain": num(product, "true") - num(box, "true"),
+            "conservatism": num(box, "true") - num(box, "promise"),
+        }
+    ).dropna(subset=["promise_gain"])
+    both["box_share"] = both["promise_gain"] / both["conservatism"].where(both["conservatism"] > 1e-12)
+    g = both.reset_index().groupby(keys[:-1], sort=False)
+    out = g[["promise_gain", "true_gain", "box_share"]].mean()
+    return out.assign(seeds=g.size()).reset_index()
+
+
+def coverage_table(runs: pd.DataFrame) -> pd.DataFrame:
+    keys = SETTING + ["size", "n_rollouts"]
+    columns = [c for c in runs.columns if c.startswith("cov_")] + ["actions_absent"]
+    one = runs.drop_duplicates(keys + ["seed"])  # method-independent: one row per dataset
+    values = one[keys + columns].copy()
+    values[columns] = values[columns].apply(pd.to_numeric, errors="coerce")
+    return values.groupby(keys, sort=False)[columns].mean().reset_index()
+
+
 def best_method(summary: pd.DataFrame, held: pd.DataFrame) -> pd.DataFrame:
     cell = SETTING + ["size"]
     table = summary.merge(held[cell + ["method", "share"]], on=cell + ["method"], how="left")
@@ -207,7 +292,9 @@ def report_grid(out_dir, target: float = 0.95, delta: float | None = 0.05, setti
     )
     styles = method_styles({m: (first.at[m, "role"], bool(first.at[m, "guarantee"])) for m in methods})
     graph_methods = [m for m in methods if runs.loc[runs["method"] == m, "parents"].notna().any()]
-    learned_graph = [m for m in graph_methods if first.at[m, "role"] != "oracle"]
+    learned_graph = [
+        m for m in graph_methods if first.at[m, "role"] not in ("oracle", "reference", "control")
+    ]
     guaranteed = [m for m in methods if bool(first.at[m, "guarantee"])]
     n_grid = grid["n_rollouts"]
     name = grid["name"]
@@ -227,6 +314,9 @@ def report_grid(out_dir, target: float = 0.95, delta: float | None = 0.05, setti
         "cells": cells,
         "rollouts_needed": summary,
         "promise_held": held,
+        "validity": validity_table(runs, delta if delta is not None else 0.05),
+        "box_looseness": box_looseness(runs),
+        "coverage": coverage_table(runs),
         "best_method": best,
         "method_rank": rank,
     }

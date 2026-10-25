@@ -143,7 +143,9 @@ class ActionGroups:
 class Graph:
     """The chosen 2-slice graph: the slice-t parents of every next-state variable."""
 
-    parents: dict[str, tuple[str, ...]]  # state var x -> parents of x' (names of inputs)
+    # state var x -> parents of x': slice-t inputs, then same-step parents y' (next-state names with
+    # NEXT_MARK; the same-step edges form a DAG)
+    parents: dict[str, tuple[str, ...]]
     report: dict = field(default_factory=dict)  # e.g. size of the equivalence class, ties
 
 
@@ -151,13 +153,21 @@ class Graph:
 class FactorBounds:
     """The factored interval MDP (S4 output). Per-factor intervals:
     lo[s, k, i, v] <= P(x_i' = v | s, a_k) <= hi[s, k, i, v].
-    Values v >= card_i are padding (0)."""
+    Values v >= card_i are padding (0).
+
+    A factor with same-step parents (x_j' -> x_i', Graph.parents) is a conditional: conditional[i] =
+    (js, lo_i, hi_i) with js the indices of its same-step parents and lo_i, hi_i [S, K, R, C] the
+    intervals of P(x_i' = v | s, a_k, x_js' = r), r the C-order index of the parents' values (R rows).
+    For such a factor lo[..., i, :], hi[..., i, :] hold the hull over r, a valid (looser) interval of
+    its marginal. The kernel is the product of the factors, each at the next state's values."""
 
     lo: np.ndarray  # [S, K, n, C]
     hi: np.ndarray  # [S, K, n, C]
     cards: list[int]  # number of values of every state variable
     B: np.ndarray  # [S, n]
     reward: Reward
+    info: dict = field(default_factory=dict)  # how they were learned (e.g. widened parents), for the rows
+    conditional: dict = field(default_factory=dict)  # {i: (js, lo_i, hi_i)}, see the docstring
 
 
 @dataclass(frozen=True)
@@ -167,6 +177,9 @@ class IntervalMDP:
     L: np.ndarray  # [S, K, S]
     U: np.ndarray  # [S, K, S]
     reward: Reward
+    # a reward-independent part of the method's objective, e.g. FOCUS's uncertainty penalty (lam * u,
+    # scaled by the reward's range): kept so that the model can be re-planned with another reward
+    info: dict = field(default_factory=dict)
 
 
 @dataclass(frozen=True)

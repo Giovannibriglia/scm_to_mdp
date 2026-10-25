@@ -7,8 +7,8 @@ from scm_to_mdp.core import NEXT_MARK, Candidates, Dataset, Graph
 def select(candidates: Candidates, dataset: Dataset) -> Graph:
     if candidates.kind != "graph_class" or candidates.undirected:
         raise ValueError("selection 'given' needs one fully directed graph (e.g. from the oracle)")
-    parents = {
-        v: tuple(x for x in dataset.inputs if (x, v + NEXT_MARK) in candidates.directed)
+    parents = {  # slice-t parents, then same-step parents x_j'
+        v: tuple(x for x in dataset.inputs + dataset.next_vars if (x, v + NEXT_MARK) in candidates.directed)
         for v in dataset.state_vars
     }
     return Graph(parents, report=dict(candidates.report))

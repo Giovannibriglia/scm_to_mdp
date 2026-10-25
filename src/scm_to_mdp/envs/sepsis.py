@@ -285,6 +285,31 @@ class Sepsis(Env):
         r_next = np.where(abnormal >= self.death, -1.0, np.where((abnormal == 0) & ~treated, 1.0, 0.0))
         return Reward(np.zeros((len(B), len(actions))), r_next, r_next != 0)
 
+    # ---- other tasks on the same dynamics (reward transfer, S9) ----------------------------------
+    def alternative_rewards(self) -> dict:
+        """Other tasks on the same patients (reward transfer; diabetic is never read):
+        treatment_cost   -0.05 per treatment given at a step (discharge +1 and death -1 unchanged)
+        normal_bp        +0.05 on arriving alive with a normal blood pressure, on top of the original
+        harsh_death      death costs -5 instead of -1
+        The end states (death, discharge) are those of the original reward."""
+        original = self.reward
+        sysbp = self.state_vars.index("sysbp")
+
+        def treatment_cost(B, actions):
+            r = original(B, actions)
+            return Reward(r.R - 0.05 * actions.sum(1)[None, :], r.r_next, r.terminal)
+
+        def normal_bp(B, actions):
+            r = original(B, actions)
+            bonus = 0.05 * ((B[:, sysbp] == NORMAL["sysbp"]) & ~r.terminal)
+            return Reward(r.R, r.r_next + bonus, r.terminal)
+
+        def harsh_death(B, actions):
+            r = original(B, actions)
+            return Reward(r.R, np.where(r.r_next < 0, -5.0, r.r_next), r.terminal)
+
+        return {"treatment_cost": treatment_cost, "normal_bp": normal_bp, "harsh_death": harsh_death}
+
     def true_parents(self):
         d = ("diabetic",) if self.diabetes else ()
         truth = {

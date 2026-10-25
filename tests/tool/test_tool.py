@@ -17,7 +17,7 @@ METHODS = {
     "BIC -> RMDP": Method(
         "causal", "box_robust_vi", discovery="bic", selection="bic_best", discovery_options={"max_parents": 3}
     ),
-    "Schnitzer exact": Method("causal", "vertex_robust_vi", discovery="oracle", selection="given"),
+    "true graph -> RMDP": Method("causal", "vertex_robust_vi", discovery="oracle", selection="given"),
     "flat RMDP": Method("flat_rmdp", "robust_vi"),
     "flat MDP": Method("flat_mdp", "vi"),
     "DiFaRL": Method("difarl", "fqi", solver_options={"max_iter": 30}),
@@ -38,7 +38,7 @@ def test_every_method_learns_solves_and_is_evaluated(truth, dataset):
 
 def test_roles_and_guarantees():
     assert METHODS["BIC -> RMDP"].role == "ours" and METHODS["BIC -> RMDP"].guarantee
-    assert METHODS["Schnitzer exact"].role == "oracle"
+    assert METHODS["true graph -> RMDP"].role == "reference"
     assert {METHODS[m].role for m in ["flat RMDP", "flat MDP", "DiFaRL"]} == {"baseline"}
     assert (
         not METHODS["flat MDP"].guarantee
@@ -81,7 +81,7 @@ def test_bad_methods_are_refused(kwargs, message):
 
 def test_oracle_needs_the_true_parents(dataset):
     with pytest.raises(ValueError, match="true_parents"):
-        learn(dataset, METHODS["Schnitzer exact"])
+        learn(dataset, METHODS["true graph -> RMDP"])
 
 
 def test_without_ground_truth_only_the_promise(dataset):

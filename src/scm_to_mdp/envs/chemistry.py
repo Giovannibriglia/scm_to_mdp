@@ -10,7 +10,8 @@ parents' colours at t), so every variable moves independently given (state, acti
 State: the colours x_0..x_{n-1} in {0..C-1} (default 6 objects, 3 colours: 729 states).
 Graph (per seed): a random order of the objects; every pair (earlier -> later) is an edge w.p.
 density; an object keeps at most max_parents parents (a random subset).
-Actions (data columns a_0..a_{n-1}, at most one on): push object j, or do nothing (all zeros).
+Action (one categorical data column push in 0..n): 0 = do nothing, j + 1 = push object j. Every x_j'
+has push as a parent (only the value that pushes object j matters to it).
 Next colour of object j:
     pushed:              (x_j + 1) mod C w.p. 0.9, else x_j
     not pushed, parents: (sum of the parents' colours + offset_j) mod C w.p. 0.7 (the reaction),
@@ -48,6 +49,7 @@ class Chemistry(Env):
         self.catalyst = catalyst
         if max_model_gb is not None:
             self.max_model_gb = max_model_gb
+        self.seed = seed
         self.rng = np.random.default_rng(seed)
         graph_rng = np.random.default_rng([seed, 1])  # the graph and targets: fixed by the seed
         order = graph_rng.permutation(n_objects)
@@ -65,8 +67,8 @@ class Chemistry(Env):
         self.target = graph_rng.integers(0, n_colours, n_objects)
         self.objects = [f"x{j}" for j in range(n_objects)]
         self.state_vars = self.objects + (["catalyst"] if catalyst is not None else [])
-        self.action_vars = [f"a{j}" for j in range(n_objects)]
-        self.cards = {**dict.fromkeys(self.objects, n_colours), **dict.fromkeys(self.action_vars, 2)}
+        self.action_vars = ["push"]
+        self.cards = {**dict.fromkeys(self.objects, n_colours), "push": n_objects + 1}
         self.exposed = next(
             (j for j in range(n_objects) if self.parents[j]), None
         )  # what the catalyst speeds
@@ -114,17 +116,35 @@ class Chemistry(Env):
         return dist
 
     def action_columns(self, actions):
-        return (actions[:, None] == np.arange(1, self.n + 1)[None, :]).astype(np.int64)
+        return np.asarray(actions, dtype=np.int64)[:, None]  # push = the env action
 
     def reward(self, B, actions):
         share = (B[:, : self.n] == self.target[None, :]).mean(1)  # objects only
         return Reward.immediate(np.repeat(share[:, None], len(actions), axis=1))
 
+    # ---- other tasks on the same dynamics (reward transfer, S9) ----------------------------------
+    def alternative_rewards(self) -> dict:
+        """Other tasks on the same reactions (reward transfer; the catalyst is never read): three new
+        target colourings, target_1..target_3, drawn from the seed (rng [seed, 2, i]); the reward is
+        the share of objects in their target colour, as in the original."""
+
+        def task(target):
+            def reward(B, actions):
+                share = (B[:, : self.n] == target[None, :]).mean(1)
+                return Reward.immediate(np.repeat(share[:, None], len(actions), axis=1))
+
+            return reward
+
+        return {
+            f"target_{i}": task(np.random.default_rng([self.seed, 2, i]).integers(0, self.C, self.n))
+            for i in (1, 2, 3)
+        }
+
     def true_parents(self):
         inputs = self.state_vars + self.action_vars
         catalyst = {"catalyst"} if self.catalyst is not None else set()
         truth = {
-            f"x{j}": {f"x{j}", f"a{j}"}
+            f"x{j}": {f"x{j}", "push"}
             | {f"x{p}" for p in self.parents[j]}
             | (catalyst if j == self.exposed else set())
             for j in range(self.n)

@@ -13,18 +13,25 @@ number: Experiment(save_models="all")), every method's model goes to
         cbn.json       a causal method: the learned causal Bayesian network over the observed
                        columns (below), with the true parents for comparison
         cbn.{pdf,png}  its 2-slice graph: edges found (black), missed (red, dashed), extra (blue)
-        mdp.{pdf,png}  a picture of the (interval) MDP, up to Experiment.pictures_max_states states
-                       (edges: the likeliest outcomes under the true model; with a hidden variable,
-                       under the model's own interval midpoints)
+        mdp.{pdf,png}  the chain picture of the (interval) MDP the model induces (plotting/mdp_graph.py:
+                       nodes are states, one colour per action, the likeliest next states solid and
+                       the less likely ones dashed, labelled with the model's probability or interval;
+                       a causal method's FactorBounds as the box of its factor intervals), up to
+                       Experiment.pictures_max_states observed states. The edges are chosen under the
+                       true observed kernel, so every picture of one problem shows the same edges.
+                       States with only a column and a row (one agent on a grid) are laid out on
+                       their grid, the others on a circle.
         info.json      method, size, seed, number of rollouts, status, promise at the start
-    <out_dir>/models/<size_label>/ground_truth.{pdf,png}   the true MDP (small problems only)
+    <out_dir>/models/<size_label>/ground_truth.{pdf,png}   the true MDP over the observed states (the
+                                                         observed kernel when a variable is hidden)
 
 load(folder) reads a folder back: {"model": FactorBounds | IntervalMDP | None, "solution": Solution,
 "cbn": dict | None, "info": dict}; product_bounds.compile(model) gives the interval MDP of a causal
 method's FactorBounds again.
 
 What cbn.json is. The data determine a causal Bayesian network: the graph (the slice-t parents of
-every next-state variable x') and the conditional distributions P(x' | parents). They do not
+every next-state variable x', and its same-step parents y') and the conditional distributions
+P(x' | parents). They do not
 determine a structural causal model: many SCMs (structural equations with exogenous noise) induce
 the same network, and the network is all the pipeline uses. cbn.json stores, for every x' and every
 parent row that can occur (every combination of the state parents; for the action parents, the
@@ -49,24 +56,32 @@ def method_folder(name: str) -> str:
 # ---- the causal Bayesian network ------------------------------------------------------------------
 def cbn(model: FactorBounds, data, parents: dict, true_parents: dict | None) -> dict:
     """The learned network as a dict (see the module docstring)."""
-    df, inputs = data.df, data.inputs
+    from scm_to_mdp.data import slice_inputs
+    from scm_to_mdp.scm_learning.families import family
+    from scm_to_mdp.scm_learning.families import rows as family_rows
+
+    df = data.df
     columns = {v: i for i, v in enumerate(data.state_vars)}
     S, K = model.lo.shape[:2]
-    # the value of every input at every (s, a_k): state values from B, action values from data.actions
-    values = np.concatenate(
-        [np.repeat(model.B[:, None, :], K, axis=1), np.repeat(data.actions[None, :, :], S, axis=0)], axis=2
-    )  # [S, K, n + n_a], columns in the order of data.inputs (state vars, then action vars)
+    X = slice_inputs(data)  # [S, K, n_inputs]: the value of every input at every (s, a_k)
     cpds = {}
-    for v, pa in parents.items():
+    for v, given in parents.items():
+        pa = family(data, given)  # slice-t parents, then same-step parents (their table's order)
         i, card = columns[v], data.cards[v]
-        idx = [inputs.index(p) for p in pa]
-        rows = values[:, :, idx].reshape(S * K, len(idx))
-        _, first = np.unique(rows, axis=0, return_index=True)
+        cards = [data.cards[p.removesuffix(NEXT_MARK)] for p in pa]
+        code = family_rows(data, pa, X)  # [S, K, R] the table row at (s, k, same-step values r)
+        lo_i, hi_i = (
+            model.conditional[i][1:]
+            if i in model.conditional
+            else (model.lo[:, :, i, None], model.hi[:, :, i, None])
+        )
         counts = df.groupby(list(pa) + [v + NEXT_MARK]).size() if pa else df.groupby(v + NEXT_MARK).size()
-        table = []
-        for j in sorted(first):
-            s, k = divmod(int(j), K)
-            row = tuple(int(x) for x in rows[j])
+        table, done = [], set()
+        for (s, k, r), row_index in np.ndenumerate(code):
+            if row_index in done:
+                continue
+            done.add(row_index)
+            row = tuple(int(x) for x in np.unravel_index(row_index, cards)) if pa else ()
             n_v = [int(counts.get(row + (val,) if pa else val, 0)) for val in range(card)]
             n = sum(n_v)
             table.append(
@@ -74,13 +89,16 @@ def cbn(model: FactorBounds, data, parents: dict, true_parents: dict | None) -> 
                     "parents": dict(zip(pa, row, strict=True)),
                     "n": n,
                     "estimate": [c / n for c in n_v] if n else None,
-                    "lo": model.lo[s, k, i, :card].round(6).tolist(),
-                    "hi": model.hi[s, k, i, :card].round(6).tolist(),
+                    "lo": lo_i[s, k, r, :card].round(6).tolist(),
+                    "hi": hi_i[s, k, r, :card].round(6).tolist(),
                 }
             )
-        cpds[v + NEXT_MARK] = {"parents": list(pa), "rows": table}
+        cpds[v + NEXT_MARK] = {
+            "parents": list(pa),
+            "rows": sorted(table, key=lambda t: list(t["parents"].values())),
+        }
     return {
-        "variables": {c: int(data.cards[c]) for c in inputs},
+        "variables": {c: int(data.cards[c]) for c in data.inputs},
         "state_vars": list(data.state_vars),
         "action_vars": list(data.action_vars),
         "parents": {v + NEXT_MARK: list(pa) for v, pa in parents.items()},
@@ -92,7 +110,8 @@ def cbn(model: FactorBounds, data, parents: dict, true_parents: dict | None) -> 
 
 
 def draw_cbn(parents: dict, true_parents: dict | None, inputs: list[str], state_vars: list[str], title, stem):
-    """The 2-slice graph: inputs (slice t) on the left, next-state variables on the right."""
+    """The 2-slice graph: inputs (slice t) on the left, next-state variables on the right; a same-step
+    edge y' -> x' is an arc on the right (an undirected pair when compared with the truth, as SHD)."""
     import matplotlib.pyplot as plt
 
     from scm_to_mdp.plotting.style import save, setup
@@ -103,8 +122,15 @@ def draw_cbn(parents: dict, true_parents: dict | None, inputs: list[str], state_
     shift = (len(inputs) - len(state_vars)) / 2
     right = {v: (1.0, -i - shift) for i, v in enumerate(state_vars)}
     fig, ax = plt.subplots(figsize=(4.2, 0.9 + 0.32 * len(inputs)))
+
+    def pair(p, v):  # a same-step edge as the pair it stands for (either direction)
+        return frozenset((p.removesuffix(NEXT_MARK), v))
+
+    learned_pairs = {pair(p, v) for v in state_vars for p in parents.get(v, ()) if p.endswith(NEXT_MARK)}
+    true_pairs = {pair(p, v) for v in state_vars for p in true_parents.get(v, ()) if p.endswith(NEXT_MARK)}
     for v in state_vars:
-        learned, true = set(parents.get(v, ())), {p for p in true_parents.get(v, ()) if p in left}
+        learned = {p for p in parents.get(v, ()) if p in left}
+        true = {p for p in true_parents.get(v, ()) if p in left}
         for p in sorted(learned | true):
             if not true_parents or (p in learned and p in true):
                 colour, style = "black", "-"  # found
@@ -119,6 +145,27 @@ def draw_cbn(parents: dict, true_parents: dict | None, inputs: list[str], state_
                 (x0 + 0.04, y0),
                 arrowprops={"arrowstyle": "->", "color": colour, "ls": style, "lw": 0.8},
             )
+    for edge in sorted(learned_pairs | true_pairs, key=sorted):  # same-step edges: arcs on the right
+        if not true_parents or (edge in learned_pairs and edge in true_pairs):
+            colour, style = "black", "-"
+        elif edge in true_pairs:
+            colour, style = "#CC0000", "--"
+        else:
+            colour, style = "#0072B2", "-"
+        a, b = sorted(edge)
+        (x0, y0), (x1, y1) = right[a], right[b]
+        ax.annotate(
+            "",
+            (x1 + 0.03, y1),
+            (x0 + 0.03, y0),
+            arrowprops={
+                "arrowstyle": "-",
+                "color": colour,
+                "ls": style,
+                "lw": 0.8,
+                "connectionstyle": "arc3,rad=-0.6",
+            },
+        )
     for x, (px, py) in left.items():
         ax.text(px, py, x, ha="right", va="center", fontsize=7)
     for v, (px, py) in right.items():
@@ -153,11 +200,14 @@ def save(folder: Path, result, data, truth, info: dict, pictures_max_states: int
     }
     true_parents = None
     if truth.true_parents is not None:
-        true_parents = {
-            v: tuple(p for p in truth.true_parents[v] if p in data.cards) for v in data.state_vars
+        true_parents = {  # observed parents only (a same-step parent y' when y is observed)
+            v: tuple(p for p in truth.true_parents[v] if p.removesuffix(NEXT_MARK) in data.cards)
+            for v in data.state_vars
         }
     if isinstance(model, FactorBounds):
         arrays |= {"kind": "FactorBounds", "lo": model.lo, "hi": model.hi, "cards": np.array(model.cards)}
+        for i, (js, lo_i, hi_i) in model.conditional.items():  # factors with same-step parents
+            arrays |= {f"cond{i}_js": np.array(js), f"cond{i}_lo": lo_i, f"cond{i}_hi": hi_i}
         if result.graph is not None:
             network = cbn(model, data, result.graph.parents, true_parents)
             (folder / "cbn.json").write_text(json.dumps(network, indent=1))
@@ -182,14 +232,9 @@ def save(folder: Path, result, data, truth, info: dict, pictures_max_states: int
         arrays |= {"kind": "none"}
     np.savez_compressed(folder / "model.npz", **arrays)
     (folder / "info.json").write_text(json.dumps(info | {"observed": observed}, indent=1, default=str))
+    title = f"{info['method']}, {info['size_label']}, n={info['n_rollouts']}"
     if data.B.shape[0] <= pictures_max_states and isinstance(model, (FactorBounds, IntervalMDP)):
-        _draw_mdp(
-            model,
-            data,
-            truth,
-            f"{info['method']}, {info['size_label']}, n={info['n_rollouts']}",
-            folder / "mdp",
-        )
+        _draw_mdp(model, data, truth, title, folder / "mdp")
 
 
 def _labels(truth, data):
@@ -198,35 +243,52 @@ def _labels(truth, data):
     else:
         states = [truth.state_name(s) for s in range(truth.n_states)]
     actions = [
-        "+".join(a for a, on in zip(data.action_vars, vec, strict=True) if on) or "none"
-        for vec in data.actions
+        ", ".join(f"{a}={int(v)}" for a, v in zip(data.action_vars, vec, strict=True)) for vec in data.actions
     ]
     return states, actions
 
 
-def _draw_mdp(model, data, truth, title, stem):
+def positions(data) -> np.ndarray | None:
+    """[S, 2] node positions on the grid when the observed state is one column x and one row y (in that
+    order, row 0 at the top); None otherwise (a circle)."""
+    names = [v.rstrip("0123456789") for v in data.state_vars]
+    if names != ["x", "y"]:
+        return None
+    return np.stack([data.B[:, 0], -data.B[:, 1]], axis=1).astype(float)
+
+
+def _point_or_box(model):
+    """A causal method's FactorBounds as an interval MDP: the exact MDP of point estimates, or the box
+    of its factor intervals; an IntervalMDP as it is. Returns (model, note for the title)."""
     from scm_to_mdp.compilation import product_bounds
+
+    if isinstance(model, FactorBounds):
+        point = np.array_equal(model.lo, model.hi) and all(
+            np.array_equal(lo, hi) for _, lo, hi in model.conditional.values()
+        )
+        if point:
+            return product_bounds.exact(model), "\n(the MDP of the point estimates)"
+        return product_bounds.compile(model), "\n(box of the factor intervals)"
+    return model, " (point estimates)" if np.array_equal(model.L, model.U) else ""
+
+
+def _draw_mdp(model, data, truth, title, stem):
     from scm_to_mdp.plotting import mdp_graph
 
     states, actions = _labels(truth, data)
-    if isinstance(model, FactorBounds):
-        model, title = product_bounds.compile(model), title + "\n(box of the factor intervals)"
-    elif np.array_equal(model.L, model.U):
-        title += " (point estimates)"
-    if truth.hidden:  # the true P is over the full states: pick the edges by the model's midpoints
-        mid = (model.L + model.U) / 2
-        P_ref = mid / np.maximum(mid.sum(-1, keepdims=True), 1e-12)
-    else:
-        P_ref = truth.P[:, truth.actions_of(data)]
-    mdp_graph.draw(P_ref, model, states, actions, title, stem)
+    model, note = _point_or_box(model)
+    P_ref = truth.observed_kernel()[:, truth.actions_of(data)]  # the edges: the true observed kernel
+    mdp_graph.draw(P_ref, model, states, actions, title + note, stem, positions=positions(data))
 
 
 def draw_ground_truth(truth, data, title, stem):
+    """The true MDP over the observed states (the observed kernel when a variable is hidden)."""
     from scm_to_mdp.plotting import mdp_graph
 
-    P_true = truth.P[:, truth.actions_of(data)]
+    P_true = truth.observed_kernel()[:, truth.actions_of(data)]
     states, actions = _labels(truth, data)
-    mdp_graph.draw(P_true, IntervalMDP(P_true, P_true, data.reward), states, actions, title, stem)
+    exact = IntervalMDP(P_true, P_true, data.reward)
+    mdp_graph.draw(P_true, exact, states, actions, title, stem, positions=positions(data))
 
 
 # ---- reading a folder back --------------------------------------------------------------------------
@@ -241,7 +303,14 @@ def load(folder) -> dict:
     kind = str(z["kind"])
     model = None
     if kind == "FactorBounds":
-        model = FactorBounds(z["lo"], z["hi"], [int(c) for c in z["cards"]], z["B"], reward)
+        conditional = {
+            int(key[4:-3]): (tuple(int(j) for j in z[key]), z[key[:-3] + "_lo"], z[key[:-3] + "_hi"])
+            for key in z.files
+            if key.startswith("cond") and key.endswith("_js")
+        }
+        model = FactorBounds(
+            z["lo"], z["hi"], [int(c) for c in z["cards"]], z["B"], reward, conditional=conditional
+        )
     elif kind == "IntervalMDP":
         model = IntervalMDP(z["L"], z["U"] if "U" in z else z["L"], reward)
     elif kind == "QTable":

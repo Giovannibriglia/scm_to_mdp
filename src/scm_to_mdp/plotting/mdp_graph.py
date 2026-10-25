@@ -1,9 +1,10 @@
-"""Picture of an MDP or interval MDP: nodes are states, one colour per action.
+"""Chain picture of an MDP or interval MDP: nodes are states, edges are actions, one colour per action.
 
 For every (state, action), the outcomes drawn are the most likely next states under the TRUE model
-(probability >= threshold, at most max_outcomes): the most likely one as a solid edge, the others
-dashed. Every picture of one problem shows the same edges, labelled with that model's probability
-(exact or estimated MDP) or interval [L, U] (interval MDP), so the pictures can be compared.
+(probability >= threshold, at most max_outcomes): the most likely ones (ties included) as solid
+edges, the less likely ones dashed. Every picture of one problem shows the same edges, labelled with
+that model's probability (exact or estimated MDP) or interval [L, U] (interval MDP), so the pictures
+can be compared. Nodes lie on a circle, or at given positions (e.g. the cells of a grid world).
 """
 
 import matplotlib.pyplot as plt
@@ -25,14 +26,21 @@ def draw(
     title: str,
     stem,
     threshold: float = 0.05,
-    max_outcomes: int = 2,
+    max_outcomes: int = 3,
+    positions: np.ndarray | None = None,
 ):
-    """P_true [S, K, S'] over the model's actions; model.L == model.U for an exact MDP."""
+    """P_true [S, K, S'] over the model's actions; model.L == model.U for an exact MDP. positions
+    [S, 2]: where the nodes go (scaled into the picture); default a circle."""
     setup()
     S, K, _ = P_true.shape
     exact = np.array_equal(model.L, model.U)
-    angle = np.pi / 2 - 2 * np.pi * np.arange(S) / S
-    pos = np.stack([np.cos(angle), np.sin(angle)], axis=1) * 1.0
+    if positions is None:
+        angle = np.pi / 2 - 2 * np.pi * np.arange(S) / S
+        pos = np.stack([np.cos(angle), np.sin(angle)], axis=1) * 1.0
+    else:
+        pos = np.asarray(positions, dtype=float)
+        pos = pos - (pos.max(0) + pos.min(0)) / 2
+        pos = pos / max(np.abs(pos).max(), 1e-12)  # inside [-1, 1]^2, centred
     size = 4.5 + 0.45 * S
     fig, ax = plt.subplots(figsize=(size, size))
     node_r = 0.055 + 0.6 / S
@@ -42,14 +50,10 @@ def draw(
         ax.text(*pos[s], state_labels[s], ha="center", va="center", fontsize=7, zorder=9)
     for s in range(S):
         for k in range(K):
-            order = np.argsort(-P_true[s, k])
-            outcomes = [t for t in order[:max_outcomes] if P_true[s, k, t] >= threshold]
-            for rank, t in enumerate(outcomes):
+            for t, solid in outcomes(P_true[s, k], threshold, max_outcomes):
                 lo, hi = model.L[s, k, t], model.U[s, k, t]
                 label = f"{lo:.2f}" if exact else f"[{lo:.2f}, {hi:.2f}]"
-                style = dict(
-                    color=ACTION_COLOURS[k % len(ACTION_COLOURS)], lw=1.0, ls="-" if rank == 0 else "--"
-                )
+                style = dict(color=ACTION_COLOURS[k % len(ACTION_COLOURS)], lw=1.0, ls="-" if solid else "--")
                 if t == s:
                     _self_loop(ax, pos[s], node_r, k, K, label, style)
                 else:
@@ -59,8 +63,8 @@ def draw(
         for k in range(K)
     ]
     handles += [
-        Line2D([], [], color="k", lw=1, label="most likely outcome"),
-        Line2D([], [], color="k", lw=1, ls="--", label="less likely outcome"),
+        Line2D([], [], color="k", lw=1, label="most likely next state"),
+        Line2D([], [], color="k", lw=1, ls="--", label="less likely next state"),
     ]
     ax.legend(handles=handles, loc="upper left", bbox_to_anchor=(1.0, 1.0), frameon=False, fontsize=8)
     ax.set_title(title, fontsize=10)
@@ -70,6 +74,14 @@ def draw(
     ax.axis("off")
     ax.grid(False)
     save(fig, stem)
+
+
+def outcomes(row: np.ndarray, threshold: float, max_outcomes: int) -> list[tuple[int, bool]]:
+    """The next states drawn for one (state, action): (index, solid), the likeliest first. Solid: the
+    largest probability (every tie); dashed: the others, down to threshold, at most max_outcomes."""
+    order = [int(t) for t in np.argsort(-row, kind="stable")[:max_outcomes] if row[t] >= threshold]
+    top = row.max()
+    return [(t, bool(np.isclose(row[t], top))) for t in order]
 
 
 def _edge(ax, a, b, shrink_points, k, label, style):
@@ -104,7 +116,8 @@ def _edge(ax, a, b, shrink_points, k, label, style):
 
 
 def _self_loop(ax, centre, node_r, k, K, label, style):
-    outward = centre / np.linalg.norm(centre)
+    norm = np.linalg.norm(centre)
+    outward = centre / norm if norm > 1e-9 else np.array([0.0, 1.0])  # the centre node of a grid: up
     spread = (k - (K - 1) / 2) * 0.75  # each action's loop at its own angle around the node
     c, s = np.cos(spread), np.sin(spread)
     direction = np.array([c * outward[0] - s * outward[1], s * outward[0] + c * outward[1]])

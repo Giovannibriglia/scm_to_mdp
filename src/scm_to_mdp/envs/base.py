@@ -1,8 +1,16 @@
 """What every environment provides (pipeline step S0, and its behaviour policies for S1).
 
 An environment is a factored MDP: given the state and the action, the next value of every state
-variable is drawn independently from next_distributions(). From that one function the base class
-builds the exact model (to evaluate policies) and the simulator (to produce data). The learner
+variable is drawn independently from next_distributions(), except for the pairs of coupled_next()
+(default none), whose two next values are drawn together from their joint law (e.g. a slip that moves
+the row or the column of a cell). From these the base class builds the exact model (to evaluate
+policies) and the simulator (to produce data).
+
+Variables (the convention of every environment): one variable per dimension of the state and of the
+action, with its values (categorical; no domain has a continuous variable). An action dimension with a
+"do nothing" option has it as one of its values; actions taken at the same time are separate variables
+(Sepsis's three treatments). No "done", "terminated" or "truncated" variable: the end of an episode is a
+set of states (Reward.terminal), which the solvers use and the learner never models. The learner
 never sees the model: it gets only the table returned by sample() and the DataSpec (spec()).
 ground_truth() packs the exact model as an MDPGroundTruth, the input of the evaluation (S9).
 
@@ -56,8 +64,9 @@ class Env:
         raise NotImplementedError
 
     def true_parents(self) -> dict[str, tuple[str, ...]]:
-        """The true slice-t parents of every next-state variable (state and action column names,
-        in the order state_vars + action_vars)."""
+        """The true parents of every next-state variable: slice-t state and action names (in the order
+        state_vars + action_vars), and, for pairs dependent given (state, action) (coupled_next), the
+        other next-state variable of the pair (named with NEXT_MARK: a same-step edge)."""
         raise NotImplementedError
 
     def start_distribution(self) -> np.ndarray:
@@ -77,9 +86,16 @@ class Env:
     def build_model(self):
         """Set self.B, self.P [S, A, S'], self.true_reward and self.start from next_distributions."""
         self.B = all_states(self.state_cards)  # [S, n]
-        self.P = dense_transitions(self.B, self.n_actions, self.next_distributions, self.max_model_gb)
+        self.P = dense_transitions(
+            self.B, self.n_actions, self.next_distributions, self.max_model_gb, self.coupled_next
+        )
         self.true_reward = self.reward(self.B, self.action_columns(np.arange(self.n_actions)))
         self.start = self.start_distribution()
+
+    def coupled_next(self, states: np.ndarray, actions: np.ndarray) -> dict:
+        """{(i, j): [E, card_i, card_j]} the joint law of the next values of state variables i and j, for
+        pairs that are dependent given (state, action) (each variable in at most one pair). Default: none."""
+        return {}
 
     def full_spec(self) -> DataSpec:
         """Every state variable of the true model, with the reward."""
@@ -94,12 +110,30 @@ class Env:
         cards = {v: c for v, c in self.cards.items() if v not in self.hidden_vars}
         return DataSpec(observed, list(self.action_vars), cards, self.observed_reward)
 
-    def observed_reward(self, B_observed: np.ndarray, actions: np.ndarray) -> Reward:
-        """The reward over observed states: the hidden variables set to 0 (the reward does not read them)."""
+    def observed_reward(self, B_observed: np.ndarray, actions: np.ndarray, reward=None) -> Reward:
+        """The reward (default self.reward) over observed states: the hidden variables set to 0 (no
+        reward reads them)."""
         full = np.zeros((len(B_observed), len(self.state_vars)), dtype=np.int64)
         observed = [i for i, v in enumerate(self.state_vars) if v not in self.hidden_vars]
         full[:, observed] = B_observed
-        return self.reward(full, actions)
+        return (reward or self.reward)(full, actions)
+
+    # ---- other tasks on the same dynamics (reward transfer, S9) ----------------------------------
+    def alternative_rewards(self) -> dict:
+        """{name: reward(B, actions) -> Reward} over the full state, for the reward-transfer evaluation:
+        the learned models are re-planned (not re-learned) under each, and evaluated exactly. A reward
+        may not read a hidden variable. Default: none."""
+        return {}
+
+    def task(self, name: str):
+        """(ground truth, learner's reward function) of the alternative reward `name`."""
+        reward = self.alternative_rewards()[name]
+
+        def observed(B_observed, actions):
+            return self.observed_reward(B_observed, actions, reward)
+
+        truth = self.ground_truth().with_reward(reward, observed if self.hidden_vars else None)
+        return truth, (observed if self.hidden_vars else reward)
 
     def hide(self, df: pd.DataFrame) -> pd.DataFrame:
         """The table without the hidden variables (what the learner gets)."""
@@ -151,7 +185,12 @@ class Env:
         dist = self.next_distributions(states, actions)  # [E, n, C]
         tail = np.cumsum(dist[..., ::-1], axis=-1)[..., ::-1]  # tail[..., v] = P(x' >= v)
         u = self.rng.random(states.shape)
-        return (u[..., None] < tail[..., 1:]).sum(-1).astype(np.int64)
+        nxt = (u[..., None] < tail[..., 1:]).sum(-1).astype(np.int64)
+        for (i, j), joint in self.coupled_next(states, actions).items():  # [E, c_i, c_j]
+            flat = joint.reshape(len(states), -1)
+            k = (self.rng.random(len(states))[:, None] > np.cumsum(flat, axis=1)).sum(1)
+            nxt[:, i], nxt[:, j] = np.divmod(np.minimum(k, flat.shape[1] - 1), joint.shape[2])
+        return nxt
 
     def to_columns(self, states, actions, next_states) -> pd.DataFrame:
         """One block of the data table for a batch of transitions."""

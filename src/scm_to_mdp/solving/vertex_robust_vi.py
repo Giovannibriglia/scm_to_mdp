@@ -17,6 +17,8 @@ from scm_to_mdp.solving.stopping import sound_lower_bound, stop_at
 
 
 def solve(bounds: FactorBounds, gamma: float, tol: float = 1e-7) -> Solution:
+    if bounds.conditional:
+        raise ValueError("vertex_robust_vi needs factors without same-step parents (use box_robust_vi)")
     if any(c != 2 for c in bounds.cards):
         raise ValueError("vertex_robust_vi needs 0/1 state variables")
     B, n = bounds.B, bounds.B.shape[1]

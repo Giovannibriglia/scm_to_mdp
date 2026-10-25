@@ -171,3 +171,34 @@ def test_cuda_training_uses_a_graph_and_is_reproducible():
     assert np.array_equal(a.Q, b.Q)
     eager = offline_q.learn(data, 0.9, steps=300, hidden=16, device="cuda", cuda_graph=False)
     assert not eager.info["cuda_graph"] and np.isfinite(eager.Q).all()
+
+
+# ---- the same string hashing in every process of a run ------------------------------------------
+HASHING = """
+import sys
+from scm_to_mdp.utils import compute
+from scm_to_mdp.utils.parallel import run_dynamic
+
+def name_hash(text):
+    return hash(text)
+
+if __name__ == "__main__":
+    compute.apply(compute.plan(None, workers="2", device="cpu"))
+    print(sorted({r for _, r in run_dynamic(name_hash, [("vasopressors",)] * 4, workers=2)}))
+"""
+
+
+def test_workers_hash_strings_with_the_fixed_seed(tmp_path):
+    script = tmp_path / "hashing.py"
+    script.write_text(HASHING)
+    env = {k: v for k, v in os.environ.items() if k != "PYTHONHASHSEED"}  # the runner's own hash: random
+    runs = [
+        subprocess.run([sys.executable, str(script)], cwd=ROOT, env=env, capture_output=True, text=True)
+        for _ in range(2)
+    ]
+    seen = [r.stdout.strip().splitlines()[-1] for r in runs]
+    fixed = subprocess.run(
+        [sys.executable, "-c", "print(hash('vasopressors'))"],
+        env=env | {"PYTHONHASHSEED": compute.HASH_SEED}, capture_output=True, text=True, check=True,
+    ).stdout.strip()  # fmt: skip
+    assert seen[0] == seen[1] == f"[{fixed}]"

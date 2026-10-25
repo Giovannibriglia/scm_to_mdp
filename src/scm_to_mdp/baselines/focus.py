@@ -131,4 +131,5 @@ def penalised_mdp(
     for j in range(B.shape[1]):
         P *= F[:, :, j, B[:, j]]
     penalised = Reward(r.R - lam * scale * u, r.r_next, r.terminal)
-    return IntervalMDP(P, P, penalised)
+    # the penalty without the reward's range, so that methods.with_reward can re-plan with another reward
+    return IntervalMDP(P, P, penalised, info={"penalty": lam * u})

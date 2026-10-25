@@ -5,6 +5,7 @@ The learner is told (the DataSpec):
     - that x' is the next-step value of x (the time order);
     - how many values every variable has;
     - the reward (a function of the states and action vectors).
+Every column is one dimension of the state or of the action (envs/base.py: the convention).
 Everything else (which action does what, the graph, the probabilities) is learned from the data.
 
 The table has one row per transition: columns x (state at t), a (action columns at t) and x' (state

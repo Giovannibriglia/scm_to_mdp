@@ -3,8 +3,10 @@
 A Method names one choice per step. The learner is one of:
 
     "causal"     S2 discovery -> S3 selection -> S4 parameter learning -> a factored interval MDP
-                 discovery: "bic" | "pcmci+" | "ges" | "oracle" (the true graph, given)
-                 selection: "bic_best" | "given" (for the oracle)
+                 discovery: "bic" | "pcmci+" | "ges" | "dynotears" | "oracle" (the true graph, given)
+                            | a control graph (discovery/controls.py: "logger_markov", "random_matched",
+                            "plus_one"; built from the truth by the sweep and given like the oracle's)
+                 selection: "bic_best" | "given" (for the oracle and the controls)
     "flat_rmdp"  baseline: one interval per (s, a, s'), no structure      -> an interval MDP
     "flat_mdp"   baseline: the plug-in MDP from counts, no guarantee      -> an exact MDP (L == U)
     "difarl"     baseline: DiFaRL's action groups, model-free, no guarantee -> action groups
@@ -32,6 +34,7 @@ limit (Limits). A step that fails stops the method: Result.status says how ("mem
 "error") and Result.failed_step where.
 """
 
+import dataclasses
 import inspect
 import math
 import time
@@ -44,8 +47,8 @@ import numpy as np
 
 from scm_to_mdp.baselines import difarl, flat_mdp, flat_rmdp, focus, offline_q, spibb
 from scm_to_mdp.compilation import product_bounds
-from scm_to_mdp.core import ActionGroups, Dataset, Graph, Solution
-from scm_to_mdp.scm_learning import nbn_intervals
+from scm_to_mdp.core import ActionGroups, Dataset, FactorBounds, Graph, IntervalMDP, Reward, Solution
+from scm_to_mdp.scm_learning import nbn_intervals, nbn_point
 from scm_to_mdp.selection import bic_best, given
 from scm_to_mdp.solving import robust_vi, value_iteration, vertex_robust_vi
 from scm_to_mdp.utils.limits import run_limited
@@ -63,11 +66,14 @@ LEARNERS = (
 )
 BASELINES = LEARNERS[1:]
 OFFLINE_Q = ("offline_dqn", "offline_cql")
+POINT_ALPHA = 1.0  # X -> MDP: Laplace (Dirichlet(1) posterior mean; scm_learning/nbn_point.py)
+WIDEN_K = 2  # BIC -> RMDP (hull / padded): inputs added to every family (scm_learning/nbn_intervals.py)
 CQL_ALPHA = 0.1  # offline CQL's penalty weight (baselines/offline_q.py says how it was chosen)
-DISCOVERY = ("bic", "pcmci+", "ges", "oracle")
+GIVEN_GRAPHS = ("oracle", "logger_markov", "random_matched", "plus_one")  # graphs given, not discovered
+DISCOVERY = ("bic", "pcmci+", "ges", "dynotears") + GIVEN_GRAPHS
 SELECTION = {"bic_best": bic_best.select, "given": given.select}
 SOLVERS_FOR = {
-    "causal": ("box_robust_vi", "vertex_robust_vi"),
+    "causal": ("box_robust_vi", "vertex_robust_vi", "vi"),
     "flat_rmdp": ("robust_vi",),
     "flat_mdp": ("vi", "robust_vi"),
     "difarl": ("fqi",),
@@ -96,6 +102,10 @@ def discovery_function(name: str):
         from scm_to_mdp.discovery import ges
 
         return ges.fit
+    if name == "dynotears":
+        from scm_to_mdp.discovery import dynotears
+
+        return dynotears.fit
     from scm_to_mdp.discovery import oracle
 
     return oracle.fit
@@ -137,11 +147,13 @@ class Method:
                 raise ValueError(f"the causal learner needs discovery in {DISCOVERY}")
             if self.selection not in SELECTION:
                 raise ValueError(f"the causal learner needs selection in {list(SELECTION)}")
-            if (self.discovery == "oracle") != (self.selection == "given"):
-                raise ValueError("selection 'given' goes with discovery 'oracle', and only with it")
-            if self.discovery != "oracle":
+            if (self.discovery in GIVEN_GRAPHS) != (self.selection == "given"):
+                raise ValueError(
+                    f"selection 'given' goes with the given graphs {GIVEN_GRAPHS}, and only with them"
+                )
+            if self.discovery not in GIVEN_GRAPHS:
                 _check_options(discovery_function(self.discovery), self.discovery_options, 1, "discovery")
-            _check_options(nbn_intervals.learn, self.learning_options, 2, "learning")
+            _check_options(causal_learner(self).learn, self.learning_options, 2, "learning")
         else:
             if self.discovery is not None or self.selection is not None:
                 raise ValueError(f"learner {self.learner!r} has no discovery or selection to choose")
@@ -182,10 +194,14 @@ class Method:
 
     @property
     def role(self) -> str:
-        """ "baseline" (no causal structure learned), "oracle" (given the true graph) or "ours"."""
+        """ "baseline" (no causal structure learned), "reference" (given the true graph: true graph ->
+        RMDP, true graph -> MDP), "control" (given a wrong graph of a known kind: discovery/controls.py)
+        or "ours"."""
         if self.learner in BASELINES:
             return "baseline"
-        return "oracle" if self.discovery == "oracle" else "ours"
+        if self.discovery == "oracle":
+            return "reference"
+        return "control" if self.discovery in GIVEN_GRAPHS else "ours"
 
     @property
     def guarantee(self) -> bool:
@@ -209,7 +225,9 @@ class Limits:
     """Memory limit of every step (GB) and time limits (seconds) of some steps, by step name."""
 
     mem_gb: float = 8.0
-    timeout_s: dict = field(default_factory=lambda: {"discovery": 60.0, "selection": 60.0, "solve": 60.0})
+    timeout_s: dict = field(
+        default_factory=lambda: {"discovery": 60.0, "selection": 60.0, "learning": 60.0, "solve": 60.0}
+    )
 
 
 # ==========================================================================================
@@ -272,13 +290,20 @@ def _run_step(result: Result, name: str, fn, x, limits: Limits | None):
 # ==========================================================================================
 # Learning (S2-S7) and solving (S8)
 # ==========================================================================================
-def learning_steps(data: Dataset, method: Method, true_parents: dict | None = None) -> list:
-    """The steps of method's learner as (name, function of the previous output)."""
+def causal_learner(method: Method):
+    """S4 of the causal learner: interval sets (nbn_intervals) for the robust solvers, point estimates
+    (nbn_point, no guarantee) for value iteration ("X -> MDP")."""
+    return nbn_point if method.solver == "vi" else nbn_intervals
+
+
+def learning_steps(data: Dataset, method: Method, true_parents: dict | None = None, seed: int = 0) -> list:
+    """The steps of method's learner as (name, function of the previous output). seed: the run's seed,
+    for the learners that draw random numbers (FOCUS's bootstrap ensemble) unless an option sets it."""
     m = method
     if m.learner == "causal":
-        if m.discovery == "oracle":
+        if m.discovery in GIVEN_GRAPHS:
             if true_parents is None:
-                raise ValueError("discovery 'oracle' needs true_parents (e.g. truth.true_parents)")
+                raise ValueError(f"discovery {m.discovery!r} needs its graph as true_parents (tool/sweep.py)")
             discover = discovery_function("oracle")
             first = ("discovery", lambda d: discover(d, true_parents))
         else:
@@ -288,7 +313,7 @@ def learning_steps(data: Dataset, method: Method, true_parents: dict | None = No
         return [
             first,
             ("selection", lambda candidates: select(candidates, data)),
-            ("learning", lambda graph: nbn_intervals.learn(data, graph, **m.learning_options)),
+            ("learning", lambda graph: causal_learner(m).learn(data, graph, **m.learning_options)),
         ]
     if m.learner == "flat_rmdp":
         return [("learning", lambda d: flat_rmdp.learn(d, **m.learning_options))]
@@ -301,15 +326,17 @@ def learning_steps(data: Dataset, method: Method, true_parents: dict | None = No
     if m.learner == "sl_spibb":
         return [("learning", lambda d: spibb.sl_model(d, **m.learning_options))]
     if m.learner == "focus":
+        options = {"seed": seed, **m.learning_options}
         return [
             ("discovery", focus.discover),
-            ("learning", lambda graph: focus.penalised_mdp(data, graph, **m.learning_options)),
+            ("learning", lambda graph: focus.penalised_mdp(data, graph, **options)),
         ]
     return [("discovery", lambda d: ActionGroups(difarl.groups(d, **m.discovery_options)))]
 
 
-def solver_steps(data: Dataset, method: Method, gamma: float) -> list:
-    """The steps of method's solver as (name, function of the learned model)."""
+def solver_steps(data: Dataset, method: Method, gamma: float, seed: int = 0) -> list:
+    """The steps of method's solver as (name, function of the learned model). seed: the run's seed,
+    for the solvers that draw random numbers (offline DQN / CQL) unless an option sets it."""
     opts = method.solver_options
     if method.solver == "box_robust_vi":
         return [("relax", product_bounds.compile), ("solve", lambda mdp: robust_vi.solve(mdp, gamma, **opts))]
@@ -324,13 +351,15 @@ def solver_steps(data: Dataset, method: Method, gamma: float) -> list:
                 raise ValueError("solver 'vi' needs an exact MDP (L == U)")
             return value_iteration.solve(mdp.L, mdp.reward, gamma, **opts)
 
-        return [("solve", vi)]
+        compile_first = [("relax", product_bounds.exact)] if method.learner == "causal" else []
+        return compile_first + [("solve", vi)]  # causal: the factor estimates' product, an exact MDP
     if method.solver == "spibb":
         return [("solve", lambda model: spibb.solve(model, gamma, **opts))]
     if method.solver == "greedy_q":
         alpha = {"cql_alpha": CQL_ALPHA} if method.learner == "offline_cql" else {}
         return [
-            ("training", partial(_train_q, data, gamma, alpha | opts)),  # picklable: it runs in a new process
+            # partial: picklable, the training runs in a new process
+            ("training", partial(_train_q, data, gamma, {"seed": seed} | alpha | opts)),
             ("solve", offline_q.greedy),
         ]
     return [("solve", lambda groups: difarl.fqi(data, groups.groups, gamma, **opts))]
@@ -340,16 +369,65 @@ def _train_q(data: Dataset, gamma: float, options: dict, _model=None):
     return offline_q.learn(data, gamma, **options)
 
 
+SHARED_STEPS = ("discovery", "selection")
+
+
+def _shared_key(method: Method):
+    """Methods with the same discovery and selection (on the same data) share their graph."""
+    if method.learner != "causal":
+        return None
+    return (method.discovery, tuple(sorted(method.discovery_options.items())), method.selection)
+
+
 def learn(
-    data: Dataset, method: Method, limits: Limits | None = None, true_parents: dict | None = None
+    data: Dataset,
+    method: Method,
+    limits: Limits | None = None,
+    true_parents: dict | None = None,
+    seed: int = 0,
+    shared: dict | None = None,
 ) -> Result:
-    """Learn a model from the data. true_parents is used only by discovery "oracle"."""
+    """Learn a model from the data. true_parents: the graph of a given-graph discovery (the oracle's true
+    parents, or a control graph); seed (the run's
+    seed) only by learners that draw random numbers. shared: a dict kept across the methods of one
+    dataset (tool/sweep.py): the first causal method with a given discovery and selection runs them and
+    stores the graph (or how they stopped) and their step records; the others reuse it, so e.g.
+    BIC -> RMDP, BIC -> RMDP (hull) and BIC -> MDP run BIC once and report the same discovery time."""
     result, x = Result(method), data
-    steps = learning_steps(data, method, true_parents)
+    steps = learning_steps(data, method, true_parents, seed)
     if not steps:
         return result  # model-free: nothing before the solver
+    key = _shared_key(method) if shared is not None else None
+    if key is not None and key in shared:
+        entry = shared[key]
+        result.steps.update({name: dict(record) for name, record in entry["steps"].items()})
+        result.info.update(entry["info"])
+        if entry["graph"] is None:  # discovery or selection stopped: so does this method
+            result.status, result.failed_step, result.error = (
+                entry["status"],
+                entry["failed_step"],
+                entry["error"],
+            )
+            return result
+        result.graph = x = entry["graph"]
+        steps = [(name, step) for name, step in steps if name not in SHARED_STEPS]
     for name, step in steps:
         x = _run_step(result, name, step, x, limits)
+        if (
+            key is not None
+            and key not in shared
+            and name in SHARED_STEPS
+            and (x is None or name == "selection")
+        ):
+            graph = x if isinstance(x, Graph) else None
+            shared[key] = {
+                "steps": {s: dict(result.steps[s]) for s in SHARED_STEPS if s in result.steps},
+                "info": dict(result.info) | (dict(graph.report) if graph is not None else {}),
+                "graph": graph,
+                "status": result.status,
+                "failed_step": result.failed_step,
+                "error": result.error,
+            }
         if x is None:
             return result
         if isinstance(x, Graph):
@@ -357,16 +435,19 @@ def learn(
             result.info.update(x.report)
         if isinstance(x, ActionGroups):
             result.info["groups"] = len(x.groups)
+        if isinstance(x, FactorBounds):
+            result.info.update(x.info)
     result.model = x
     return result
 
 
-def solve(result: Result, data: Dataset, gamma: float, limits: Limits | None = None) -> Result:
-    """Solve the learned model: result.solution is the policy and its promise (in place)."""
+def solve(result: Result, data: Dataset, gamma: float, limits: Limits | None = None, seed: int = 0) -> Result:
+    """Solve the learned model: result.solution is the policy and its promise (in place). seed (the
+    run's seed) is used only by solvers that draw random numbers."""
     if not result.ok:
         return result
     x = result.model
-    for name, step in solver_steps(data, result.method, gamma):
+    for name, step in solver_steps(data, result.method, gamma, seed):
         x = _run_step(result, name, step, x, limits)
         if x is None:
             return result
@@ -374,6 +455,42 @@ def solve(result: Result, data: Dataset, gamma: float, limits: Limits | None = N
             result.model = x  # what was learned: the Q-table (kept and saved)
     result.solution = x
     return result
+
+
+# ---- another reward on the same model (reward transfer, S9) -----------------------------------------
+MODEL_FREE = ("offline_dqn", "offline_cql", "difarl")  # no model to re-plan: their policy is kept
+
+
+def with_reward(model, reward: Reward):
+    """The learned model with another reward (the dynamics, sets or estimates untouched). FOCUS's
+    uncertainty penalty is re-applied on the new reward's scale."""
+    if isinstance(model, IntervalMDP) and "penalty" in model.info:
+        step = reward.R[:, :, None] + reward.r_next[None, None, :]
+        scale = float(step.max() - step.min()) or 1.0
+        reward = Reward(reward.R - scale * model.info["penalty"], reward.r_next, reward.terminal)
+    return dataclasses.replace(model, reward=reward)
+
+
+def replan(
+    result: Result, data: Dataset, gamma: float, limits: Limits | None = None, seed: int = 0
+) -> Result:
+    """result under the reward carried by data (the same transitions, another reward), without
+    re-learning: a model-based method re-solves its learned model; a model-free one (MODEL_FREE)
+    keeps its policy and has no promise for this reward (V = NaN)."""
+    if not result.ok or result.solution is None:
+        return result
+    if result.method.learner in MODEL_FREE:
+        out = Result(result.method, graph=result.graph, info=dict(result.info), model=result.model)
+        old = result.solution
+        out.solution = Solution(np.full_like(old.V, np.nan, dtype=float), old.pi, old.probs)
+        return out
+    out = Result(
+        result.method,
+        graph=result.graph,
+        info=dict(result.info),
+        model=with_reward(result.model, data.reward),
+    )
+    return solve(out, data, gamma, limits, seed)
 
 
 def standard_methods(
@@ -384,10 +501,16 @@ def standard_methods(
     state_parents: int = 3,
 ) -> dict[str, Method]:
     """The methods of experiment 1 (used by experiments/exp1/*_complete.py):
-    ours (BIC / PCMCI+ / GES -> RMDP), the oracle (Schnitzer et al.: IA, and exact if `exact`, which
-    needs 0/1 state variables) and the baselines (flat RMDP, flat MDP, DiFaRL, flat SPIBB, SL-SPIBB
-    with candidate parent sets of `state_parents` state variables, FOCUS; with `deep`, also offline
-    DQN and offline CQL). Every baseline uses the defaults of its module in baselines/."""
+    ours (BIC / PCMCI+ / GES / DYNOTEARS -> RMDP; BIC -> RMDP with hull or padded families; the same
+    four discoveries -> MDP, point estimates and value iteration, with true graph -> MDP), the references
+    (true graph -> RMDP with the box relaxation of our robust arms; with `exact`, for 0/1 state
+    variables, also true graph -> RMDP (per-(s,a) product): robust VI over the products of the factor
+    intervals, Schnitzer et al.'s exact solver, which is exact per (s, a) but still lets nature choose
+    every (s, a) independently; the pair measures what the box costs), the controls (given wrong
+    graphs of a known kind, discovery/controls.py: logger-Markov graph, random matched graph, true
+    graph + 1, each -> RMDP with the box) and the baselines (flat RMDP, flat MDP, DiFaRL, flat SPIBB,
+    SL-SPIBB with candidate parent sets of `state_parents` state variables, FOCUS; with `deep`, also
+    offline DQN and offline CQL). Every baseline uses the defaults of its module in baselines/."""
     causal = {"selection": "bic_best", "learning_options": {"delta": delta}}
     oracle = {"discovery": "oracle", "selection": "given", "learning_options": {"delta": delta}}
     methods = {
@@ -402,8 +525,68 @@ def standard_methods(
             "causal", "box_robust_vi", discovery="pcmci+", discovery_options={"alpha": 0.01}, **causal
         ),
         "GES -> RMDP": Method("causal", "box_robust_vi", discovery="ges", **causal),
-        "Schnitzer IA": Method("causal", "box_robust_vi", **oracle),
-        "Schnitzer exact": Method("causal", "vertex_robust_vi", **oracle),
+        "DYNOTEARS -> RMDP": Method("causal", "box_robust_vi", discovery="dynotears", **causal),
+        # BIC's graph, with each family widened by the WIDEN_K inputs that BIC ranks next
+        # (scm_learning/nbn_intervals.py): the hull over the families, or one padded family
+        **{
+            f"BIC -> RMDP ({label})": Method(
+                "causal",
+                "box_robust_vi",
+                discovery="bic",
+                discovery_options={"max_parents": max_parents},
+                selection="bic_best",
+                learning_options={"delta": delta, "widen": widen, "k": WIDEN_K},
+            )
+            for label, widen in (("hull", "hull"), ("padded", "pad"))
+        },
+        # the references: the true graph given, with the exact product set (Schnitzer et al.'s exact
+        # solver, 0/1 variables; else the box relaxation, as our arms) or with point estimates and VI
+        "true graph -> RMDP": Method("causal", "box_robust_vi", **oracle),
+        **(
+            {"true graph -> RMDP (per-(s,a) product)": Method("causal", "vertex_robust_vi", **oracle)}
+            if exact
+            else {}
+        ),
+        # the controls: wrong graphs of a known kind, learned and solved as the true graph
+        **{
+            label: Method("causal", "box_robust_vi", **(oracle | {"discovery": control}))
+            for label, control in (
+                ("logger-Markov graph -> RMDP", "logger_markov"),
+                ("random matched graph -> RMDP", "random_matched"),
+                ("true graph + 1 -> RMDP", "plus_one"),
+            )
+        },
+        # certainty equivalence: the same discovery and selection, point estimates (nbn_point,
+        # Laplace), value iteration; no guarantee. "true graph -> MDP" is their reference.
+        "BIC -> MDP": Method(
+            "causal",
+            "vi",
+            discovery="bic",
+            discovery_options={"max_parents": max_parents},
+            selection="bic_best",
+            learning_options={"alpha": POINT_ALPHA},
+        ),
+        "PCMCI+ -> MDP": Method(
+            "causal",
+            "vi",
+            discovery="pcmci+",
+            discovery_options={"alpha": 0.01},
+            selection="bic_best",
+            learning_options={"alpha": POINT_ALPHA},
+        ),
+        "GES -> MDP": Method(
+            "causal", "vi", discovery="ges", selection="bic_best", learning_options={"alpha": POINT_ALPHA}
+        ),
+        "DYNOTEARS -> MDP": Method(
+            "causal",
+            "vi",
+            discovery="dynotears",
+            selection="bic_best",
+            learning_options={"alpha": POINT_ALPHA},
+        ),
+        "true graph -> MDP": Method(
+            "causal", "vi", discovery="oracle", selection="given", learning_options={"alpha": POINT_ALPHA}
+        ),  # fmt: skip
         "flat RMDP": Method("flat_rmdp", "robust_vi", learning_options={"delta": delta}),
         "flat MDP": Method("flat_mdp", "vi"),
         "DiFaRL": Method(
@@ -413,8 +596,6 @@ def standard_methods(
     methods["flat SPIBB"] = Method("spibb", "spibb")
     methods["SL-SPIBB"] = Method("sl_spibb", "spibb", learning_options={"d": state_parents})
     methods["FOCUS"] = Method("focus", "vi")
-    if not exact:
-        del methods["Schnitzer exact"]
     if deep:
         methods["offline DQN"] = Method("offline_dqn", "greedy_q")
         methods["offline CQL"] = Method("offline_cql", "greedy_q")

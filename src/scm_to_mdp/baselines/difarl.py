@@ -1,7 +1,8 @@
 """DiFaRL: Ehrlichman, Tang, Dykstra, Makar, "Causal Discovery for Efficient Offline RL with Factored
 Action Spaces", CLeaR 2026, PMLR 323:1424-1449 (code: https://github.com/cehr123/DiFaRL).
 
-Two steps, model-free, no guarantee:
+Two steps, model-free, no guarantee. The sub-actions are the action variables (categorical; a domain
+with one action variable has one group, and DiFaRL is then tabular FQI):
 1. groups: sub-actions a_i and a_j share a group when A_i is NOT independent of A_j given
    (S_t, S_{t+1}) (their Prop. 1). Tested here with a G^2 test at p = 0.005 (the threshold of their
    Sec. 5.1) instead of KCIT, as they allow for discrete data.
@@ -22,10 +23,13 @@ from scipy.stats import chi2
 from scm_to_mdp.core import Dataset, Solution, encode
 
 
-def g2_pvalue(x: np.ndarray, y: np.ndarray, strata: np.ndarray) -> float:
-    """G^2 test of binary x independent of binary y given the discrete strata (stratified 2x2 tables)."""
+def g2_pvalue(x: np.ndarray, y: np.ndarray, strata: np.ndarray, cx: int = 2, cy: int = 2) -> float:
+    """G^2 test of x (values 0..cx-1) independent of y (0..cy-1) given the discrete strata (stratified
+    cx x cy tables)."""
     ids, z = np.unique(strata, return_inverse=True)
-    table = np.bincount(z * 4 + x * 2 + y, minlength=len(ids) * 4).reshape(len(ids), 2, 2).astype(float)
+    cells = cx * cy
+    table = np.bincount(z * cells + x * cy + y, minlength=len(ids) * cells)
+    table = table.reshape(len(ids), cx, cy).astype(float)
     total = table.sum((1, 2), keepdims=True)
     expected = table.sum(2, keepdims=True) * table.sum(1, keepdims=True) / np.maximum(total, 1)
     with np.errstate(divide="ignore", invalid="ignore"):
@@ -39,8 +43,6 @@ def g2_pvalue(x: np.ndarray, y: np.ndarray, strata: np.ndarray) -> float:
 def groups(dataset: Dataset, p_threshold: float = 0.005) -> list[list[int]]:
     """Groups of sub-actions (indices into dataset.action_vars), by union-find over dependent pairs."""
     df = dataset.df
-    if not all(dataset.cards[a] == 2 for a in dataset.action_vars):
-        raise ValueError("DiFaRL here needs 0/1 action columns (its G^2 tables and Q-tables are binary)")
     both = np.hstack([df[dataset.state_vars].values, df[dataset.next_vars].values])
     strata = encode(both, dataset.state_cards * 2)  # one stratum per (s, s')
     actions = dataset.action_vars
@@ -52,7 +54,8 @@ def groups(dataset: Dataset, p_threshold: float = 0.005) -> list[list[int]]:
         return i
 
     for i, j in itertools.combinations(range(len(actions)), 2):
-        if g2_pvalue(df[actions[i]].values, df[actions[j]].values, strata) < p_threshold:
+        x, y = df[actions[i]].values, df[actions[j]].values
+        if g2_pvalue(x, y, strata, dataset.cards[actions[i]], dataset.cards[actions[j]]) < p_threshold:
             root[find(i)] = find(j)  # dependent: same group
     found: dict[int, list[int]] = {}
     for i in range(len(actions)):
@@ -75,13 +78,14 @@ def fqi(
     S, K = len(dataset.B), len(dataset.actions)
 
     # one tabular block of parameters per group: theta_g[s, value of the group's sub-actions]
-    sizes = [2 ** len(g) for g in action_groups]
+    group_cards = [[dataset.cards[dataset.action_vars[j]] for j in g] for g in action_groups]
+    sizes = [int(np.prod(c)) for c in group_cards]
     offsets = np.concatenate([[0], np.cumsum([S * size for size in sizes])[:-1]])
 
     def features(states, action_matrix):  # [rows, groups] index of the active parameter of every group
         cols = [
-            off + states * size + action_matrix[:, g] @ (2 ** np.arange(len(g))[::-1])
-            for g, off, size in zip(action_groups, offsets, sizes, strict=True)
+            off + states * size + encode(action_matrix[:, g], cards)
+            for g, cards, off, size in zip(action_groups, group_cards, offsets, sizes, strict=True)
         ]
         return np.stack(cols, 1)
 

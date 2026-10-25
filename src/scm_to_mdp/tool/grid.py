@@ -85,7 +85,10 @@ class Grid:
     skip: Callable[[Any, Policy], bool] | None = None  # (knob, policy) -> True: not a valid setting
     constants: dict = field(default_factory=dict)  # the script's constants used by make_env (grid.json)
     save_models: str = "largest"  # first seed: save the models (tool/store.py): "largest" n, "all", "none"
-    pictures_max_states: int = 16  # draw the MDPs of problems with at most this many states
+    pictures_max_states: int = 16  # draw the MDPs (chain pictures) of problems with at most this many states
+    reward_transfer: bool = False  # also evaluate under the environment's alternative rewards (sweep.py)
+    # dynamics shift (sweep.py): (size, knob, seed) -> {name: Env} with other dynamics, same observed states
+    shifts: Callable[[Any, Any, int], dict] | None = None
 
 
 # ---- the pieces an Experiment needs (top-level, so that worker processes can receive them) ----------
@@ -135,6 +138,8 @@ def experiments(grid: Grid) -> list[Experiment]:
             settings={"policy": asdict(policy), **grid.constants},
             save_models=grid.save_models,
             pictures_max_states=grid.pictures_max_states,
+            reward_transfer=grid.reward_transfer,
+            shifts=None if grid.shifts is None else partial(env_at, grid.shifts, knob),
         )
         for knob, policy in settings(grid)
     ]

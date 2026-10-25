@@ -14,8 +14,8 @@ def test_sample_table(env, dataset):
     assert len(df) == 300 * 20
     assert df.index.names == ["episode", "t"]
     assert dataset.state_vars == ["m0", "m1", "m2"]
-    assert dataset.action_vars == ["a0", "a1", "a2"]
-    assert (df[dataset.action_vars].sum(axis=1) <= 1).all()  # one-hot or no-op
+    assert dataset.action_vars == ["reboot"] and dataset.cards["reboot"] == 4  # no-op or repair j
+    assert set(df["reboot"].unique()) <= {0, 1, 2, 3}
 
 
 def test_same_seed_same_data():
@@ -26,20 +26,20 @@ def test_same_seed_same_data():
 def test_reward_and_inputs(env, dataset):
     assert dataset.reward.R.shape == (8, len(dataset.actions))
     X = slice_inputs(dataset)
-    assert X.shape == (8, len(dataset.actions), 6)
+    assert X.shape == (8, len(dataset.actions), 4)
     assert np.array_equal(X[:, 0, :3], dataset.B)
 
 
 def test_true_parents_follow_the_hidden_mapping(env):
     parents = env.true_parents()
     for i in range(3):
-        assert set(parents[f"m{i}"]) == {f"m{i}", f"m{(i - 1) % 3}", f"a{env.repairs.index(i)}"}
+        assert set(parents[f"m{i}"]) == {f"m{i}", f"m{(i - 1) % 3}", "reboot"}
 
 
 def test_true_actions_map_back(env, truth, dataset):
     mapped = truth.actions_of(dataset)
-    for a, k in zip(dataset.actions, mapped, strict=True):
-        assert k == (0 if a.sum() == 0 else env.repairs[int(np.argmax(a))] + 1)
+    for a, k in zip(dataset.actions, mapped, strict=True):  # reboot = j + 1 repairs machine repairs[j]
+        assert k == (0 if a[0] == 0 else env.repairs[int(a[0]) - 1] + 1)
 
 
 def test_callable_policy(env):

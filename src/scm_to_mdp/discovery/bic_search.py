@@ -1,10 +1,13 @@
 """Exact BIC parent search for every next-state variable, under the time order (step S2).
 
-For each x_i' we score every subset of the slice-t inputs (state and action columns) with at most
-max_parents elements. fit returns every candidate set with its BIC; the selection rule (S3,
-selection/bic_best.py) keeps the best. The time order makes this a separate search per target, since
-no choice of slice-t parents can create a cycle (Koller & Friedman, Probabilistic Graphical Models,
-2009, Sec. 18.4.2, Prop. 18.4, p. 810). With N samples BIC
+For each x_i' we score every subset of the candidate parents with at most max_parents elements: the
+slice-t inputs (state and action columns) and the other next-state variables x_j' (same-step edges:
+the search is not constrained beyond the time order). fit returns every candidate set with its BIC;
+the selection rule (S3, selection/bic_best.py) keeps the best combination whose same-step edges form
+a DAG. Without same-step parents the search is separate per target, since no choice of slice-t
+parents can create a cycle (Koller & Friedman, Probabilistic Graphical Models, 2009, Sec. 18.4.2,
+Prop. 18.4, p. 810); with them, bic_best finds the best acyclic combination exactly (dynamic
+programming over the sets of next-state variables). With N samples BIC
 picks at most O(log N) parents, so a bound costs little (de Campos & Ji, JMLR 12:663-689, 2011,
 Cor. 3); max_parents=None searches every subset.
 
@@ -25,14 +28,15 @@ import math
 import numpy as np
 from nbn.structure import HypothesisSet
 
-from scm_to_mdp.core import Candidates, Dataset
+from scm_to_mdp.core import NEXT_MARK, Candidates, Dataset
 
 
 def feasible_rows(parents: tuple[str, ...], cards: dict[str, int], action_vars, actions: np.ndarray) -> int:
-    """Rows of the table of `parents` that can occur: every combination of the non-action parents,
-    times the number of distinct values the action parents take over the action set [K, n_a]."""
+    """Rows of the table of `parents` that can occur: every combination of the non-action parents
+    (state variables at t or t+1), times the number of distinct values the action parents take over
+    the action set [K, n_a]."""
     columns = [j for j, a in enumerate(action_vars) if a in parents]
-    n = math.prod(cards[p] for p in parents if p not in action_vars)
+    n = math.prod(cards[p.removesuffix(NEXT_MARK)] for p in parents if p not in action_vars)
     if columns:
         n *= len({tuple(a) for a in actions[:, columns]})
     return n
@@ -49,14 +53,27 @@ def bic(counts: np.ndarray, n_rows: int | None = None) -> float:
 
 
 def fit(dataset: Dataset, max_parents: int | None = 3) -> Candidates:
-    inputs = dataset.inputs
-    k_max = len(inputs) if max_parents is None else max_parents
-    candidates = [c for k in range(k_max + 1) for c in itertools.combinations(inputs, k)]
-    hs = HypothesisSet(dataset.variables, {v: candidates for v in dataset.next_vars})
-    counts = hs.counts(dataset.tensors())  # NBN counts every (target, parent set) family
-    rows = {c: feasible_rows(c, dataset.cards, dataset.action_vars, dataset.actions) for c in candidates}
-    scores = {
-        v: [(c, bic(counts[(v_next, c)].numpy(), rows[c])) for c in candidates]
-        for v, v_next in zip(dataset.state_vars, dataset.next_vars, strict=True)
+    pairs = list(zip(dataset.state_vars, dataset.next_vars, strict=True))
+    options = {v_next: dataset.inputs + [u for u in dataset.next_vars if u != v_next] for _, v_next in pairs}
+    candidates = {
+        v_next: [
+            c
+            for k in range(len(names) + 1 if max_parents is None else max_parents + 1)
+            for c in itertools.combinations(names, k)
+        ]
+        for v_next, names in options.items()
     }
-    return Candidates("scored_sets", scores=scores, report={"candidates": len(candidates)})
+    tensors = dataset.tensors()
+    counts = {  # one HypothesisSet per target: NBN refuses a union of candidate edges with a cycle,
+        # which same-step candidates of two targets make (x' <- y' and y' <- x')
+        v_next: HypothesisSet(dataset.variables, {v_next: sets}).counts(tensors)
+        for v_next, sets in candidates.items()
+    }
+    every = {c for sets in candidates.values() for c in sets}
+    rows = {c: feasible_rows(c, dataset.cards, dataset.action_vars, dataset.actions) for c in every}
+    scores = {
+        v: [(c, bic(counts[v_next][(v_next, c)].numpy(), rows[c])) for c in candidates[v_next]]
+        for v, v_next in pairs
+    }
+    report = {"candidates": max(len(sets) for sets in candidates.values())}
+    return Candidates("scored_sets", scores=scores, report=report)

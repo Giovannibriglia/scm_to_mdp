@@ -1,34 +1,16 @@
+"""The pictures and result figures (plotting/): the MDP pictures, the figures of a sweep, the
+rollouts needed, the parameter-learning and normalised-value figures, the validity gate."""
+
 import numpy as np
 import pandas as pd
 
 from scm_to_mdp.compilation import product_bounds
-from scm_to_mdp.core import Graph, IntervalMDP, Solution
+from scm_to_mdp.core import IntervalMDP
 from scm_to_mdp.discovery import oracle
-from scm_to_mdp.evaluation import evaluate, optimal_values, random_starts, structure_distances
 from scm_to_mdp.plotting import figures, mdp_graph
 from scm_to_mdp.plotting.style import method_styles
 from scm_to_mdp.scm_learning import nbn_intervals
 from scm_to_mdp.selection import given
-from scm_to_mdp.solving import value_iteration
-
-
-def test_shd_and_sid(env, dataset):
-    truth = env.true_parents()
-    assert structure_distances(Graph(truth), truth, dataset) == {"shd": 0, "missing": 0, "extra": 0, "sid": 0}
-    v = dataset.state_vars[0]
-    extra = {**truth, v: tuple(dataset.inputs)}  # every input as a parent: a superset
-    d = structure_distances(Graph(extra), truth, dataset)
-    assert d["missing"] == 0 and d["extra"] == len(dataset.inputs) - len(truth[v])
-    assert d["sid"] == 0  # extra parents are still a valid adjustment set
-    missing = {**truth, v: truth[v][:-1]}  # one true parent dropped
-    d = structure_distances(Graph(missing), truth, dataset)
-    assert (d["shd"], d["missing"], d["extra"]) == (1, 1, 0) and d["sid"] > 0
-
-
-def test_random_starts_are_live_and_distinct(truth):
-    starts = random_starts(truth, 5, seed=0)
-    assert len(set(starts)) == 5 and not truth.reward.terminal[starts].any()
-    assert np.array_equal(starts, random_starts(truth, 5, seed=0))
 
 
 def test_mdp_pictures(env, truth, dataset, tmp_path):
@@ -127,14 +109,75 @@ def test_rollouts_needed_counts_only_lasting_success():
     assert np.isinf(needed[1])  # never good up to the largest n
 
 
-def test_violation_metrics(truth, dataset):
-    V_star = optimal_values(truth, 0.9)
-    pi = np.zeros(truth.n_states, dtype=np.int64)  # learner action 0 everywhere
-    V_true = value_iteration.policy_value(truth.P, truth.reward, truth.actions_of(dataset)[pi], 0.9)
-    promise = V_true - 1.0
-    promise[2] = V_true[2] + 0.5  # the promise fails in one state, by 0.5
-    out = evaluate(truth, dataset, Solution(promise, pi), 0.9, V_star, random_starts(truth, 4, 0))
-    assert not out["safe"]
-    assert np.isclose(out["violation_rate"], 1 / truth.n_states) and np.isclose(out["worst_violation"], 0.5)
-    out = evaluate(truth, dataset, Solution(V_true - 1.0, pi), 0.9, V_star, random_starts(truth, 4, 0))
-    assert out["safe"] and out["violation_rate"] == 0 and out["worst_violation"] == 0
+def test_parameter_learning_figure(tmp_path):
+    rng = np.random.default_rng(0)
+    rows = [
+        {"method": m, "role": "ours", "guarantee": True, "size": size, "seed": seed,
+         "s4_width": rng.uniform(0.1, 0.5), "s4_coverage": rng.uniform(0.95, 1),
+         "s4_unseen": rng.uniform(0, 0.3), "s4_rows": 10 * size}
+        for m in ("A", "B") for size in (2, 3, 4) for seed in (0, 1)
+    ]  # fmt: skip
+    res = pd.DataFrame(rows)
+    axis = figures.Axis(res, [2, 3, 4], ["2", "3", "4"], "N")
+    styles = method_styles({"A": ("ours", True), "B": ("ours", True)})
+    figures.parameter_learning(res, axis, ["A", "B"], styles, 0.05, "t", tmp_path / "parameter_learning")
+    assert (tmp_path / "parameter_learning.png").exists() and (tmp_path / "parameter_learning.pdf").exists()
+
+
+def test_normalised_value_and_its_figure(tmp_path):
+    res = pd.DataFrame(
+        {"method": ["A"] * 4, "role": "ours", "guarantee": True, "size": [2, 2, 3, 3], "seed": [0, 1, 0, 1],
+         "true": [5.0, 3.0, 2.0, 2.0], "promise": [4.0, 3.5, 1.0, 1.0], "V_star_obs": [5.0, 5.0, 2.0, 2.0],
+         "V_random": [1.0, 1.0, 2.0, 2.0], "safe": [True, False, True, True]}
+    )  # fmt: skip
+    res = res.assign(
+        V_star_K=[6.0, 6.0, 2.0, 2.0], regret_K=[1.0, 3.0, 0.0, 0.0], V_random_K=[2.0, 2.0, 2.0, 2.0]
+    )
+    out = figures.normalised(res)
+    assert out["norm_value"].tolist()[:2] == [1.0, 0.5] and out["norm_value_K"].tolist()[:2] == [0.75, 0.25]
+    assert out["norm_value"].iloc[2:].isna().all()  # random = optimal: nothing to normalise by
+    res = res.assign(V_star=[10.0, 10.0, 4.0, 4.0], V_oracle_K=[8.0, 8.0, 4.0, 4.0])
+    out = figures.normalised(res)
+    assert out["oracle_share"].tolist() == [0.5, 0.3, 0.5, 0.5]
+    assert out["oracle_share_K"].tolist()[:2] == [0.625, 0.375]
+    axis = figures.Axis(res, [2, 3], ["2", "3"], "N")
+    styles = method_styles({"A": ("ours", True)})
+    figures.performance_normalized(
+        res, axis, ["A"], styles, 0.95, 20, "t", tmp_path / "performance_normalized"
+    )
+    assert (tmp_path / "performance_normalized.png").exists()
+
+
+def test_validity_gate_and_figure(tmp_path):
+    rows = []
+    for method, safe in (("A", [True, True, True]), ("B", [True, False, True])):
+        for seed, ok in enumerate(safe):
+            rows.append({"method": method, "role": "ours", "guarantee": True, "size": "2", "seed": seed,
+                         "safe": ok, "true": 3.0, "promise": 2.0, "V_star_obs": 4.0, "V_random": 0.0,
+                         "cert_gap": 1.5})  # fmt: skip
+    res = pd.DataFrame(rows)
+    gate = figures.validity_gate(res, 0.05)
+    assert gate[res["method"] == "A"].all() and not gate[res["method"] == "B"].any()
+    out = figures.normalised(res)
+    assert np.allclose(out["norm_promise"], 0.5) and np.allclose(out["norm_cert_gap"], 0.375)
+    axis = figures.Axis(res, ["2"], ["2"], "N")
+    styles = method_styles({"A": ("ours", True), "B": ("ours", True)})
+    figures.gated_comparison(res, axis, ["A", "B"], styles, 0.05, "t", tmp_path / "gated")
+    assert (tmp_path / "gated.png").exists()
+
+
+def test_chain_picture_edges_and_grid_layout(tmp_path):
+    """Solid edges for the likeliest next states (ties included), dashed for the less likely ones; a
+    one-agent lake is laid out on its grid."""
+    from scm_to_mdp.envs import FrozenLake
+    from scm_to_mdp.tool import store
+
+    row = np.array([0.1, 0.4, 0.4, 0.06, 0.04])
+    assert mdp_graph.outcomes(row, 0.05, 3) == [(1, True), (2, True), (0, False)]
+    env = FrozenLake("4x4", 1, 0)
+    truth = env.ground_truth()
+    data = truth.learner_spec.read(env.sample(5, 10, "random"))
+    pos = store.positions(data)
+    assert pos.shape == (16, 2) and set(map(tuple, pos)) == {(x, -y) for x in range(4) for y in range(4)}
+    store.draw_ground_truth(truth, data, "lake", tmp_path / "lake")
+    assert (tmp_path / "lake.png").exists()

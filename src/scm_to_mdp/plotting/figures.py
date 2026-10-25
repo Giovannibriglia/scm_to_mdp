@@ -2,11 +2,15 @@
 
 Figures over the problem size, at one number of rollouts:
     performance   regret and promise - true value (nominal start, K random starts)
+    performance_normalized   the normalised value of the policy, (V^pi - V_random) / (V*_obs - V_random)
+                  (0 = random, 1 = optimal; D4RL's normalised score), nominal start and K random starts
     validity      hold rate of the promise, violation rate, worst violation
     structure     SHD and SID of the selected graph
+    parameter_learning   the learned probability sets: width, coverage, unseen rows, model size
     resources     time or peak memory of discovery, learning and solving
 A point is the mean over seeds, with a band of one standard error, drawn only when every seed of
-that size finished; a step stopped by a limit is an X at its measured time / memory.
+that size finished; in the time / memory figures, a method stopped by that limit (or skipped
+after such a stop) has its marker on the limit line, at every size concerned.
 
 Figure over the problem size and the number of rollouts:
     sample_efficiency   rollouts needed for a policy that is at least 95% optimal
@@ -109,6 +113,9 @@ def _legend(fig, methods, styles, extra=()):
 
 
 def _as_float(series: pd.Series) -> pd.Series:
+    """0/1 from booleans (or their text); numbers (e.g. a share averaged over tasks) pass through."""
+    if pd.api.types.is_numeric_dtype(series) and not pd.api.types.is_bool_dtype(series):
+        return series.astype(float)
     return series.map({True: 1.0, False: 0.0, "True": 1.0, "False": 0.0}).astype(float)
 
 
@@ -159,6 +166,230 @@ def performance(res, axis: Axis, methods, styles, k: int, title: str, stem):
     _legend(fig, shown, styles, extra=[hollow])
     fig.suptitle(title)
     fig.tight_layout(rect=(0, 0.1, 1, 1))
+    save(fig, stem)
+
+
+def _span(best: pd.Series, rand: pd.Series) -> pd.Series:
+    """best - rand, NaN where it is too small to divide by (random about as good as the optimum)."""
+    span = best - rand
+    return span.where(span.abs() > 1e-6 * np.maximum(best.abs(), 1.0))
+
+
+def normalised(res: pd.DataFrame) -> pd.DataFrame:
+    """res with the min-max normalised value of the policy (0 = the uniformly random policy, 1 = the
+    best policy over the observed state): the normalisation of D4RL (Fu et al. 2020, Sec. 5) and of
+    Atari's human-normalised score (Mnih et al. 2015), with the exact optimum and random policy as
+    anchors. NaN where V*_obs - V_random is too small to divide by.
+        norm_value     (V^pi - V_random) / (V*_obs - V_random) at the nominal start
+        norm_value_K   the same on the averages over the k random start states (true_K = V_star_K -
+                       regret_K; needs V_random_K, the random policy's average over the same starts)
+    and the share of the oracle's optimum, V* by value iteration on the full ground-truth MDP (an agent
+    that also sees the hidden variables):
+        oracle_share     V^pi / V* at the nominal start (NaN if V* <= 0)
+        oracle_share_K   the same on the averages over the k starts (needs V_oracle_K)
+    and, on the same scale, what a method claims and how far its certificate reaches:
+        norm_promise     (promise - V_random) / (V*_obs - V_random)
+        norm_cert_gap    (V_opt - V_rob) / (V*_obs - V_random) (robust methods, evaluation.certificate)"""
+    if "norm_value" in res.columns:  # already normalised (e.g. averaged over tasks: transfer.average)
+        return res
+    num = {c: pd.to_numeric(res[c], errors="coerce") for c in ("true", "V_star_obs", "V_random")}
+    span = _span(num["V_star_obs"], num["V_random"])
+    out = res.assign(norm_value=(num["true"] - num["V_random"]) / span)
+    if "promise" in res.columns:
+        promise = pd.to_numeric(res["promise"], errors="coerce")
+        out = out.assign(norm_promise=(promise - num["V_random"]) / span)
+    if "cert_gap" in res.columns:
+        out = out.assign(norm_cert_gap=pd.to_numeric(res["cert_gap"], errors="coerce") / span)
+    if {"V_star_K", "regret_K", "V_random_K"} <= set(res.columns):
+        best_K, rand_K = (pd.to_numeric(res[c], errors="coerce") for c in ("V_star_K", "V_random_K"))
+        true_K = best_K - pd.to_numeric(res["regret_K"], errors="coerce")
+        out = out.assign(norm_value_K=(true_K - rand_K) / _span(best_K, rand_K))
+        if "V_oracle_K" in res.columns:
+            oracle_K = pd.to_numeric(res["V_oracle_K"], errors="coerce")
+            out = out.assign(oracle_share_K=true_K / oracle_K.where(oracle_K > 0))
+    if "V_star" in res.columns:
+        oracle = pd.to_numeric(res["V_star"], errors="coerce")
+        out = out.assign(oracle_share=num["true"] / oracle.where(oracle > 0))
+    return out
+
+
+def performance_normalized(res, axis: Axis, methods, styles, target: float, k: int, title: str, stem):
+    """2 x 2, at the nominal start (left) and over the k random start states (right): top, the
+    normalised value of the policy (0 = random, 1 = optimal over the observed state); bottom, the
+    share of the oracle's optimum V* (value iteration on the full ground-truth MDP). A line at
+    `target` in every panel (see normalised)."""
+    setup()
+    data = normalised(res)
+    fig, axes = plt.subplots(2, 2, figsize=(FULL_WIDTH, 5.6), sharex=True)
+    panels = [
+        ("norm_value", "Normalised value, nominal start"),
+        ("norm_value_K", f"Normalised value, {k} random starts"),
+        ("oracle_share", "Share of the oracle's optimum, nominal start"),
+        ("oracle_share_K", f"Share of the oracle's optimum, {k} random starts"),
+    ]
+    shown = []
+    for ax, (metric, panel) in zip(axes.flat, panels, strict=True):
+        for m in methods:
+            mean, sem = axis.mean_sem(data, m, metric) if metric in data else (None, None)
+            if mean is None or np.isnan(mean).all():
+                continue
+            _line(ax, axis, methods, styles, m, mean, sem)
+            if m not in shown:
+                shown.append(m)
+        if metric.startswith("norm"):
+            lines = [(1.0, "-", "optimal ", "bottom"), (target, "--", f"{target:.0%} ", "top")]
+            lines.append((0.0, ":", "random ", "bottom"))
+            ylabel = "(V^π − V_rand) / (V*_obs − V_rand)"
+        else:
+            lines = [(1.0, "-", "oracle ", "bottom"), (target, "--", f"{target:.0%} ", "top")]
+            ylabel = "V^π / V*  (V* = VI on the true MDP)"
+            ax.yaxis.set_major_formatter(plt.FuncFormatter(lambda v, _: f"{v:.0%}"))
+        for level, style, text, va in lines:
+            ax.axhline(level, color="k", ls=style, lw=0.8)
+            ax.text(axis.x[-1], level, text, va=va, ha="right", fontsize=7)
+        ax.set_title(panel)
+        axis.finish(ax, ylabel)
+    for ax in axes[0]:
+        ax.set_xlabel("")  # the x axis is shared: named on the bottom row only
+    _legend(fig, shown, styles)
+    fig.suptitle(title)
+    fig.tight_layout(rect=(0, 0.08, 1, 1))
+    save(fig, stem)
+
+
+def validity_gate(res: pd.DataFrame, delta: float) -> pd.Series:
+    """Per row: does its method keep its promise in this size, i.e. a hold rate over the seeds of at
+    least 1 - delta? A method without a promise (no 'safe' value) never passes."""
+    hold = _as_float(res["safe"]) if "safe" in res else pd.Series(np.nan, index=res.index)
+    rate = hold.groupby([res["method"], res["size"]]).transform("mean")
+    return rate >= 1 - delta - 1e-9
+
+
+def gated_comparison(res, axis: Axis, methods, styles, delta: float, title: str, stem):
+    """2 x 2, the validity-gated comparison: top, the normalised true value and the normalised promise
+    (the value a method guarantees) of the methods whose promise held in at least 1 - delta of the
+    seeds at that size (lines; a method that failed the gate is drawn as faint crosses at its value);
+    bottom left, the hold rate; bottom right, the certificate (V_opt - V_rob) / (V*_obs - V_rand) of
+    the robust methods, an upper bound on their normalised regret when the truth is in the set."""
+    setup()
+    data = normalised(res)
+    data = data.assign(safe_rate=_as_float(data["safe"]) if "safe" in data else np.nan)
+    valid = validity_gate(data, delta)
+    fig, axes = plt.subplots(2, 2, figsize=(FULL_WIDTH, 5.8), sharex=True)
+    panels = [
+        ("norm_value", "True value, methods whose promise holds", "(V^π − V_rand) / (V*_obs − V_rand)"),
+        (
+            "norm_promise",
+            "Guaranteed value (promise), same methods",
+            "(promise − V_rand) / (V*_obs − V_rand)",
+        ),
+        ("safe_rate", "Hold rate of the promise", "share of seeds"),
+        (
+            "norm_cert_gap",
+            "Certificate V_opt − V_rob (robust methods)",
+            "(V_opt − V_rob) / (V*_obs − V_rand)",
+        ),
+    ]
+    shown = []
+    for i, (ax, (metric, panel, ylabel)) in enumerate(zip(axes.flat, panels, strict=True)):
+        for m in methods:
+            if metric not in data:
+                continue
+            gated = i < 2
+            rows = data.assign(**{metric: data[metric].where(valid)}) if gated else data
+            mean, sem = axis.mean_sem(rows, m, metric)
+            if gated:
+                faint, _ = axis.mean_sem(data.assign(**{metric: data[metric].where(~valid)}), m, metric)
+                if faint is not None and not np.isnan(faint).all():
+                    st = styles[m]
+                    ax.plot(axis.x + _dodge(methods, m), faint, ls="none", marker="x", color=st["color"],
+                            alpha=0.35)  # fmt: skip
+            if mean is None or np.isnan(mean).all():
+                continue
+            _line(ax, axis, methods, styles, m, mean, 0 * sem if metric == "safe_rate" else sem)
+            if m not in shown:
+                shown.append(m)
+        if i < 2:
+            for level, style, text in [(1.0, "-", "optimal "), (0.0, ":", "random ")]:
+                ax.axhline(level, color="k", ls=style, lw=0.8)
+                ax.text(axis.x[-1], level, text, va="bottom", ha="right", fontsize=7)
+        elif metric == "safe_rate":
+            ax.axhline(1 - delta, color="k", ls="--", lw=0.9)
+            ax.text(axis.x[0], 1 - delta, f" 1 − δ = {1 - delta:g}", va="top", fontsize=7)
+            ax.set_ylim(-0.05, 1.05)
+            ax.yaxis.set_major_formatter(plt.FuncFormatter(lambda v, _: f"{v:.0%}"))
+        else:
+            ax.set_ylim(0, ax.get_ylim()[1] * 1.08)  # room above the largest marker
+        ax.set_title(panel)
+        axis.finish(ax, ylabel)
+    for ax in axes[0]:
+        ax.set_xlabel("")
+    failed = "promise failed (not gated in)"
+    extra = [Line2D([], [], ls="none", marker="x", color="grey", alpha=0.5, label=failed)]
+    _legend(fig, shown, styles, extra)
+    fig.suptitle(title)
+    fig.tight_layout(rect=(0, 0.1, 1, 1))
+    save(fig, stem)
+
+
+def decision_edges(res, axis: Axis, methods, styles, title: str, stem):
+    """1 x 2: the share of the true action -> state edges the learned graph keeps (the edges a planner
+    needs to tell actions apart) and the SHD (methods that learn a graph)."""
+    setup()
+    methods = [m for m in methods if axis.mean_sem(res, m, "action_recall")[0] is not None]
+    if not methods:
+        return
+    fig, axes = plt.subplots(1, 2, figsize=(FULL_WIDTH, 3.4), sharex=True)
+    panels = [("action_recall", "Action edges kept", "share of true action → state edges"),
+              ("shd", "Structural Hamming distance (SHD)", "SHD (0 = true graph)")]  # fmt: skip
+    for ax, (metric, panel, ylabel) in zip(axes, panels, strict=True):
+        for m in methods:
+            mean, sem = axis.mean_sem(res, m, metric)
+            if mean is not None:
+                _line(ax, axis, methods, styles, m, mean, sem)
+        if metric == "action_recall":
+            ax.set_ylim(-0.05, 1.05)
+            ax.yaxis.set_major_formatter(plt.FuncFormatter(lambda v, _: f"{v:.0%}"))
+        else:
+            ax.set_ylim(bottom=0)
+        ax.set_title(panel)
+        axis.finish(ax, ylabel)
+    _legend(fig, methods, styles)
+    fig.suptitle(title)
+    fig.tight_layout(rect=(0, 0.22, 1, 1))
+    save(fig, stem)
+
+
+def transfer_gap(
+    gaps: pd.DataFrame,
+    axis: Axis,
+    methods,
+    styles,
+    title: str,
+    stem,
+    ylabel: str = "other rewards − original",
+):
+    """1 x 2: the normalised value under the alternative rewards (mean over them) minus under the
+    original reward, per method, at the nominal start and over the k random starts (< 0: the method
+    does worse on the other tasks than on the one its data were logged for)."""
+    setup()
+    fig, axes = plt.subplots(1, 2, figsize=(FULL_WIDTH, 3.8), sharex=True, sharey=True)
+    panels = [("gap_value", "Transfer gap, nominal start"), ("gap_value_K", "Transfer gap, random starts")]
+    shown = []
+    for ax, (metric, panel) in zip(axes, panels, strict=True):
+        for m in methods:
+            mean, sem = axis.mean_sem(gaps, m, metric) if metric in gaps else (None, None)
+            if mean is None or np.isnan(mean).all():
+                continue
+            _line(ax, axis, methods, styles, m, mean, sem)
+            if m not in shown:
+                shown.append(m)
+        ax.axhline(0, color="k", lw=0.8)
+        ax.set_title(panel)
+        axis.finish(ax, ylabel)
+    _legend(fig, shown, styles)
+    fig.suptitle(title)
+    fig.tight_layout(rect=(0, 0.3, 1, 1))  # room for the legend below the x labels
     save(fig, stem)
 
 
@@ -224,66 +455,164 @@ def structure(res, axis: Axis, methods, styles, title: str, stem):
     save(fig, stem)
 
 
-def resources(res, axis: Axis, methods, styles, unit: str, limits: dict, title: str, stem):
-    """1 x 3: time (unit "s") or peak memory (unit "gb") of discovery, learning and solving.
-    limits: {step: limit or None}, drawn as a dashed line. "solve" includes the relaxation step."""
+PARAMETER_PANELS = [
+    ("s4_width", "Interval width", "mean hi − lo (optimal policy's visits)"),
+    ("s4_coverage", "Coverage of the true probabilities", "share inside the intervals"),
+    ("s4_unseen", "Unseen parent rows", "share of rows (interval [0, 1])"),
+    ("s4_rows", "Model size", "parent rows"),
+]
+
+
+def parameter_learning(res, axis: Axis, methods, styles, delta: float | None, title: str, stem):
+    """2 x 2: the learned probability sets (S4) of the methods that have them (evaluation.interval_metrics):
+    interval width weighted by the optimal policy's occupancy, coverage of the true per-factor
+    probabilities (a valid S4 keeps it >= 1 - delta), share of parent rows with no data, number of
+    parent rows. Flat RMDP's joint intervals are projected onto the factors."""
     setup()
+    methods = [m for m in methods if axis.mean_sem(res, m, "s4_width")[0] is not None]
+    if not methods:
+        return
+    fig, axes = plt.subplots(2, 2, figsize=(FULL_WIDTH, 5.6), sharex=True)
+    for ax, (metric, panel, ylabel) in zip(axes.flat, PARAMETER_PANELS, strict=True):
+        for m in methods:
+            mean, sem = axis.mean_sem(res, m, metric)
+            if mean is not None and not np.isnan(mean).all():
+                _line(ax, axis, methods, styles, m, mean, sem)
+        if metric == "s4_coverage":
+            if delta is not None:
+                ax.axhline(1 - delta, color="k", ls="--", lw=0.9)
+                ax.text(axis.x[0], 1 - delta, f" 1 − δ = {1 - delta:g}", va="top", fontsize=7)
+            ax.set_ylim(top=1.01)
+        if metric in ("s4_coverage", "s4_unseen"):
+            ax.yaxis.set_major_formatter(plt.FuncFormatter(lambda v, _: f"{v:.0%}"))
+        if metric == "s4_rows":
+            ax.set_yscale("log")
+        else:
+            ax.set_ylim(bottom=0)
+        ax.set_title(panel)
+        axis.finish(ax, ylabel)
+    for ax in axes[0]:
+        ax.set_xlabel("")  # the x axis is shared: named on the bottom row only
+    _legend(fig, methods, styles)
+    fig.suptitle(title)
+    fig.tight_layout(rect=(0, 0.08, 1, 1))
+    save(fig, stem)
+
+
+def _limit_marks(data, history, axis, method, step, kind) -> list[int]:
+    """Sizes (indices on the axis) where `method` was stopped by `kind` ("timeout" / "memout") in
+    `step`, or skipped because of such a stop (the sweep's rule, tool/sweep.py: a stop at (size, n)
+    skips every larger size with at least n rollouts, and larger n of the same size and seed)."""
+    rank = {s: i for i, s in enumerate(axis.order)}
+    hist = history[history["method"] == method]
+    if "failed_step" not in hist:  # rows written before steps were named: no stop to place
+        return []
+    stops = hist[hist["status"].isin(STOPPED)].assign(
+        rank=lambda d: d["size"].map(rank), step=lambda d: d["failed_step"].replace({"relax": "solve"})
+    )
+    stops = stops[stops["rank"].notna()]
+    rows = data[data["method"] == method]
+    marks = set()
+    for r in rows[(rows["status"] == kind)].itertuples():
+        if str(r.failed_step).replace("relax", "solve") == step:
+            marks.add(rank[r.size])
+    mine = stops[(stops["status"] == kind) & (stops["step"] == step)]
+    for r in rows[rows["status"] == "skipped"].itertuples():
+        at = rank[r.size]
+        earlier = (mine["rank"] < at) & (mine["n_rollouts"] <= r.n_rollouts)
+        same = (mine["rank"] == at) & (mine["seed"] == r.seed) & (mine["n_rollouts"] < r.n_rollouts)
+        if (earlier | same).any():
+            marks.add(at)
+    return sorted(marks)
+
+
+def resources(res, axis: Axis, methods, styles, unit: str, limits: dict, title: str, stem, history=None):
+    """1 x 3: time (unit "s") or peak memory (unit "gb") of discovery, learning and solving.
+    limits: {step: limit or None}, drawn as a dashed line. "solve" includes the relaxation step.
+    At every size where a method was stopped by this figure's limit (timeouts in the time figure,
+    memouts in the memory figure), or skipped because of such a stop at a smaller size or number of
+    rollouts, its marker sits on the dashed line. A step stopped by the other limit is an X at its
+    measured value. history: the rows of every number of rollouts (to find why a row was skipped);
+    default res."""
+    setup()
+    history = res if history is None else history
+    kind = "timeout" if unit == "s" else "memout"
     data = res.copy()
     if "relax_s" in data:  # the relaxation (box of the factor sets) is part of solving
         relax = pd.to_numeric(data[f"relax_{unit}"], errors="coerce")
         solve = pd.to_numeric(data[f"solve_{unit}"], errors="coerce")
         data[f"solve_{unit}"] = solve + relax.fillna(0) if unit == "s" else np.fmax(solve, relax)
     fig, axes = plt.subplots(1, 3, figsize=(FULL_WIDTH, 2.9), sharex=True)
-    shown = []
+    shown, other_shown = [], False
     for ax, step in zip(axes, STEP_TITLES, strict=True):
         column = f"{step}_{unit}"
+        limit = limits.get(step)
         for m in methods:
+            if step == "discovery" and styles[m].get("role") in ("oracle", "reference", "control"):
+                continue  # given the true graph: its "discovery" only packs that graph, not discovery
             mean, sem = axis.mean_sem(data, m, column)
-            if mean is None:
+            marks = _limit_marks(data, history, axis, m, step, kind) if limit is not None else []
+            if mean is None and not marks:
                 continue
             stopped = data[f"{step}_status"].isin(STOPPED)
             if step == "solve" and "relax_status" in data:
                 stopped |= data["relax_status"].isin(STOPPED)
-            mean[axis.any_true(data, m, stopped)] = np.nan
-            _line(ax, axis, methods, styles, m, mean, sem)
+            if mean is not None:
+                mean[axis.any_true(data, m, stopped)] = np.nan
+                _line(ax, axis, methods, styles, m, mean, sem)
             if m not in shown:
                 shown.append(m)
-            hit = stopped & (data["method"] == m)
-            if hit.any():  # an X at the measured value of every stopped step
-                pos = data.loc[hit, "size"].map({o: i for i, o in enumerate(axis.order)}) + _dodge(methods, m)
+            st = styles[m]
+            if marks:  # on the limit line: stopped by it, or skipped after it
+                ax.plot(
+                    np.array(marks) + _dodge(methods, m),
+                    np.full(len(marks), limit),
+                    ls="none",
+                    marker=st["marker"],
+                    markersize=7,
+                    color=st["color"],
+                    markeredgecolor="k",
+                    markeredgewidth=0.6,
+                    clip_on=False,
+                    zorder=5,
+                )
+            other = stopped & (data["method"] == m) & (data["status"] != kind)
+            values = pd.to_numeric(data.loc[other, column], errors="coerce")
+            if values.notna().any():  # stopped by the other limit: an X at the measured value
+                other_shown = True
+                index = {o: i for i, o in enumerate(axis.order)}
+                pos = data.loc[other, "size"].map(index) + _dodge(methods, m)
                 ax.plot(
                     pos,
-                    pd.to_numeric(data.loc[hit, column]),
+                    values,
                     ls="none",
                     marker="X",
                     markersize=7,
-                    color=styles[m]["color"],
+                    color=st["color"],
                     markeredgecolor="k",
                     markeredgewidth=0.5,
                 )
-        if limits.get(step) is not None:
-            ax.axhline(limits[step], color="k", ls="--", lw=0.9)
-            ax.text(
-                axis.x[0],
-                limits[step],
-                f" limit {limits[step]:g} {'s' if unit == 's' else 'GB'}",
-                va="bottom",
-                fontsize=7,
-            )
+        if limit is not None:
+            ax.axhline(limit, color="k", ls="--", lw=0.9)
+            label = f" limit {limit:g} {'s' if unit == 's' else 'GB'}"
+            ax.text(axis.x[0], limit, label, va="bottom", fontsize=7)
+        else:
+            ax.text(0.02, 0.98, "no time limit" if unit == "s" else "no memory limit",
+                    transform=ax.transAxes, va="top", fontsize=7)  # fmt: skip
         ax.set_yscale("log")
         ax.set_title(STEP_TITLES[step])
         axis.finish(ax, "seconds" if unit == "s" else "peak memory (GB)")
-    stop = Line2D(
-        [],
-        [],
-        ls="none",
-        marker="X",
-        color="grey",
-        markeredgecolor="k",
-        markersize=7,
-        label="stopped by a limit (not run on larger instances)",
-    )
-    _legend(fig, shown, styles, extra=[stop])
+    on_line = Line2D(
+        [], [], ls="none", marker="o", color="grey", markeredgecolor="k", markersize=7,
+        label=f"on the dashed line: {kind} at that size, or skipped after one",
+    )  # fmt: skip
+    extra = [on_line]
+    if other_shown:
+        extra.append(
+            Line2D([], [], ls="none", marker="X", color="grey", markeredgecolor="k", markersize=7,
+                   label=f"stopped by the {'memory' if unit == 's' else 'time'} limit (measured value)")
+        )  # fmt: skip
+    _legend(fig, shown, styles, extra=extra)
     fig.suptitle(title)
     fig.tight_layout(rect=(0, 0.16, 1, 1))
     save(fig, stem)

@@ -4,6 +4,7 @@ evaluation with a hidden variable."""
 import numpy as np
 import pytest
 
+from scm_to_mdp.core import NEXT_MARK
 from scm_to_mdp.envs import Chemistry, Coffee, Sepsis, SysAdmin, Taxi
 from scm_to_mdp.envs.taxi import step_square
 
@@ -12,6 +13,7 @@ ENVS = {
     "coffee+snack": lambda: Coffee("coffee+snack"),
     "taxi": lambda: Taxi("deterministic"),
     "taxi noisy": lambda: Taxi("noisy"),
+    "taxi noisy joint axes": lambda: Taxi("noisy", axes="joint"),
     "chemistry 0.0": lambda: Chemistry(0.0, seed=0),
     "chemistry 0.7": lambda: Chemistry(0.7, seed=1),
     "sysadmin ring": lambda: SysAdmin(4, 0, topology="ring"),
@@ -49,7 +51,7 @@ def test_true_parents_are_exact(name):
     inputs = env.state_vars + env.action_vars
     dist = env.next_distributions(states, actions)
     for v, parents in env.true_parents().items():
-        cols = [inputs.index(p) for p in parents]
+        cols = [inputs.index(p) for p in parents if not p.endswith(NEXT_MARK)]  # slice-t parents (marginal)
         assert sufficient(table, dist[:, env.state_vars.index(v)], cols), (name, v, "not sufficient")
         for drop in cols:
             rest = [c for c in cols if c != drop]
@@ -99,3 +101,13 @@ def test_hidden_variable_policy_is_the_same_in_both_halves():
     obs = truth.observed_index()
     half = truth.n_states // 2
     assert np.array_equal(obs[:half], obs[half:])  # diabetic is the first (most significant) variable
+
+
+def test_taxi_ends_at_the_destination_and_never_starts_there():
+    """Gymnasium's Taxi-v3 rule: no "delivered" value; the states with the passenger at its
+    destination are terminal, and the start never puts the passenger there."""
+    env = Taxi("deterministic")
+    truth = env.ground_truth()
+    passenger, destination = env.B[:, 2], env.B[:, 3]
+    assert np.array_equal(truth.reward.terminal, passenger == destination)
+    assert truth.start[passenger == destination].sum() == 0 and truth.n_states == 500

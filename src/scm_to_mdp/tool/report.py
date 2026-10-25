@@ -21,7 +21,7 @@ from scm_to_mdp.plotting import figures
 from scm_to_mdp.plotting.style import method_styles
 from scm_to_mdp.tool.sweep import read_results
 
-ROLE_ORDER = {"ours": 0, "oracle": 1, "baseline": 2}
+ROLE_ORDER = {"ours": 0, "oracle": 1, "reference": 1, "control": 2, "baseline": 3}
 
 
 def _methods(res: pd.DataFrame) -> list[str]:
@@ -81,17 +81,25 @@ def report(out_dir, target: float = 0.95, delta: float | None = 0.05, show: bool
         title = f"{name}, {n} rollouts"
         folder = fig_dir / f"rollouts={n}"
         figures.performance(at_n, axis, methods, styles, k, title, folder / "performance")
+        normalized = folder / "performance_normalized"
+        figures.performance_normalized(at_n, axis, methods, styles, target, k, title, normalized)
         figures.validity(at_n, axis, methods, styles, delta, title, folder / "validity")
         figures.structure(at_n, axis, methods, styles, title, folder / "structure")
+        if delta is not None:  # the headline of exp3: value among the methods whose promise holds
+            figures.gated_comparison(at_n, axis, methods, styles, delta, title, folder / "gated_comparison")
+        figures.decision_edges(at_n, axis, methods, styles, title, folder / "decision_edges")
+        if "s4_width" in at_n:
+            stem = folder / "parameter_learning"
+            figures.parameter_learning(at_n, axis, methods, styles, delta, title, stem)
         timeouts = limits["timeout_s"] or {}
         time_limits = {
             "discovery": timeouts.get("discovery"),
             "learning": timeouts.get("learning"),
             "solve": timeouts.get("solve"),
         }
-        figures.resources(at_n, axis, methods, styles, "s", time_limits, title, folder / "time")
+        figures.resources(at_n, axis, methods, styles, "s", time_limits, title, folder / "time", history=res)
         mem = dict.fromkeys(figures.STEP_TITLES, limits["mem_gb"])
-        figures.resources(at_n, axis, methods, styles, "gb", mem, title, folder / "memory")
+        figures.resources(at_n, axis, methods, styles, "gb", mem, title, folder / "memory", history=res)
         lines += [f"## {n} rollouts", ""]
         for column, caption, fmt in [
             (
@@ -120,6 +128,28 @@ def report(out_dir, target: float = 0.95, delta: float | None = 0.05, show: bool
                 lines += [f"{caption} (mean over seeds):", "```", text, "```", ""]
                 if n == max(meta["n_rollouts"]) and column in ("optimal_share", "safe"):
                     shown += [f"{caption}, {n} rollouts (mean over seeds):", text, ""]
+        if delta is not None and "safe" in at_n:
+            gate = figures.normalised(at_n)
+            valid = figures.validity_gate(gate, delta)
+            for column, caption, fmt, rows in [
+                ("norm_value", f"Validity-gated true value (normalised; '—' = promise held in < "
+                 f"{1 - delta:.0%} of seeds)", lambda x: f"{x:.2f}",
+                 gate.assign(norm_value=gate["norm_value"].where(valid))),
+                ("norm_promise", "Validity-gated guaranteed value (normalised promise)", lambda x: f"{x:.2f}",
+                 gate.assign(norm_promise=gate["norm_promise"].where(valid))),
+                ("norm_cert_gap", "Certificate (V_opt - V_rob) / (V*_obs - V_rand), robust methods",
+                 lambda x: f"{x:.2f}", gate),
+                ("cert_holds", "Certificate holds: V*_obs - V^pi <= V_opt - V_rob in every state",
+                 lambda x: f"{x:.0%}", gate),
+                ("action_recall", "Share of the true action -> state edges kept", lambda x: f"{x:.0%}", gate),
+            ]:  # fmt: skip
+                if column not in rows:
+                    continue
+                if column == "cert_holds":
+                    rows = rows.assign(cert_holds=figures._as_float(rows["cert_holds"]))
+                text = _table(rows, sizes, labels, size_name, methods, column, fmt)
+                if text:
+                    lines += [f"{caption} (mean over seeds):", "```", text, "```", ""]
         stopped = at_n[~at_n["status"].isin(["ok"])]
         if len(stopped):
             counts = stopped.groupby(["size_label", "method", "failed_step", "status"], dropna=False).size()
@@ -163,6 +193,31 @@ def report(out_dir, target: float = 0.95, delta: float | None = 0.05, show: bool
     caption = "How hard is it? Value of the random policy / V* over the observed state (nominal start)"
     lines += [caption + ":", "```", hard_text, "```", ""]
     shown += [caption + ":", hard_text, ""]
+    # ---- reward transfer: the same models under the environment's other rewards ---------------
+    transfer = read_results(out, current=True, name="results_transfer.csv")
+    if len(transfer):
+        from scm_to_mdp.tool.transfer import report_transfer
+
+        def table(rows, column, fmt):
+            return _table(rows, sizes, labels, size_name, methods, column, fmt)
+
+        lines += report_transfer(
+            out, res, transfer, meta, sizes, labels, size_name, methods, styles, k, target, delta, table
+        )
+        shown += [f"reward transfer: {fig_dir / 'transfer'}/", ""]
+    # ---- dynamics shift: the same policies where the hidden disturbance is more frequent -----------
+    shifted = read_results(out, current=True, name="results_shift.csv")
+    if len(shifted):
+        from scm_to_mdp.tool.transfer import report_transfer
+
+        def table(rows, column, fmt):
+            return _table(rows, sizes, labels, size_name, methods, column, fmt)
+
+        lines += report_transfer(
+            out, res, shifted, meta, sizes, labels, size_name, methods, styles, k, target, delta, table,
+            kind="shift",
+        )  # fmt: skip
+        shown += [f"dynamics shift: {fig_dir / 'shift'}/", ""]
     (out / "tables.md").write_text("\n".join(lines))
     if show:
         print("\n".join(shown))

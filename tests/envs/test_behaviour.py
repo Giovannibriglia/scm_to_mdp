@@ -1,18 +1,15 @@
-"""Behaviour policies, coverage and confounding bias (behaviour.py), the observed optimum, the
-environments' hidden variables, and the grid of experiments (tool/grid.py). The complete scripts
-run in test_exp1_smoke.py."""
-
-import pickle
+"""Behaviour policies, coverage and confounding bias (behaviour.py), the observed optimum and the
+environments' hidden variables."""
 
 import numpy as np
 import pytest
 
 from scm_to_mdp.behaviour import behaviour_metrics, data_occupancy
 from scm_to_mdp.envs import Chemistry, Sepsis, SysAdmin
-from scm_to_mdp.tool import Grid, Policy, experiments, standard_methods
-
 
 # ---- behaviour policies -----------------------------------------------------------------------
+
+
 def test_expert_puts_one_minus_epsilon_on_the_observed_optimum():
     env = SysAdmin(3, 0, storm=0.3)
     truth = env.ground_truth()
@@ -55,11 +52,13 @@ def test_the_sampler_follows_the_table():
     probs = env.behaviour("confounded", 0.9, epsilon=0.05, strength=1.0)
     df = env.sample(400, 5, probs)  # full table, with the storm column
     storm = df[df["storm"] == 1]
-    repairs_m0 = storm[f"a{env.repairs.index(0)}"] == 1
+    repairs_m0 = storm["reboot"] == env.repairs.index(0) + 1  # the value of reboot that repairs machine 0
     assert repairs_m0.all()  # strength 1: every storm step repairs machine 0
 
 
 # ---- the observed optimum ---------------------------------------------------------------------
+
+
 def test_observed_optimum():
     plain = SysAdmin(3, 0).ground_truth()
     pi, V = plain.observed_optimal(0.9)
@@ -70,6 +69,8 @@ def test_observed_optimum():
 
 
 # ---- environments -----------------------------------------------------------------------------
+
+
 def test_hidden_variables_stay_out_of_the_data():
     for env in (SysAdmin(3, 0, storm=0.3), Chemistry(0.4, 0, n_objects=3, catalyst=0.3)):
         df = env.hide(env.sample(5, 3, env.behaviour("uniform", 0.9)))
@@ -100,21 +101,3 @@ def test_sepsis_diabetes_effect():
 
 
 # ---- the grid ---------------------------------------------------------------------------------
-def make_env(n, topology, seed):
-    return SysAdmin(int(n), seed, topology=topology, storm=0.3)
-
-
-def test_grid_expands_to_one_experiment_per_setting(tmp_path):
-    grid = Grid(
-        name="g", make_env=make_env, sizes=[2], knobs=["ring", "star"],
-        policies=[Policy("uniform"), Policy("expert"), Policy("confounded")],
-        n_rollouts=[10], seeds=[0], methods=standard_methods(), horizon=5, out_dir=tmp_path,
-        skip=lambda knob, policy: knob == "star" and policy.name == "confounded",
-    )  # fmt: skip
-    exps = experiments(grid)
-    assert len(exps) == 5
-    assert len({e.out_dir for e in exps}) == 5
-    assert {e.policy for e in exps} == {"uniform", "expert ε=0.05", "confounded ε=0.05 s=0.95"}
-    pickle.dumps(exps[0].make_env), pickle.dumps(exps[0].collect), pickle.dumps(exps[0].behaviour)
-    env = exps[0].make_env(2, 0)
-    assert env.topology == "ring" and len(exps[0].collect(env, 3).index.get_level_values(0).unique()) == 3

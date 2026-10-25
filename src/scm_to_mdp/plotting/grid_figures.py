@@ -167,13 +167,17 @@ def rollouts_vs_model_size(points, policies, methods, styles, grid, title, stem)
 def promise_heatmap(held: pd.DataFrame, title, stem):
     """held: index = methods, columns = settings (labels), values = share of runs whose promise holds."""
     setup()
-    fig, ax = plt.subplots(figsize=(FULL_WIDTH, 0.42 * len(held) + 1.8))
+    # the setting labels are long (logger + knob): vertical, one line each, and room for them below
+    labels = [str(c).replace("\n", ", ") for c in held.columns]
+    below = 0.065 * max((len(t) for t in labels), default=10)  # inches of rotated label text
+    width = max(FULL_WIDTH, 0.55 * held.shape[1] + 3.2)
+    fig, ax = plt.subplots(figsize=(width, 0.42 * len(held) + 1.4 + below))
     values = held.to_numpy(float)
     image = ax.imshow(values, cmap="RdYlGn", vmin=0, vmax=1, aspect="auto")
     for (i, j), v in np.ndenumerate(values):
         if np.isfinite(v):
             ax.text(j, i, f"{v:.0%}", ha="center", va="center", fontsize=6.5)
-    ax.set_xticks(range(held.shape[1]), held.columns, rotation=0, fontsize=6.5)
+    ax.set_xticks(range(held.shape[1]), labels, rotation=90, fontsize=6.5)
     ax.set_yticks(range(held.shape[0]), held.index)
     ax.grid(False)
     fig.colorbar(

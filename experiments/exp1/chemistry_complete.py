@@ -1,67 +1,67 @@
-"""Chemistry, complete grid: every size x graph density x behaviour policy x number of rollouts.
+"""Chemistry, complete grid: every size x graph density x behaviour policy x number of rollouts
+(protocol.py: the claims, the loggers, the seeds, the shifts and the expectations common to every domain).
 
     size        objects: 4, 5, 6, 7 (3 colours: 81 ... 2187 observed states)
     knob        density of the reaction graph: 0.0 (no reaction), 0.4, 1.0 (at most 2 parents)
-    policies    uniform      push a random object or nothing
-                expert       the best policy over the observed state, a uniform action w.p. 0.05
-                confounded   the expert, but while a hidden catalyst is on it waits (does nothing)
-                             w.p. 0.95
-    rollouts    10 ... 1600 (horizon 20), 3 seeds, 12 standard methods (no exact solver: 3 colours;
-                offline DQN and CQL included: DEEP_BASELINES)
-
-The catalyst (src/scm_to_mdp/envs/chemistry.py) is in every setting: drawn afresh at every step
-(p = 0.3), it drives the reaction of one object (w.p. 0.95 with it, 0.3 without), and it is never in
-the data. With density 0 there is no reaction: the catalyst changes nothing (a negative control).
+    policies    uniform (push a random object or nothing), expert eps 0.05, expert eps 0, confounded (the
+                expert, but while the hidden catalyst is on it waits w.p. 0.95)
+    hidden      the catalyst (src/scm_to_mdp/envs/chemistry.py) drives the reaction of one object (w.p.
+                0.95 with it, 0.3 without), on w.p. 0.1 in the data, 0.3 and 0.6 at deployment; with
+                density 0 there is no reaction and it changes nothing (a negative control)
+    rollouts    10 ... 1600 (horizon 20, gamma 0.9), 5 seeds (the seed also draws the graph and the target
+                colours), the standard methods (no per-(s,a) product set: 3 colours)
 8 objects are left out: with the catalyst the true model has 13,122 states and needs about 25 GB.
 
-Expectations, written before the run:
-    H1  structure pays off most with a sparse graph and less as it gets denser;
-    H2  expert data: robust methods beat plug-in at small budgets; flat MDP's promise fails;
-    H3  expert data: discovery loses the push edges the expert rarely varies;
-    H4  confounded data: the promise fails once the intervals are narrower than the bias; never at
-        density 0 (no bias there).
+Expectations for this domain, written 2026-10-24 before the runs:
+    H1  structure pays off most with a sparse graph, less as it gets denser (A);
+    H2  the expert pushes few objects: the push edges of the others are thin under eps = 0 (A3);
+    H3  target_1..3 recolour objects the expert never pushes for the original task: cov_joint -
+        cov_factor is large, and so is the transfer gain of the factored arms (B1);
+    H4  confounded: the promise fails once the intervals are narrower than the bias; never at density
+        0 (control).
 
 Run from the repository root (many hours; a stopped run resumes setting by setting):
     .venv/bin/python experiments/exp1/chemistry_complete.py                 # a new run
     .venv/bin/python experiments/exp1/chemistry_complete.py --resume        # continue the latest run
     .venv/bin/python experiments/exp1/chemistry_complete.py --report-only   # tables and figures only
     .venv/bin/python experiments/exp1/chemistry_complete.py --workers 8 --device cpu  # own plan
-The machine plan (workers, training device) is chosen at start, printed, and saved in meta.json.
-Output: results/exp1/chemistry_complete_<date>_<time>/ (one folder per run): summary/ for the whole
-grid, models/ of the first seed and one folder per setting (tool/runs.py, tool/store.py).
+Output: results/exp1/chemistry_complete_<date>_<time>/.
 """
 
 import dataclasses
 import warnings
 from pathlib import Path
 
+from protocol import DEEP_BASELINES, DELTA, N_ROLLOUTS, SEEDS, SHIFT_HIDDEN, TRAIN_HIDDEN, policies
+
 from scm_to_mdp.envs import Chemistry
-from scm_to_mdp.tool import Grid, Limits, Policy, report_grid, run_folder, run_grid, standard_methods
+from scm_to_mdp.tool import Grid, Limits, report_grid, run_folder, run_grid, standard_methods
 
 warnings.filterwarnings("ignore", category=FutureWarning)
 
 SIZES = [4, 5, 6, 7]
 DENSITIES = ["0.0", "0.4", "1.0"]
-POLICIES = [
-    Policy("uniform"),
-    Policy("expert", epsilon=0.05),
-    Policy("confounded", epsilon=0.05, strength=0.95),
-]
-N_ROLLOUTS = [10, 25, 50, 100, 200, 400, 800, 1600]
-SEEDS = [0, 1, 2]  # the seed also draws the graph and the target colours
-HORIZON, GAMMA, DELTA = 20, 0.9, 0.05
-DEEP_BASELINES = True  # offline DQN and CQL (a run: M5 CPU ~12 s; Xeon E5 CPU ~100 s, CUDA ~10 s)
-CATALYST = 0.3  # P(catalyst on) at every step
+HORIZON, GAMMA = 20, 0.9
 LIMITS = Limits(
-    mem_gb=8.0, timeout_s={"discovery": 60.0, "selection": 60.0, "solve": 120.0, "training": 600.0}
+    mem_gb=8.0,
+    timeout_s={"discovery": 60.0, "selection": 60.0, "learning": 120.0, "solve": 120.0, "training": 600.0},
 )
 OUT_DIR = Path(__file__).resolve().parents[2] / "results" / "exp1" / "chemistry_complete"
 
 
-def make_env(n_objects, density: str, seed: int) -> Chemistry:
+def chemistry(n_objects, density: str, seed: int, catalyst: float) -> Chemistry:
     return Chemistry(
-        float(density), seed, n_objects=int(n_objects), n_colours=3, max_parents=2, catalyst=CATALYST
+        float(density), seed, n_objects=int(n_objects), n_colours=3, max_parents=2, catalyst=catalyst
     )
+
+
+def make_env(n_objects, density: str, seed: int) -> Chemistry:
+    return chemistry(n_objects, density, seed, TRAIN_HIDDEN)
+
+
+def shifts(n_objects, density: str, seed: int) -> dict:
+    """The same reactions where the catalyst is on more often (the learner never sees it)."""
+    return {f"catalyst={p:g}": chemistry(n_objects, density, seed, p) for p in SHIFT_HIDDEN}
 
 
 GRID = Grid(
@@ -71,18 +71,18 @@ GRID = Grid(
     size_name="objects",
     knobs=DENSITIES,
     knob_name="density",
-    policies=POLICIES,
+    policies=policies(),
     n_rollouts=N_ROLLOUTS,
     seeds=SEEDS,
     horizon=HORIZON,
     gamma=GAMMA,
-    methods=standard_methods(
-        max_parents=4, delta=DELTA, exact=False, deep=DEEP_BASELINES, state_parents=3
-    ),  # itself, its push, 2 parents
+    methods=standard_methods(max_parents=4, delta=DELTA, exact=False, deep=DEEP_BASELINES, state_parents=3),
     limits=LIMITS,
     workers="auto",  # what the machine allows (utils/compute.py); --workers N overrides
     out_dir=OUT_DIR,
-    constants={"catalyst": CATALYST, "n_colours": 3, "max_parents": 2},  # checked when a run resumes
+    reward_transfer=True,
+    shifts=shifts,
+    constants={"catalyst": TRAIN_HIDDEN, "shift_catalyst": SHIFT_HIDDEN, "n_colours": 3, "max_parents": 2},
 )
 
 if __name__ == "__main__":

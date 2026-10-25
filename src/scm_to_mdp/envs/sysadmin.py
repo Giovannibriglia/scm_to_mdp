@@ -17,9 +17,13 @@ Topology (who is a neighbour of machine i; our settings):
 
 Reward: number of machines up, minus repair_cost when a repair is made. Every episode starts with
 all machines up.
+Crash (optional, ours; crash=k): when k or more machines are down at once the network crashes:
+arriving there costs crash_cost and ends the episode (a trap: what a wrong repair plan risks).
 
-Data columns: m0..m{N-1}, a0..a{N-1}, m0'..m{N-1}'. The action is one-hot over a0..a{N-1}, and
-a_j repairs machine repairs[j], a hidden random shuffle: the learner must find which is which.
+Data columns: m0..m{N-1}, reboot, m0'..m{N-1}'. The action is ONE categorical variable reboot in
+0..N: 0 = do nothing, j + 1 = repair machine repairs[j], a hidden random shuffle: the learner must
+find which value repairs which machine. Every m_i' has reboot as a parent (only the value that
+repairs machine i matters to it).
 
 Storm (optional, ours; storm=p): a hidden variable drawn afresh at every step, storm ~ Bernoulli(p),
 independent of everything else. It hits one machine, the "exposed" machine 0: during a storm, if
@@ -66,9 +70,12 @@ class SysAdmin(Env):
         repair_cost: float = 0.4,
         storm: float | None = None,
         storm_effect: float = 0.4,
+        crash: int | None = None,
+        crash_cost: float = 10.0,
         max_model_gb: float | None = None,
     ):
         self.n, self.topology, self.repair_cost = n, topology, repair_cost
+        self.crash, self.crash_cost = crash, crash_cost
         self.storm, self.storm_effect = storm, storm_effect
         if max_model_gb is not None:
             self.max_model_gb = max_model_gb
@@ -77,8 +84,8 @@ class SysAdmin(Env):
         self.neighbours = neighbours(n, topology)
         self.machines = [f"m{i}" for i in range(n)]
         self.state_vars = self.machines + (["storm"] if storm is not None else [])
-        self.action_vars = [f"a{j}" for j in range(n)]
-        self.cards = dict.fromkeys(self.state_vars + self.action_vars, 2)
+        self.action_vars = ["reboot"]
+        self.cards = dict.fromkeys(self.state_vars, 2) | {"reboot": n + 1}
         if storm is not None:
             self.hidden_vars, self.confounder = ("storm",), "storm"
         self.n_actions = n + 1
@@ -120,7 +127,11 @@ class SysAdmin(Env):
         return np.stack([1 - q, q], axis=-1)  # [E, n + 1, 2]
 
     def action_columns(self, actions):
-        return np.stack([actions == self.repairs[j] + 1 for j in range(self.n)], axis=1).astype(np.int64)
+        """reboot = 0 for the no-op, else 1 + the position of the repaired machine in the shuffle."""
+        code = np.zeros(self.n + 1, dtype=np.int64)
+        for j, machine in enumerate(self.repairs):
+            code[machine + 1] = j + 1
+        return code[np.asarray(actions)][:, None]
 
     def start_distribution(self):
         if self.storm is None:
@@ -138,12 +149,45 @@ class SysAdmin(Env):
     # ---- what the learner is given, and what the evaluation needs ----------------------------
     def reward(self, B, actions):
         up = B[:, : self.n].sum(1)  # machines only (not the storm)
-        return Reward.immediate(up[:, None] - self.repair_cost * (actions.sum(1)[None, :] > 0))
+        repairs = actions[:, 0][None, :] > 0
+        return self._crashing(B, Reward.immediate(up[:, None] - self.repair_cost * repairs))
+
+    def _crashing(self, B, reward: Reward) -> Reward:
+        """reward with the crash (if any): arriving with crash or more machines down costs crash_cost and
+        ends the episode."""
+        if self.crash is None:
+            return reward
+        crashed = (B[:, : self.n] == 0).sum(1) >= self.crash
+        return Reward(reward.R, reward.r_next - self.crash_cost * crashed, reward.terminal | crashed)
+
+    def alternative_rewards(self) -> dict:
+        """Other tasks on the same machines (reward transfer; the storm is never read):
+        critical_half    only the first ceil(N/2) machines count (other repairs matter)
+        costly_repairs   a repair costs 2.0 instead of repair_cost (when to repair changes)
+        machine0_only    only machine 0, the storm-hit one, counts (x N, the same scale)
+        all_up_bonus     N when every machine is up, else 0 (a joint goal, not a sum)
+        Each keeps "- cost when a repair is made", and the crash if there is one."""
+        n, cost = self.n, self.repair_cost
+
+        def task(value, repair_cost=cost):
+            def reward(B, actions):
+                repairs = actions[:, 0][None, :] > 0
+                return self._crashing(B, Reward.immediate(value(B[:, :n])[:, None] - repair_cost * repairs))
+
+            return reward
+
+        half = (n + 1) // 2
+        return {
+            "critical_half": task(lambda m: m[:, :half].sum(1).astype(float)),
+            "costly_repairs": task(lambda m: m.sum(1).astype(float), repair_cost=2.0),
+            "machine0_only": task(lambda m: n * m[:, 0].astype(float)),
+            "all_up_bonus": task(lambda m: n * m.all(1).astype(float)),
+        }
 
     def true_parents(self):
         storm = {"storm"} if self.storm is not None else set()
         truth = {
-            f"m{i}": {f"m{i}", f"a{self.repairs.index(i)}"}
+            f"m{i}": {f"m{i}", "reboot"}
             | {f"m{j}" for j in self.neighbours[i]}
             | (storm if i == 0 else set())
             for i in range(self.n)

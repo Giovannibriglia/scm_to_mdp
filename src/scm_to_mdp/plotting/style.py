@@ -16,8 +16,8 @@ ARM_STYLE = {
     "BIC -> RMDP": {"color": "#0072B2", "marker": "o"},
     "PCMCI+ -> RMDP": {"color": "#009E73", "marker": "s"},
     "GES -> RMDP": {"color": "#CC79A7", "marker": "^"},
-    "Schnitzer IA": {"color": "#8C564B", "marker": "D"},
-    "Schnitzer exact": {"color": "#8C564B", "marker": "d"},
+    "true graph -> RMDP": {"color": "#8C564B", "marker": "d"},
+    "Schnitzer exact": {"color": "#8C564B", "marker": "d"},  # its name in results written before v1.33
     "flat RMDP": {"color": "#E69F00", "marker": "v"},
     "flat MDP": {"color": "#7F7F7F", "marker": "v"},
     "DiFaRL": {"color": "#D55E00", "marker": "P"},
@@ -26,34 +26,54 @@ ARM_STYLE = {
     "flat SPIBB": {"color": "#9467BD", "marker": "<"},
     "SL-SPIBB": {"color": "#9467BD", "marker": ">"},
     "FOCUS": {"color": "#17BECF", "marker": "h"},
+    "DYNOTEARS -> RMDP": {"color": "#882255", "marker": "p"},
+    "BIC -> RMDP (hull)": {"color": "#332288", "marker": "o"},
+    "BIC -> RMDP (padded)": {"color": "#332288", "marker": "s"},
 }
 ARM_LABEL = {
     "BIC -> RMDP": "BIC → RMDP",
     "PCMCI+ -> RMDP": "PCMCI+ → RMDP",
     "GES -> RMDP": "GES → RMDP",
-    "Schnitzer IA": "Schnitzer et al., IA (true graph)",
+    "DYNOTEARS -> RMDP": "DYNOTEARS → RMDP",
+    "BIC -> RMDP (hull)": "BIC → RMDP (hull)",
+    "BIC -> RMDP (padded)": "BIC → RMDP (padded)",
+    "true graph -> RMDP": "true graph → RMDP",
     "Schnitzer exact": "Schnitzer et al., exact (true graph)",
     "flat RMDP": "flat RMDP",
     "flat MDP": "flat MDP (no guarantee)",
     "DiFaRL": "DiFaRL (no guarantee)",
 }
 FULL_WIDTH = 7.0  # inches, a two-column paper's text width
-ROLE_LINE = {"ours": "-", "oracle": ":", "baseline": "--"}
+ROLE_LINE = {
+    "ours": "-",
+    "oracle": ":",
+    "reference": ":",
+    "control": "-.",
+    "baseline": "--",
+}  # "oracle": older results
+NO_GUARANTEE_LINE = "-."  # ours without a guarantee (X -> MDP): the colour of its X -> RMDP twin
 EXTRA_COLOURS = ["#F0E442", "#BCBD22", "#8C8C00", "#E377C2"]
 EXTRA_MARKERS = ["h", "*", "p", "<", ">", "X"]
 
 
 def method_styles(methods: dict[str, tuple[str, bool]]) -> dict[str, dict]:
-    """{method: (role, guarantee)} -> {method: colour, marker, ls, label}."""
+    """{method: (role, guarantee)} -> {method: colour, marker, ls, label, role}. An "X -> MDP" method
+    takes the colour and marker of "X -> RMDP" and a dash-dot line (no guarantee); the references (true
+    graph) are dotted with a guarantee, dash-dot without."""
     styles, extra = {}, 0
     for name, (role, guarantee) in methods.items():
-        if name in ARM_STYLE:
-            colour, marker = ARM_STYLE[name]["color"], ARM_STYLE[name]["marker"]
+        twin = name.replace(" -> MDP", " -> RMDP")
+        if name in ARM_STYLE or twin in ARM_STYLE:
+            style = ARM_STYLE.get(name) or ARM_STYLE[twin]
+            colour, marker = style["color"], style["marker"]
         else:
-            colour, marker = EXTRA_COLOURS[extra % 6], EXTRA_MARKERS[extra % 6]
+            colour = EXTRA_COLOURS[extra % len(EXTRA_COLOURS)]
+            marker = EXTRA_MARKERS[extra % len(EXTRA_MARKERS)]
             extra += 1
-        label = ARM_LABEL.get(name, name if guarantee else f"{name} (no guarantee)")
-        styles[name] = {"color": colour, "marker": marker, "ls": ROLE_LINE.get(role, "-"), "label": label}
+        label = ARM_LABEL.get(name, (name if guarantee else f"{name} (no guarantee)").replace("->", "→"))
+        no_guarantee = role in ("ours", "reference") and not guarantee  # X -> MDP, true graph -> MDP
+        ls = NO_GUARANTEE_LINE if no_guarantee else ROLE_LINE.get(role, "-")
+        styles[name] = {"color": colour, "marker": marker, "ls": ls, "label": label, "role": role}
     return styles
 
 

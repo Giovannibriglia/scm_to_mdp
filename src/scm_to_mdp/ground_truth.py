@@ -24,15 +24,17 @@ checking that the dense array fits in memory (a dense P grows as S^2 * A: 2^15 s
 ~140 GB).
 """
 
+import dataclasses
 from collections.abc import Callable
 from dataclasses import dataclass, field
 
 import numpy as np
 
-from scm_to_mdp.core import Dataset, Reward, all_states, encode
+from scm_to_mdp.core import NEXT_MARK, Dataset, Reward, all_states, encode
 from scm_to_mdp.data import DataError, DataSpec
 
 MAX_MODEL_GB = 4.0  # default: refuse a dense true model whose construction needs more memory
+REWARD_FREE_CACHE = ("B", "observed_index", "observed_next", "observed_kernel")  # kept by with_reward
 
 
 class ModelTooLarge(MemoryError):
@@ -45,10 +47,15 @@ def dense_model_gb(S: int, A: int) -> float:
 
 
 def dense_transitions(
-    B: np.ndarray, n_actions: int, next_distributions: Callable, max_gb: float = MAX_MODEL_GB
+    B: np.ndarray,
+    n_actions: int,
+    next_distributions: Callable,
+    max_gb: float = MAX_MODEL_GB,
+    coupled: Callable | None = None,
 ) -> np.ndarray:
     """P [S, A, S'] = prod_i P(x_i' | s, a), from next_distributions(states [E, n], actions [E]) ->
-    [E, n, C] (the variables move independently given the state and the action)."""
+    [E, n, C] (the variables move independently given the state and the action), except for the pairs
+    of coupled(states, actions) -> {(i, j): [E, c_i, c_j]}, whose joint law replaces their two factors."""
     S, A = len(B), n_actions
     need = dense_model_gb(S, A)
     if need > max_gb:
@@ -57,10 +64,16 @@ def dense_transitions(
             f"(limit {max_gb:g} GB); use a smaller problem or raise max_gb"
         )
     states = np.repeat(B, A, axis=0)  # every (s, a) pair, s major
-    dist = next_distributions(states, np.tile(np.arange(A), S))  # [S * A, n, C]
+    actions = np.tile(np.arange(A), S)
+    dist = next_distributions(states, actions)  # [S * A, n, C]
+    pairs = coupled(states, actions) if coupled is not None else {}
+    in_pair = {v for pair in pairs for v in pair}
     P = np.ones((S * A, S))
     for i in range(B.shape[1]):
-        P *= dist[:, i, B[:, i]]  # factor i at the value of x_i in every next state s'
+        if i not in in_pair:
+            P *= dist[:, i, B[:, i]]  # factor i at the value of x_i in every next state s'
+    for (i, j), joint in pairs.items():
+        P *= joint[:, B[:, i], B[:, j]]  # the pair's joint law at (x_i, x_j) of every s'
     return P.reshape(S, A, S)
 
 
@@ -142,13 +155,17 @@ class MDPGroundTruth:
         r = self.reward
         if r.R.shape != (S, A) or r.r_next.shape != (S,) or r.terminal.shape != (S,):
             raise ValueError("spec.reward(B, actions) must return R [S, A], r_next [S] and terminal [S]")
-        if self.true_parents is not None:
-            inputs = set(spec.state_vars + spec.action_vars)
+        if self.true_parents is not None:  # slice-t parents, and same-step parents x' (acyclic)
+            inputs = set(spec.state_vars + spec.action_vars) | {v + NEXT_MARK for v in spec.state_vars}
             if set(self.true_parents) != set(spec.state_vars):
                 raise ValueError("true_parents must have one entry per state variable")
             for v, ps in self.true_parents.items():
                 if not set(ps) <= inputs:
                     raise ValueError(f"true_parents[{v!r}] has names that are not state or action variables")
+            same_step = {v: [p.removesuffix(NEXT_MARK) for p in ps if p.endswith(NEXT_MARK)]
+                         for v, ps in self.true_parents.items()}  # fmt: skip
+            if not _acyclic(same_step):
+                raise ValueError("true_parents: the same-step edges x' -> y' have a cycle")
         if self.observed is not None:
             obs = self.observed
             if not set(obs.state_vars) <= set(spec.state_vars) or obs.action_vars != spec.action_vars:
@@ -171,6 +188,17 @@ class MDPGroundTruth:
         if unknown:
             raise DataError(f"the data use action vectors the true MDP does not have: {sorted(unknown)[:5]}")
 
+    # ---- another task on the same dynamics (reward transfer) ------------------------------------
+    def with_reward(self, reward: Callable, observed_reward: Callable | None = None) -> "MDPGroundTruth":
+        """The same transitions, start and graph with another reward (spec.reward; observed_reward for
+        the learner's spec when variables are hidden). The reward-free caches are kept."""
+        spec = dataclasses.replace(self.spec, reward=reward)
+        observed = None
+        if self.observed is not None:
+            observed = dataclasses.replace(self.observed, reward=observed_reward or reward)
+        kept = {k: v for k, v in self._cache.items() if k in REWARD_FREE_CACHE}
+        return dataclasses.replace(self, spec=spec, observed=observed, _cache=kept)
+
     # ---- what evaluation needs ---------------------------------------------------------------
     def actions_of(self, dataset: Dataset) -> np.ndarray:
         """[K] the true action index of every action vector of the dataset."""
@@ -182,7 +210,8 @@ class MDPGroundTruth:
         parent is left out: no graph over the observed columns can contain it)."""
         if self.true_parents is None:
             raise ValueError("this ground truth has no true_parents")
-        return {v: tuple(x for x in dataset.inputs if x in self.true_parents[v]) for v in dataset.state_vars}
+        names = dataset.inputs + dataset.next_vars  # slice-t parents first, then same-step ones
+        return {v: tuple(x for x in names if x in self.true_parents[v]) for v in dataset.state_vars}
 
     def optimal_values(self, gamma: float) -> np.ndarray:
         """V*[s] (cached per gamma)."""
@@ -215,6 +244,23 @@ class MDPGroundTruth:
             self._cache["observed_next"] = out
         return self._cache["observed_next"]
 
+    def observed_kernel(self) -> np.ndarray:
+        """[S_obs, A, S_obs] the observed MDP's kernel: the true kernel averaged over the hidden part of
+        the state with weight P(hidden) of the start distribution (see observed_optimal). Nothing
+        hidden: the true kernel."""
+        if "observed_kernel" not in self._cache:
+            if not self.hidden:
+                self._cache["observed_kernel"] = self.P
+            else:
+                idx, w = self.observed_index(), self.hidden_prior()
+                S_obs = self.learner_spec.n_states
+                weight = np.zeros(S_obs)
+                np.add.at(weight, idx, w)
+                P_obs = np.zeros((S_obs, len(self.actions), S_obs))
+                np.add.at(P_obs, idx, w[:, None, None] * self.observed_next())
+                self._cache["observed_kernel"] = P_obs / weight[:, None, None]
+        return self._cache["observed_kernel"]
+
     def observed_optimal(self, gamma: float) -> tuple[np.ndarray, np.ndarray]:
         """(pi_obs [S_obs], V [S]): the policy over the observed state that is optimal in the observed
         MDP, and its exact value in the full model, per full state. The observed MDP averages the
@@ -231,14 +277,8 @@ class MDPGroundTruth:
                 solution = value_iteration.solve(self.P, self.reward, gamma)
                 self._cache[key] = (solution.pi, self.optimal_values(gamma))
             else:
-                idx, w = self.observed_index(), self.hidden_prior()
-                obs = self.learner_spec
-                S_obs = obs.n_states
-                weight = np.zeros(S_obs)
-                np.add.at(weight, idx, w)
-                P_obs = np.zeros((S_obs, len(self.actions), S_obs))
-                np.add.at(P_obs, idx, w[:, None, None] * self.observed_next())
-                P_obs /= weight[:, None, None]
+                idx, obs = self.observed_index(), self.learner_spec
+                P_obs = self.observed_kernel()
                 reward = obs.reward(all_states([obs.cards[v] for v in obs.state_vars]), self.actions)
                 pi_obs = value_iteration.solve(P_obs, reward, gamma).pi
                 V = value_iteration.policy_value(self.P, self.reward, pi_obs[idx], gamma)
@@ -282,6 +322,20 @@ class MDPGroundTruth:
         return cls(
             spec, P, np.asarray(actions, dtype=np.int64), np.asarray(start, float), true_parents, state_names
         )
+
+
+def _acyclic(parents: dict[str, list[str]]) -> bool:
+    """Is the graph {child: parents} acyclic (Kahn's algorithm)?"""
+    left = {v: set(ps) & set(parents) for v, ps in parents.items()}
+    while left:
+        roots = [v for v, ps in left.items() if not ps]
+        if not roots:
+            return False
+        for v in roots:
+            del left[v]
+        for ps in left.values():
+            ps.difference_update(roots)
+    return True
 
 
 def state_index(spec: DataSpec, values: np.ndarray) -> np.ndarray:

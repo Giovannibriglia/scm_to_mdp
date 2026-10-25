@@ -6,6 +6,8 @@ and chooses, then prints the choices and saves them in meta.json (key "machine")
     workers   parallel (size, seed) jobs = min(physical cores, RAM rule), at least 1.
               RAM rule: workers x Limits.mem_gb <= 80% of the RAM, so that a step is never killed
               because other steps took the memory; a "memout" then means the same on every machine.
+    hashing   PYTHONHASHSEED=0 in every process the run starts (HASH_SEED): set orders, and so
+              results, do not change from one run to the next.
     threads   one per process (torch and the BLAS libraries of numpy / scipy): more threads made a
               training slower (1 / 2 / 4 threads: 2.7 / 3.5 / 3.9 s on an M5), and workers x threads
               must not exceed the cores (an oversubscribed machine makes the time limits fire
@@ -40,6 +42,11 @@ ENV_DEVICE = "SCM_TO_MDP_DEVICE"
 ENV_THREADS = "SCM_TO_MDP_THREADS"
 BLAS_VARS = ("OMP_NUM_THREADS", "OPENBLAS_NUM_THREADS", "MKL_NUM_THREADS", "VECLIB_MAXIMUM_THREADS")
 RAM_SHARE = 0.8
+# String hashing is randomised per Python process, so the order of a set of names changes between
+# runs, and a library that breaks ties by that order gives different results (pgmpy's GES did,
+# discovery/ges.py). Every process a run starts gets this fixed seed (the runner's own hash is set when
+# it starts, so every step runs in a worker, also with one worker: tool/sweep.py).
+HASH_SEED = "0"
 
 # "auto" -> which GPU backends may train the networks. Measured 2026-10-22, offline DQN on Sepsis
 # (2 x 256 MLP, batch 256, 4,000 steps, two datasets): Apple M5, CPU 4.7 s vs MPS 6.1 s (MPS slower);
@@ -190,6 +197,7 @@ def apply(p: Plan) -> None:
     global _applied
     os.environ[ENV_DEVICE] = _applied = p.device
     os.environ[ENV_THREADS] = str(p.threads)
+    os.environ["PYTHONHASHSEED"] = HASH_SEED  # fresh interpreters (pool workers, trainings) read it
     for var in BLAS_VARS:
         os.environ.setdefault(var, "1")
 

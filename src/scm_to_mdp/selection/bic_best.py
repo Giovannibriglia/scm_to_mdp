@@ -1,6 +1,11 @@
 """Selection rule "bic_best" (step S3): keep the candidate graph with the best BIC on the data.
 
-For scored parent sets (BIC search): the parent set of every x' with the best score.
+For scored parent sets (BIC search): the parent set of every x' with the best score, among the
+combinations whose same-step edges (x_j' -> x_i') form a DAG. The total score is a sum over the
+targets, so the best acyclic combination is found exactly by dynamic programming over the sets of
+next-state variables (Silander & Myllymaki, UAI 2006): best(U) = max over the last variable v in U of
+best(U - {v}) + the best score of v whose same-step parents lie in U - {v}. Cost 2^n * n for n state
+variables (only when some candidate has a same-step parent; otherwise every target on its own).
 
 For a class of graphs (PCMCI+, GES): some edges are directed, others are undirected (the data do
 not tell their direction). The rule:
@@ -36,12 +41,55 @@ MAX_ORDERS = 20_000  # node orders tried per chain component
 def select(candidates: Candidates, dataset: Dataset) -> Graph:
     """The graph with the best BIC among the candidates."""
     if candidates.kind == "scored_sets":
-        parents = {v: max(scored, key=lambda t: t[1])[0] for v, scored in candidates.scores.items()}
-        return Graph(parents, report=dict(candidates.report))
+        parents = best_acyclic(candidates.scores)
+        same_step = sum(p.endswith(NEXT_MARK) for ps in parents.values() for p in ps)
+        return Graph(parents, report={**candidates.report, "intra_next": same_step})
     graph = choose_dag(
         set(candidates.directed), set(candidates.undirected), dataset, candidates.keep_vstructures
     )
     return Graph(graph.parents, report={**candidates.report, **graph.report})
+
+
+def best_acyclic(scores: dict[str, list[tuple[tuple[str, ...], float]]]) -> dict[str, tuple[str, ...]]:
+    """The parent set of every target (best total score) such that the same-step edges form a DAG
+    (see the module docstring). Ties: the first candidate in the list order."""
+    targets = list(scores)
+    position = {v + NEXT_MARK: j for j, v in enumerate(targets)}
+
+    def same_step_mask(parents):
+        return sum(1 << position[p] for p in parents if p in position)
+
+    if not any(same_step_mask(c) for sets in scores.values() for c, _ in sets):
+        return {v: max(sets, key=lambda t: t[1])[0] for v, sets in scores.items()}
+    n, full = len(targets), (1 << len(targets)) - 1
+    best_within, choice_within = [], []  # [target][mask]: the best score whose same-step parents lie in mask
+    for v in targets:
+        score, choice = np.full(full + 1, -np.inf), np.full(full + 1, -1, dtype=np.int64)
+        for c, (parents, value) in enumerate(scores[v]):
+            m = same_step_mask(parents)
+            if value > score[m]:
+                score[m], choice[m] = value, c
+        for bit in range(n):  # the best over subsets: max over masks contained in each mask
+            for mask in range(full + 1):
+                if mask >> bit & 1 and score[mask ^ (1 << bit)] > score[mask]:
+                    score[mask], choice[mask] = score[mask ^ (1 << bit)], choice[mask ^ (1 << bit)]
+        best_within.append(score)
+        choice_within.append(choice)
+    best, last = np.full(full + 1, -np.inf), np.full(full + 1, -1, dtype=np.int64)
+    best[0] = 0.0
+    for mask in range(1, full + 1):
+        for j in range(n):
+            if mask >> j & 1:
+                value = best[mask ^ (1 << j)] + best_within[j][mask ^ (1 << j)]
+                if value > best[mask]:
+                    best[mask], last[mask] = value, j
+    parents, mask = {}, full
+    while mask:
+        j = int(last[mask])
+        rest = mask ^ (1 << j)
+        parents[targets[j]] = scores[targets[j]][int(choice_within[j][rest])][0]
+        mask = rest
+    return {v: parents[v] for v in targets}
 
 
 def family_bic(
@@ -115,9 +163,10 @@ def orientations(component, undirected, directed, adjacent, check_vstructures, r
 def choose_dag(
     directed: set[tuple], undirected: set[frozenset], dataset: Dataset, check_vstructures: bool, seed: int = 0
 ) -> Graph:
-    """The DAG of the class with the best BIC (ties: best transition BIC). Returns the slice-t parents
-    of every x_i' (its neighbours among the slice-t inputs, whatever the direction of the edge) and a
-    report: number of DAGs in the class, number tied, edges among next-state nodes."""
+    """The DAG of the class with the best BIC (ties: best transition BIC). Returns the parents of every
+    x_i': its slice-t neighbours (whatever the direction of the edge), then its same-step parents x_j'
+    (edges among next-state nodes, as oriented in the DAG), and a report: number of DAGs in the class,
+    number tied, same-step edges."""
     df, rng = dataset.df, np.random.default_rng(seed)
     cards = {c: dataset.cards[c.removesuffix(NEXT_MARK)] for c in df.columns}
     adjacent = {frozenset(e) for e in directed} | set(undirected)
@@ -154,9 +203,27 @@ def choose_dag(
 
     # GES does not know the time order, so it may orient an edge x' -> x: an edge is a time step, and
     # every slice-t neighbour of x' is a parent of x' whatever its direction (PCMCI+ only has x -> x')
+    same_step = acyclic_same_step({(a, b) for a, b in chosen if a in next_nodes and b in next_nodes})
     parents = {
         v: slice_t_neighbours(v_next, chosen)
+        + tuple(u for u in dataset.next_vars if (u, v_next) in same_step)
         for v, v_next in zip(dataset.state_vars, dataset.next_vars, strict=True)
     }
-    intra_next = sum(1 for a, b in chosen if a in next_nodes and b in next_nodes)
-    return Graph(parents, report={"dags": n_dags, "tied": n_tied, "intra_next": intra_next})
+    report = {"dags": n_dags, "tied": n_tied, "intra_next": len(same_step)}
+    return Graph(parents, report=report)
+
+
+def acyclic_same_step(edges: set[tuple[str, str]]) -> set[tuple[str, str]]:
+    """The same-step edges without cycles: a class's DAG has none, but DYNOTEARS's thresholded weights
+    may (its acyclicity is a penalty); an edge that closes a cycle is dropped, in sorted order."""
+    kept: set[tuple[str, str]] = set()
+    for a, b in sorted(edges):
+        reach, stack = set(), [b]  # does b already reach a through the kept edges?
+        while stack:
+            u = stack.pop()
+            if u not in reach:
+                reach.add(u)
+                stack.extend(y for x, y in kept if x == u)
+        if a not in reach:
+            kept.add((a, b))
+    return kept

@@ -1,12 +1,12 @@
 """Smoke test of experiment 1: run once after cloning, to see that everything is installed and works.
 
-    .venv/bin/python experiments/exp1/exp_smoke.py    (2 minutes on a recent laptop, 8 on an older server)
+    .venv/bin/python experiments/exp1/exp_smoke.py    (about 15 minutes on a recent laptop)
 
 It checks that every dependency imports, prints the machine and the plan the real runs would use
-(workers, training device: utils/compute.py), then runs each complete grid (sysadmin_complete.py,
-sepsis_complete.py, chemistry_complete.py) on one tiny setting with every behaviour policy and every
-method (offline DQN and CQL included, briefly trained) with that plan, in parallel worker processes
-as the real runs do, and writes the report. It ends with a PASS / FAIL line per grid.
+(workers, training device: utils/compute.py), then runs every complete grid (*_complete.py, one per
+domain) on one tiny setting with every behaviour policy and every method (offline DQN and CQL included,
+briefly trained), the dynamics shifts and the reward transfer, with that plan, in parallel worker
+processes as the real runs do, and writes the report. It ends with a PASS / FAIL line per grid.
 --workers N and --device D override the plan, as in the grid scripts.
 
 Output: results/exp1/smoke_<date>_<time>/<grid>/ (safe to delete). Only offline DQN / CQL can use a
@@ -31,9 +31,15 @@ sys.path.insert(0, str(HERE))
 
 # one tiny setting per grid: (script, size, knob, numbers of rollouts)
 TINY = [
-    ("sysadmin_complete", 3, "bidirectional", [15, 30]),
+    ("sysadmin_complete", 3, "ring+crash", [15, 30]),
     ("sepsis_complete", 2, "hidden", [50, 100]),
     ("chemistry_complete", 4, "0.4", [15, 30]),
+    ("aircraft_complete", "8x6", "on", [15, 30]),
+    ("drone_complete", "3-1", "gust", [15, 30]),
+    ("stock_complete", "2x2", 0.8, [15, 30]),
+    ("frozenlake_complete", "4x4-1", "wind", [15, 30]),
+    ("coffee_complete", "coffee", "original", [15, 30]),
+    ("taxi_complete", "deterministic", "original", [25, 50]),
 ]
 WORKERS = "auto"  # as the grids: what the machine allows
 
@@ -108,11 +114,22 @@ def run_one(script: str, size, knob, n_rollouts, out_dir: Path) -> tuple[bool, s
         problems.append(
             f"{len(bad)} runs not ok: " + "; ".join(sorted(set(bad["method"] + ": " + bad["status"])))
         )
-    for f in ("tables.md", "README.md", "figures/sample_efficiency_grid.png", "figures/promise_heatmap.png"):
+    for f in (
+        "tables.md",
+        "README.md",
+        "figures/sample_efficiency_grid.png",
+        "figures/promise_heatmap.png",
+        "validity.csv",
+        "coverage.csv",
+    ):
         if not (out_dir / "summary" / f).exists():
             problems.append(f"summary/{f} missing")
     if not list(out_dir.glob("*/*/models/*/n=*/*/model.npz")):
         problems.append("no saved model")
+    if m.GRID.reward_transfer and not list(out_dir.glob("*/*/results_transfer.csv")):
+        problems.append("no results_transfer.csv")
+    if m.GRID.shifts is not None and not list(out_dir.glob("*/*/results_shift.csv")):
+        problems.append("no results_shift.csv")
     expected = len(runs["policy"].unique()) * len(n_rollouts) * runs["method"].nunique()
     n_methods, n_policies = runs["method"].nunique(), runs["policy"].nunique()
     note = f"{len(runs)} runs ({expected} expected), {n_methods} methods, {n_policies} policies"

@@ -6,8 +6,9 @@ Dearden and Goldszmidt (AIJ 2000) and the SPUDD paper (Hoey et al., UAI 1999).
 
 A robot must buy coffee at the shop and deliver it to the user in the office; it gets wet if it moves
 in the rain without an umbrella. State (all 0/1): office (the robot is in the office, else at the
-shop), wet, umbrella, rain, hrc (the robot has coffee), huc (the user has coffee). Actions (data
-columns, exactly one on): move, buy_coffee, deliver_coffee, get_umbrella.
+shop), wet, umbrella, rain, hrc (the robot has coffee), huc (the user has coffee).
+Action (one categorical data column act): 0 move, 1 get_umbrella, 2 buy_coffee, 3 deliver_coffee
+(then buy_snack, deliver_snack); no "do nothing" in the domain.
 
 Numbers. The paper's text gives two: get_umbrella in the office gives the umbrella w.p. 0.9; a move
 in the rain from the office ends "not office, wet" w.p. 0.81, which we read as two independent
@@ -43,11 +44,12 @@ class Coffee(Env):
         self.state_vars = ["office", "wet", "umbrella", "rain"]
         for item in self.items:
             self.state_vars += [f"hr{item[0]}", f"hu{item[0]}"]  # robot has / user has
-        self.action_vars = ["move", "get_umbrella"]
+        self.action_names = ["move", "get_umbrella"]  # the values of act, in order
         for item in self.items:
-            self.action_vars += [f"buy_{item}", f"deliver_{item}"]
-        self.cards = dict.fromkeys(self.state_vars + self.action_vars, 2)
-        self.n_actions = len(self.action_vars)  # env action a = the action column a is on
+            self.action_names += [f"buy_{item}", f"deliver_{item}"]
+        self.action_vars = ["act"]
+        self.cards = dict.fromkeys(self.state_vars, 2) | {"act": len(self.action_names)}
+        self.n_actions = len(self.action_names)  # env action a = value a of act
         self.policies = {"random": self.random_policy}
         self.build_model()
 
@@ -59,7 +61,7 @@ class Coffee(Env):
 
     def next_distributions(self, states, actions):
         E, n = len(states), len(self.state_vars)
-        act = {name: actions == j for j, name in enumerate(self.action_vars)}
+        act = {name: actions == j for j, name in enumerate(self.action_names)}
         office, wet, umbrella, rain = (self.x(states, v) == 1 for v in ["office", "wet", "umbrella", "rain"])
         p = {}  # P(next value = 1) for every variable
         p["office"] = np.where(act["move"], np.where(office, 1 - MOVE_SUCCESS, MOVE_SUCCESS), office)
@@ -76,7 +78,7 @@ class Coffee(Env):
         return np.stack([1 - q, q], axis=-1).reshape(E, n, 2)
 
     def action_columns(self, actions):
-        return np.eye(self.n_actions, dtype=np.int64)[actions]
+        return np.asarray(actions, dtype=np.int64)[:, None]  # act = the env action
 
     def reward(self, B, actions):
         weights = {"coffee": 0.9} if len(self.items) == 1 else {"coffee": 0.6, "snack": 0.3}
@@ -86,17 +88,41 @@ class Coffee(Env):
         S = len(B)
         return Reward(np.zeros((S, len(actions))), value.astype(float), np.zeros(S, dtype=bool))
 
+    # ---- other tasks on the same dynamics (reward transfer, S9; ours) ---------------------------------
+    def alternative_rewards(self) -> dict:
+        """Other tasks for the same robot (ours; reward on arrival, as the original):
+        coffee_only  1 when the user has coffee, whatever the robot's state (getting wet is free)
+        dry_delivery 1 when the user has coffee AND the robot is dry (in the rain the umbrella becomes
+                     necessary; the original reward values dryness at 0.1 only)
+        snack_only   (coffee+snack) 1 when the user has the snack"""
+
+        def on_arrival(value):
+            def reward(B, actions):
+                S = len(B)
+                return Reward(np.zeros((S, len(actions))), value(B).astype(float), np.zeros(S, dtype=bool))
+
+            return reward
+
+        column = self.state_vars.index
+        tasks = {
+            "coffee_only": on_arrival(lambda B: B[:, column("huc")] == 1),
+            "dry_delivery": on_arrival(lambda B: (B[:, column("huc")] == 1) & (B[:, column("wet")] == 0)),
+        }
+        if "snack" in self.items:
+            tasks["snack_only"] = on_arrival(lambda B: B[:, column("hus")] == 1)
+        return tasks
+
     def true_parents(self):
         truth = {
-            "office": {"office", "move"},
-            "wet": {"wet", "move", "rain", "umbrella"},
-            "umbrella": {"umbrella", "get_umbrella", "office"},
+            "office": {"office", "act"},
+            "wet": {"wet", "act", "rain", "umbrella"},
+            "umbrella": {"umbrella", "act", "office"},
             "rain": {"rain"},
         }
         for item in self.items:
             hr, hu = f"hr{item[0]}", f"hu{item[0]}"
-            truth[hr] = {hr, f"buy_{item}", f"deliver_{item}", "office"}
-            truth[hu] = {hu, f"deliver_{item}", "office", hr}
+            truth[hr] = {hr, "act", "office"}
+            truth[hu] = {hu, "act", "office", hr}
         inputs = self.state_vars + self.action_vars
         return {v: tuple(x for x in inputs if x in truth[v]) for v in self.state_vars}
 

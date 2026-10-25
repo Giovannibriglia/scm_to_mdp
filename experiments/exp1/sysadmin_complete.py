@@ -1,69 +1,69 @@
-"""SysAdmin, complete grid: every size x topology x behaviour policy x number of rollouts.
+"""SysAdmin, complete grid: every size x topology x behaviour policy x number of rollouts (protocol.py:
+the claims, the loggers, the seeds, the shifts and the expectations common to every domain).
 
-    size        N = 2 ... 9 machines (2^N observed states)
-    knob        topology: ring (in-degree 3), bidirectional (4), star (hub)
-    policies    uniform      every action equally likely: broad coverage, the action is randomised
-                expert       the best policy over the observed state, a uniform action w.p. 0.05:
-                             partial coverage (the expert's actions are frequent, the others rare)
-                confounded   the expert, but during a hidden storm it repairs machine 0 w.p. 0.95
-    rollouts    10 ... 1600 (horizon 20), 3 seeds, the 13 standard methods
-                (README; offline DQN and CQL included: DEEP_BASELINES)
+    size        N = 2 ... 10 machines (2^N observed states; N >= 9 needs a server)
+    knob        topology: ring (in-degree 3), bidirectional (4), star (hub); ring+crash: the ring where
+                N // 2 machines down at once ends the episode with -10 (a trap, from the old exp3)
+    policies    uniform, expert eps 0.05, expert eps 0, confounded (repairs machine 0 during storms
+                w.p. 0.95)
+    hidden      the storm (src/scm_to_mdp/envs/sysadmin.py) hits machine 0 only (a machine that is not
+                repaired fails more: P(up) x 0.2), w.p. 0.1 in the data, 0.3 and 0.6 at deployment
+    rollouts    10 ... 1600 (horizon 20, gamma 0.9), 5 seeds, the standard methods with the per-(s,a)
+                product set (every variable is 0/1)
 
-The storm (src/scm_to_mdp/envs/sysadmin.py) is in every setting: drawn afresh at every step
-(p = 0.3), it hits machine 0 only (a machine that is not repaired fails more: P(up) x 0.2), and it
-is never in the data. The uniform and expert loggers ignore it, so their data show the right
-observed kernel; only the confounded logger makes the data lie (the repairs of machine 0 happen
-in storms, so machine 0 looks healthier when it is not repaired than it is).
-
-Expectations, written before the run:
-    H1  learning the structure pays off more as N grows (BIC needs fewer rollouts than flat MDP
-        and DiFaRL, and flat RMDP never gets there), and less with denser graphs (bidirectional);
-    H2  expert data: robust methods do better than plug-in at small budgets; flat MDP's promise fails;
-    H3  expert data: discovery loses action edges (the actions follow the state, rarely varied),
-        more for PCMCI+ and GES than for BIC; then the causal methods' promise fails;
-    H4  confounded data: the promise of every method fails once the intervals are narrower than
-        the bias (small N or many rollouts), even with the true graph; uniform / expert: it holds
-        with the true graph.
+Expectations for this domain, written 2026-10-24 before the runs:
+    H1  structure pays off more as N grows (A), less with the denser bidirectional ring;
+    H2  ring+crash: the point models' optimism can lead into the crash under the eps = 0 expert; the
+        robust arms keep their promise (A2);
+    H3  under eps = 0 the expert repairs as a function of the states: the logger-Markov graph replaces
+        reboot by a neighbour for some machines (seen in a check: m1 <- m0, m1, m3 on the 4-ring), and
+        BIC may drop the same action edges (A3);
+    H4  machine0_only and all_up_bonus need repairs the expert rarely makes: the largest
+        cov_joint - cov_factor, the largest transfer gain (B1).
 
 Run from the repository root (several hours; a stopped run resumes setting by setting):
     .venv/bin/python experiments/exp1/sysadmin_complete.py                 # a new run
     .venv/bin/python experiments/exp1/sysadmin_complete.py --resume        # continue the latest run
     .venv/bin/python experiments/exp1/sysadmin_complete.py --report-only   # tables and figures only
     .venv/bin/python experiments/exp1/sysadmin_complete.py --workers 8 --device cpu  # own plan
-The machine plan (workers, training device) is chosen at start, printed, and saved in meta.json.
-Output: results/exp1/sysadmin_complete_<date>_<time>/ (one folder per run): summary/ for the whole
-grid, models/ of the first seed and one folder per setting (tool/runs.py, tool/store.py).
+Output: results/exp1/sysadmin_complete_<date>_<time>/.
 """
 
 import dataclasses
 import warnings
 from pathlib import Path
 
+from protocol import DEEP_BASELINES, DELTA, N_ROLLOUTS, SEEDS, SHIFT_HIDDEN, TRAIN_HIDDEN, policies
+
 from scm_to_mdp.envs import SysAdmin
-from scm_to_mdp.tool import Grid, Limits, Policy, report_grid, run_folder, run_grid, standard_methods
+from scm_to_mdp.tool import Grid, Limits, report_grid, run_folder, run_grid, standard_methods
 
 warnings.filterwarnings("ignore", category=FutureWarning)
 
 SIZES = [2, 3, 4, 5, 6, 7, 8, 9, 10]
-TOPOLOGIES = ["ring", "bidirectional", "star"]
-POLICIES = [
-    Policy("uniform"),
-    Policy("expert", epsilon=0.05),
-    Policy("confounded", epsilon=0.05, strength=0.95),
-]
-N_ROLLOUTS = [10, 25, 50, 100, 200, 400, 1600]
-SEEDS = [0, 1, 2]
-HORIZON, GAMMA, DELTA = 20, 0.9, 0.05
-DEEP_BASELINES = True  # offline DQN and CQL (a run: M5 CPU ~12 s; Xeon E5 CPU ~100 s, CUDA ~10 s)
-STORM, STORM_EFFECT = 0.3, 0.8  # P(storm) at every step; a storm multiplies machine 0's P(up) by 1 - 0.8
+TOPOLOGIES = ["ring", "bidirectional", "star", "ring+crash"]
+HORIZON, GAMMA = 20, 0.9
+STORM_EFFECT, CRASH_COST = 0.8, 10.0  # a storm multiplies machine 0's P(up) by 1 - 0.8
 LIMITS = Limits(
-    mem_gb=8.0, timeout_s={"discovery": 60.0, "selection": 60.0, "solve": 60.0, "training": 600.0}
+    mem_gb=8.0,
+    timeout_s={"discovery": 60.0, "selection": 60.0, "learning": 60.0, "solve": 60.0, "training": 600.0},
 )
 OUT_DIR = Path(__file__).resolve().parents[2] / "results" / "exp1" / "sysadmin_complete"
 
 
-def make_env(n, topology: str, seed: int) -> SysAdmin:
-    return SysAdmin(int(n), seed, topology=topology, storm=STORM, storm_effect=STORM_EFFECT)
+def sysadmin(n, knob: str, seed: int, storm: float) -> SysAdmin:
+    topology, _, crash = str(knob).partition("+")
+    return SysAdmin(int(n), seed, topology=topology, storm=storm, storm_effect=STORM_EFFECT,
+                    crash=int(n) // 2 if crash else None, crash_cost=CRASH_COST)  # fmt: skip
+
+
+def make_env(n, knob: str, seed: int) -> SysAdmin:
+    return sysadmin(n, knob, seed, TRAIN_HIDDEN)
+
+
+def shifts(n, knob: str, seed: int) -> dict:
+    """The same network where storms come more often (the learner never sees them)."""
+    return {f"storm={p:g}": sysadmin(n, knob, seed, p) for p in SHIFT_HIDDEN}
 
 
 GRID = Grid(
@@ -73,18 +73,23 @@ GRID = Grid(
     size_name="N",
     knobs=TOPOLOGIES,
     knob_name="topology",
-    policies=POLICIES,
+    policies=policies(),
     n_rollouts=N_ROLLOUTS,
     seeds=SEEDS,
     horizon=HORIZON,
     gamma=GAMMA,
-    methods=standard_methods(
-        max_parents=4, delta=DELTA, exact=True, deep=DEEP_BASELINES, state_parents=3
-    ),  # true in-degree <= 4
+    methods=standard_methods(max_parents=4, delta=DELTA, exact=True, deep=DEEP_BASELINES, state_parents=3),
     limits=LIMITS,
     workers="auto",  # what the machine allows (utils/compute.py); --workers N overrides
     out_dir=OUT_DIR,
-    constants={"storm": STORM, "storm_effect": STORM_EFFECT},  # checked when a run resumes
+    reward_transfer=True,
+    shifts=shifts,
+    constants={
+        "storm": TRAIN_HIDDEN,
+        "shift_storms": SHIFT_HIDDEN,
+        "storm_effect": STORM_EFFECT,
+        "crash_cost": CRASH_COST,
+    },  # fmt: skip
 )
 
 if __name__ == "__main__":

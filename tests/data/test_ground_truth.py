@@ -45,10 +45,10 @@ def test_data_checks(env, truth):
     bad["m1"] = 2
     with pytest.raises(DataError, match="outside"):
         truth.spec.read(bad)
-    two_hot = df.copy()
-    two_hot["a0"], two_hot["a1"] = 1, 1
-    with pytest.raises(DataError, match="action vectors"):
-        truth.check_data(two_hot)
+    no_such_action = df.copy()
+    no_such_action["reboot"] = 4  # reboot has values 0..3 (no-op, three repairs)
+    with pytest.raises(DataError, match="outside"):
+        truth.check_data(no_such_action)
 
 
 def test_spec_read_orders_the_columns(env):
