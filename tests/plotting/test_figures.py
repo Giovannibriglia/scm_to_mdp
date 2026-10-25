@@ -181,3 +181,16 @@ def test_chain_picture_edges_and_grid_layout(tmp_path):
     assert pos.shape == (16, 2) and set(map(tuple, pos)) == {(x, -y) for x in range(4) for y in range(4)}
     store.draw_ground_truth(truth, data, "lake", tmp_path / "lake")
     assert (tmp_path / "lake.png").exists()
+
+
+def test_legend_without_handles():
+    """A figure where no method drew a line (e.g. every method failed) gets no legend, not an error."""
+    import matplotlib.pyplot as plt
+
+    from scm_to_mdp.plotting import grid_figures
+
+    fig = plt.figure()
+    figures._legend(fig, [], {})
+    grid_figures._legend(fig, [])
+    assert not fig.legends
+    plt.close(fig)

@@ -103,6 +103,8 @@ def _legend(fig, methods, styles, extra=()):
         )
         for m in methods
     ] + list(extra)
+    if not handles:  # nothing drawn (e.g. every method failed): no legend
+        return
     fig.legend(
         handles=handles,
         loc="lower center",

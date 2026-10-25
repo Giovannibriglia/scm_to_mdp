@@ -23,6 +23,8 @@ POLICY_COLOURS = ["#0072B2", "#009E73", "#D55E00", "#CC79A7", "#E69F00", "#56B4E
 
 
 def _legend(fig, handles, ncol=4, y=-0.01):
+    if not handles:  # nothing drawn (e.g. every method failed): no legend
+        return
     fig.legend(
         handles=handles,
         loc="lower center",
