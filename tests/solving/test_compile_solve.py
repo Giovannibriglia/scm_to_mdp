@@ -192,3 +192,23 @@ def test_a_warm_start_gives_the_same_robust_solution():
         cold = robust_vi.solve(mdp, GAMMA, tol=1e-10, nature=nature)
         warm = robust_vi.solve(mdp, GAMMA, tol=1e-10, nature=nature, V0=cold.V + 0.01)
         assert np.allclose(cold.V, warm.V, atol=1e-8) and warm.iterations < cold.iterations
+
+
+def test_nature_reuses_its_fill_only_while_the_order_holds():
+    """A Nature that keeps its fill gives what a fresh one gives: for W in the same order as before
+    (reused), in a new order (refilled) and with ties; robust VI still matches the textbook loop."""
+    rng = np.random.default_rng(11)
+    mdp = _random_imdp(50, 4, 0.1, 8)
+    W1 = rng.normal(size=50)
+    for W2 in (2 * W1 + 1, rng.normal(size=50), np.round(W1)):  # same order, new order, ties
+        for nature in robust_vi.NATURES:
+            kept = robust_vi.Nature(mdp, nature)
+            kept.expectation(W1)
+            fresh = robust_vi.Nature(mdp, nature).expectation(W2)
+            assert np.allclose(kept.expectation(W2), fresh, atol=1e-12)
+    kept = robust_vi.Nature(mdp)
+    kept.expectation(W1)
+    kept.expectation(2 * W1 + 1)
+    assert kept.reused == 1
+    fast = robust_vi.solve(mdp, GAMMA, tol=1e-10).V
+    assert np.allclose(fast, _robust_vi_reference(mdp.L, mdp.U, mdp.reward, GAMMA), atol=1e-6)
