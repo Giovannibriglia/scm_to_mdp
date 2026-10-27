@@ -25,8 +25,10 @@ def test_a_new_run_gets_a_new_folder_and_resume_finds_the_latest(tmp_path):
     assert run_folder(base, ["--resume"]) == (second, False)
     assert run_folder(base, ["--report-only"]) == (second, True)
     assert run_folder(base, ["--resume", str(first)]) == (first, False)
+    fresh, _ = run_folder(tmp_path / "other", ["--resume"])  # nothing to resume: a new run
+    assert fresh.name.startswith("other_") and not fresh.exists()
     with pytest.raises(SystemExit):
-        run_folder(tmp_path / "other", ["--resume"])
+        run_folder(tmp_path / "other", ["--report-only"])
 
 
 # ---- a failure does not stop a sweep ---------------------------------------------------------------

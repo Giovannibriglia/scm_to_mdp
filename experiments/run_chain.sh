@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Run every script of one experiment in sequence (experiments/<exp>/<domain>_{imdp,mdp}.py), one process
 # each, from the repository root. A grid that fails is logged and the chain goes on; a stopped chain can
-# be started again with RESUME=1 (each grid continues its latest run folder).
+# be started again with RESUME=1 (each grid continues its latest run folder, or starts one if it has
+# none yet: RESUME=1 is also safe for a first launch).
 #
 #   bash experiments/run_chain.sh exp1                  # every domain of experiment 1, in the order below
 #   bash experiments/run_chain.sh exp2 sysadmin taxi    # only these domains
