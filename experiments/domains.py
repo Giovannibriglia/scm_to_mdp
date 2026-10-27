@@ -7,16 +7,24 @@ A domain with a hidden exogenous variable (SysAdmin's storm, Chemistry's catalys
 Aircraft's turbulence, Stock's news, Frozen Lake's wind) draws it on at every step with probability
 HIDDEN; the learner never sees it, and the true observed MDP averages it out.
 
-    domain        sizes                                  knob                      gamma
-    sysadmin      N = 2..11 machines (ring)              topology = ring           0.90
-    chemistry     2..7 objects                           density = 1.0             0.90
-    aircraft      10 grids, 4x3 .. 18x13                 proximity = on            0.95
-    drone         side 3..12, one drone                  gust                      0.95
-    frozenlake    1 agent: maps 4..32; 2 agents: 4..7    agents = 1 | 2            0.95
-    stock         9 layouts, 1x2 .. 4x2                  scale = 0.8               0.90
-    sepsis        2, 3, 4 vitals                         diabetes = observed       0.90
-    coffee        coffee, coffee+snack                   variant = original        0.90
-    taxi          deterministic, noisy navigation        variant = original        0.99
+    domain        sizes                                  knob                  gamma   episodes
+    sysadmin      N = 2..11 machines (ring)              topology = ring       0.90    64 steps
+    chemistry     2..7 objects                           density = 1.0         0.90    64 steps
+    aircraft      10 grids, 4x3 .. 18x13                 proximity = on        0.95    until the end
+    drone         side 3..12, one drone                  gust                  0.95    until the end
+    frozenlake    1 agent: maps 4..32; 2 agents: 4..7    agents = 1 | 2        0.95    until the end
+    stock         9 layouts, 1x2 .. 4x2                  scale = 0.8           0.90    64 steps
+    sepsis        2, 3, 4 vitals                         diabetes = observed   0.90    until the end
+    coffee        coffee, coffee+snack                   variant = original    0.90    256 steps
+    taxi          deterministic, noisy navigation        variant = original    0.99    until the end
+
+Episodes (Domain.horizon). A domain with terminal states (a hole, the goal, death or discharge, a
+delivery) lets every episode run until the task ends (UNTIL_END: a safety cap, never reached by the
+uniform logger: the longest episodes seen are about 5,000 steps, in Taxi). A domain without terminal
+states resets every few steps, enough for the uniform logger to forget the start: in SysAdmin,
+Chemistry and Stock the distribution of the state is within 1% (total variation) of its long-run
+one after at most 20 steps, so 64; in Coffee only after 200-345 steps, so 256 (computed exactly
+from the true models on 2026-10-27).
 
 make_env functions live at module level: the grid's worker processes import them by name.
 """
@@ -38,6 +46,7 @@ from scm_to_mdp.envs import (
 )
 
 HIDDEN = 0.1  # P(hidden exogenous variable on) at every step
+UNTIL_END = 100_000  # episodes that run until the task ends (a safety cap only)
 MODEL_GB = 12.0  # the largest dense true model an environment may build
 
 
@@ -52,7 +61,7 @@ class Domain:
     gamma: float
     constants: dict = field(default_factory=dict)  # the settings make_env uses (written to grid.json)
     sl_spibb_parents: int = 3  # SL-SPIBB: the size of its candidate parent sets
-    horizon: int | None = None  # the longest episode the logger plays (None: common.HORIZON)
+    horizon: int = UNTIL_END  # the longest episode the logger plays before a reset
 
 
 # ---- environments ----------------------------------------------------------------------------------
@@ -125,9 +134,9 @@ def taxi(size: str, variant: str, seed: int) -> Taxi:
 
 DOMAINS = {
     "sysadmin": Domain("SysAdmin", sysadmin, [2, 3, 4, 5, 6, 7, 8, 9, 10, 11], "N", ["ring"], "topology", 0.9,
-                       {"storm": HIDDEN, "storm_effect": STORM_EFFECT}),
+                       {"storm": HIDDEN, "storm_effect": STORM_EFFECT}, horizon=64),
     "chemistry": Domain("Chemistry", chemistry, [2, 3, 4, 5, 6, 7], "objects", ["1.0"], "density", 0.9,
-                        {"catalyst": HIDDEN, "n_colours": 3, "max_parents": 2}),
+                        {"catalyst": HIDDEN, "n_colours": 3, "max_parents": 2}, horizon=64),
     "aircraft": Domain("Aircraft", aircraft,
                        ["4x3", "5x4", "6x4", "8x5", "8x6", "10x7", "12x8", "14x10", "16x12", "18x13"],
                        "width x height", ["on"], "proximity", 0.95,
@@ -139,10 +148,11 @@ DOMAINS = {
                          "map", ["1", "2"], "agents", 0.95, {"wind": HIDDEN, "wind_effect": WIND_EFFECT},
                          sl_spibb_parents=2),
     "stock": Domain("Stock trading", stock, ["1x2", "1x3", "1x4", "2x2", "1x6", "2x3", "3x2", "2x4", "4x2"],
-                    "sectors x stocks", [0.8], "scale", 0.9, {"news": HIDDEN, "news_effect": NEWS_EFFECT}),
+                    "sectors x stocks", [0.8], "scale", 0.9, {"news": HIDDEN, "news_effect": NEWS_EFFECT},
+                    horizon=64),
     "sepsis": Domain("Sepsis", sepsis, list(VITALS), "vitals", ["observed"], "diabetes", 0.9,
                      {"p_diabetes": P_DIABETES, "diabetes_effect": DIABETES_EFFECT}, sl_spibb_parents=4),
     "coffee": Domain("Coffee robot", coffee, ["coffee", "coffee+snack"], "domain", ["original"], "variant",
-                     0.9),
+                     0.9, horizon=256),
     "taxi": Domain("Taxi", taxi, ["deterministic", "noisy"], "navigation", ["original"], "variant", 0.99),
 }  # fmt: skip

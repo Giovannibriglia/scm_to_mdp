@@ -162,6 +162,7 @@ class Experiment:
     policy: str = ""  # label of the behaviour policy, written in every row
     behaviour: Callable[[Any], np.ndarray] | None = None  # env -> logger table [S, A] (coverage, bias)
     horizon: int | None = None  # the longest episode, for the coverage and bias of `behaviour`
+    failure_horizon: int | None = None  # the failure probabilities: within this many steps (robustness.py)
     settings: dict = field(default_factory=dict)  # constants of make_env / collect, checked on resume
     # relative solve limit (module docstring): None = the absolute Limits.timeout_s["solve"]
     solve_factor: float | None = None
@@ -291,7 +292,7 @@ def run_point(exp: Experiment, size, seed: int, stopped_from: dict) -> list[dict
                 result.info["solve_limit_s"] = limits.timeout_s.get("solve")
             graph = {"parents": json.dumps(result.graph.parents)} if result.graph is not None else {}
             try:
-                metrics = evaluate(result, data, truth, exp.gamma, starts, exp.horizon)
+                metrics = evaluate(result, data, truth, exp.gamma, starts, exp.failure_horizon)
             except Exception as err:  # noqa: BLE001 - reported in the row, the sweep goes on
                 metrics = {"status": "error", "failed_step": "evaluate", "error": repr(err)}
             if random_tasks and exp.reward_family.evaluated_at(n):
@@ -461,6 +462,7 @@ def _config(exp: Experiment) -> dict:
             "limits": None if exp.limits is None else asdict(exp.limits),
             "max_transitions": max(exp.n_transitions),  # the data table: a smaller budget is its prefix
             "horizon": exp.horizon,
+            "failure_horizon": exp.failure_horizon,
             "settings": exp.settings,
             "methods": {
                 name: asdict(m) | {"role": m.role, "guarantee": m.guarantee}

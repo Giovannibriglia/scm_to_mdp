@@ -52,13 +52,16 @@ def load(experiment: str, module: str):
 
 @pytest.mark.parametrize("experiment, module", SCRIPTS)
 def test_every_script_follows_the_protocol(experiment, module):
-    """Uniform logger only, 10 seeds, budgets of 10 ... 10k transitions (episodes of at most 256
-    steps), 20 random starts, the same MDP, the methods of its experiment and kind, and an oracle."""
+    """Uniform logger only, 10 seeds, budgets of 10 ... 100k transitions (episodes until the task ends,
+    or of 64 / 256 steps without an end), 20 random starts, the same MDP, the methods of its experiment
+    and kind, and an oracle."""
     m, protocol, common = load(experiment, module)
     grid, kind = m.GRID, module.rsplit("_", 1)[1]
     assert [p.label for p in grid.policies] == ["uniform"]
-    assert grid.seeds == list(range(10)) and grid.horizon == 256 and grid.n_starts == 20
-    assert grid.n_transitions == [10, 20, 50, 100, 200, 500, 1000, 2000, 5000, 10000]
+    assert grid.seeds == list(range(10)) and grid.n_starts == 20 and grid.failure_horizon == 256
+    assert grid.n_transitions == [10, 20, 50, 100, 200, 500, 1000, 2000, 5000, 10000, 20000, 50000, 100000]
+    no_end = {"sysadmin": 64, "chemistry": 64, "stock": 64, "coffee": 256}  # resets; else until the end
+    assert grid.horizon == no_end.get(module.rsplit("_", 1)[0], 100_000)
     assert grid.shifts is None
     rewards = experiment == "exp1" and module.startswith("sepsis")  # many rewards: exp1, Sepsis only
     assert grid.reward_transfer == rewards and (grid.reward_family is not None) == rewards

@@ -311,6 +311,11 @@ def method_rank(summary: pd.DataFrame, best: pd.DataFrame) -> pd.DataFrame:
 # ==========================================================================================
 # The report
 # ==========================================================================================
+def episodes(horizon: int) -> str:
+    """How the logger's episodes end, for the tables: a cap of 100k steps or more is only a safety cap."""
+    return "episodes until the task ends" if horizon >= 100_000 else f"episodes of at most {horizon} steps"
+
+
 def _fmt_n(r) -> str:
     """The transitions needed: median [quartiles] over seeds."""
     if not np.isfinite(r["median_t"]):
@@ -472,7 +477,7 @@ def report_grid(out_dir, target: float = 0.95, delta: float | None = 0.05, setti
         "",
         f"{grid['size_name']} = {', '.join(sizes)}; {grid['knob_name']} = {', '.join(knobs)}; policies: "
         f"{'; '.join(policies)}; transitions {', '.join(samples_label(t) for t in n_grid)}; "
-        f"seeds {grid['seeds']}; episodes of at most {grid['horizon']} steps; "
+        f"seeds {grid['seeds']}; {episodes(grid['horizon'])}; "
         f"gamma {grid['gamma']}.",
         "",
         f"Target: V^pi >= {target:.0%} of V*_obs (the best policy over the observed state) at that number "

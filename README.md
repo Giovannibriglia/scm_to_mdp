@@ -88,10 +88,11 @@ Both experiments share the data and the evaluation (`experiments/common.py`) and
 (`experiments/domains.py`: SysAdmin, Chemistry, Aircraft, Drone, Frozen Lake, Stock trading, Sepsis,
 Coffee robot, Taxi; sizes calibrated so that the oracle solves each within 8 GB):
 
-- **data:** a uniform-random logger; a budget of 10, 20, 50, 100, 200, 500, 1k, 2k, 5k and 10k
-  transitions per dataset (the first n logged transitions of one table, so the datasets are
-  nested); the logger plays whole episodes of at most 256 steps, an episode that ends early is
-  shorter, and the episode where the budget ends is cut; 10 seeds;
+- **data:** a uniform-random logger; budgets of 10, 20, 50, 100, 200, 500, 1k, 2k, 5k, 10k, 20k,
+  50k and 100k transitions per dataset (the first n logged transitions of one table, so the datasets
+  are nested; the episode where the budget ends is cut); in domains with terminal states every episode
+  runs until the task ends, in the others it resets after 64 steps (256 in Coffee, whose logger
+  forgets the start more slowly; `experiments/domains.py`); 10 seeds;
 - **evaluation:** in the MDP the data come from, with the same reward, at the nominal start and from 20
   random starts; the value of a policy is reported normalised between the random policy (0%) and the
   optimal one over the observed state (100%);

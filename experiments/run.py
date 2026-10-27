@@ -30,6 +30,8 @@ def scripts(experiment: str) -> list[str]:
 
 def show(experiment: str, stem: str) -> None:
     """Print the grid of a script without running it."""
+    from scm_to_mdp.tool.report_grid import episodes
+
     sys.path.insert(0, str(HERE / experiment))
     grid = importlib.import_module(stem).GRID
     sizes = grid.sizes if isinstance(grid.sizes, dict) else {k: grid.sizes for k in grid.knobs}
@@ -37,7 +39,7 @@ def show(experiment: str, stem: str) -> None:
     for knob, values in sizes.items():
         print(f"  {grid.knob_name} = {knob}: {grid.size_name} in {list(values)}")
     print(
-        f"  transitions {grid.n_transitions} (episodes of at most {grid.horizon} steps), "
+        f"  transitions {grid.n_transitions} ({episodes(grid.horizon)}), "
         f"{len(grid.seeds)} seeds, gamma {grid.gamma}"
     )
     logger = [p.label for p in grid.policies]

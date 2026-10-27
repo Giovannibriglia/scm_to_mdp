@@ -77,12 +77,15 @@ def _goes_on(truth: MDPGroundTruth) -> np.ndarray:
 
 def data_occupancy(truth: MDPGroundTruth, probs: np.ndarray, horizon: int) -> np.ndarray:
     """[S, A] nu(s, a): the expected share of logged transitions at (s, a), for rollouts of at most
-    `horizon` steps from the start distribution that stop on arrival in a terminal state."""
+    `horizon` steps from the start distribution that stop on arrival in a terminal state (the loop
+    ends early once every rollout has ended, so a large horizon costs nothing more)."""
     P_b = np.einsum("sa,sat->st", probs, truth.P)  # [S, S'] kernel of the logger
     mu, nu = truth.start.copy(), np.zeros_like(probs)
     for _ in range(horizon):
         nu += mu[:, None] * probs
         mu = (mu @ P_b) * _goes_on(truth)
+        if mu.sum() < 1e-12:  # every rollout has ended
+            break
     return nu / nu.sum()
 
 

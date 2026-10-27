@@ -2,9 +2,9 @@
 
     logger      the uniform-random behaviour policy only (every action tried in every visited state)
     data        a budget of N_TRANSITIONS logged transitions per dataset (the first n transitions of one
-                table, so the datasets are nested); the logger plays whole episodes of at most HORIZON
-                steps (a domain may set its own, domains.Domain.horizon), and an episode that ends
-                early is simply shorter; the episode where the budget ends is cut. SEEDS seeds
+                table, so the datasets are nested); the logger plays whole episodes, until the task
+                ends or for a few steps in domains without an end (domains.Domain.horizon), and the
+                episode where the budget ends is cut. SEEDS seeds
     evaluation  in the MDP the data come from, with the same reward: at the nominal start and from
                 N_STARTS random starts (no reward transfer, no dynamics shift)
     budget      LIMITS per step of a method (memory 8 GB); solving is limited relative to the oracle:
@@ -14,7 +14,7 @@
                 the stopping rule may need at the rate gamma) (tool/sweep.py)
     robustness  for the methods with a promise (scm_to_mdp/robustness.py): the value bracket, the
                 optimistic bound, a one-sweep check of the promise and, where a domain has failure
-                states, the probability of failing within one episode (HORIZON steps)
+                states, the probability of failing within FAILURE_HORIZON steps
     rewards     where an experiment asks for it (experiment 1, Sepsis): every method re-planned under
                 REWARD_FAMILY's random rewards and the domain's own alternative rewards
                 (scm_to_mdp/reward_family.py: does the promise hold for every reward at once?)
@@ -46,8 +46,10 @@ from scm_to_mdp.tool import (
 warnings.filterwarnings("ignore", category=FutureWarning)
 
 ROOT = Path(__file__).resolve().parents[1]
-N_TRANSITIONS = [10, 20, 50, 100, 200, 500, 1000, 2000, 5000, 10000]  # the data budgets
-HORIZON = 256  # the longest episode the logger plays (when the domain sets none)
+# the data budgets: up to 100k, so that the largest problems (SysAdmin N = 11: 24.6k state-action
+# pairs) can visit every pair
+N_TRANSITIONS = [10, 20, 50, 100, 200, 500, 1000, 2000, 5000, 10_000, 20_000, 50_000, 100_000]
+FAILURE_HORIZON = 256  # the failure probabilities: "fail within 256 steps", in every domain
 SEEDS = list(range(10))
 N_STARTS = 20  # random starts of the evaluation (besides the nominal start)
 DELTA = 0.05  # confidence of the interval sets (S4)
@@ -105,7 +107,8 @@ def grid(experiment: str, domain: str, kind: str, names, rewards: bool = False) 
         policies=POLICIES,
         n_transitions=N_TRANSITIONS,
         seeds=SEEDS,
-        horizon=d.horizon or HORIZON,
+        horizon=d.horizon,
+        failure_horizon=FAILURE_HORIZON,
         gamma=d.gamma,
         n_starts=N_STARTS,
         methods=methods(names, d.sl_spibb_parents),

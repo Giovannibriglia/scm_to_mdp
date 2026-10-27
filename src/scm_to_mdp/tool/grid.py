@@ -92,6 +92,7 @@ class Grid:
     pictures_max_states: int = 16  # draw the MDPs (chain pictures) of problems with at most this many states
     reward_transfer: bool = False  # also evaluate under the environment's alternative rewards (sweep.py)
     reward_family: Any = None  # random rewards on the same dynamics (reward_family.RewardFamily; sweep.py)
+    failure_horizon: int | None = None  # the failure probabilities: within this many steps (robustness.py)
     # dynamics shift (sweep.py): (size, knob, seed) -> {name: Env} with other dynamics, same observed states
     shifts: Callable[[Any, Any, int], dict] | None = None
     # relative solve limit (tool/sweep.py): max(solve_floor_s, solve_factor x the oracle's work at rate gamma)
@@ -112,16 +113,21 @@ def logger_table(policy: Policy, gamma: float, env):
 def collect_with(policy: Policy, gamma: float, horizon: int, env, n_transitions: int):
     """At least n_transitions transitions of the setting's behaviour policy, without the hidden columns:
     whole episodes of at most `horizon` steps (fewer where an episode ends early), drawn in batches
-    until there are enough; the episode ids run on across batches."""
+    until there are enough; the episode ids run on across batches. A first batch of at most 32
+    episodes measures the episode length; each next batch is sized from the mean length so far."""
     behaviour = logger_table(policy, gamma, env)
     batches, total, start = [], 0, 0
+    length = min(horizon, 100)  # the expected episode length, updated after every batch
     while total < n_transitions:
-        n_episodes = max(1, -(-(n_transitions - total) // horizon))  # enough if every episode is full
+        n_episodes = max(1, -(-(n_transitions - total) // length))
+        if not batches:
+            n_episodes = min(n_episodes, 32)  # a pilot: the episode length is not known yet
         df = env.sample(n_episodes, horizon, behaviour).reset_index()
         df["episode"] += start  # number the episodes on from the previous batch
         batches.append(df.set_index(["episode", "t"]))
         total += len(df)
         start = int(df["episode"].max()) + 1
+        length = max(1, total // start)  # the mean episode length so far
     return env.hide(pd.concat(batches))
 
 
@@ -171,6 +177,7 @@ def experiments(grid: Grid) -> list[Experiment]:
             policy=policy.label,
             behaviour=partial(logger_table, policy, grid.gamma),
             horizon=grid.horizon,
+            failure_horizon=grid.failure_horizon,
             settings={"policy": asdict(policy), **grid.constants},
             save_models=grid.save_models,
             pictures_max_states=grid.pictures_max_states,
