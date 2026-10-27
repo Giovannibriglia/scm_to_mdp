@@ -60,7 +60,12 @@ class Domain:
     knob_name: str
     gamma: float
     constants: dict = field(default_factory=dict)  # the settings make_env uses (written to grid.json)
-    sl_spibb_parents: int = 3  # SL-SPIBB: the size of its candidate parent sets
+    sl_spibb_parents: int = 3  # SL-SPIBB's d: at least the true in-degree of a factor (every size)
+    # SPIBB's count threshold (flat, N_wedge) and SL-SPIBB's m and eps: Simao & Spaan, IJCAI 2019,
+    # Table 1 for Taxi, SysAdmin and Stock; SysAdmin's values elsewhere
+    spibb_m: int = 100
+    sl_spibb_m: int = 10
+    sl_spibb_eps: float = 0.2
     horizon: int = UNTIL_END  # the longest episode the logger plays before a reset
 
 
@@ -149,10 +154,11 @@ DOMAINS = {
                          sl_spibb_parents=2),
     "stock": Domain("Stock trading", stock, ["1x2", "1x3", "1x4", "2x2", "1x6", "2x3", "3x2", "2x4", "4x2"],
                     "sectors x stocks", [0.8], "scale", 0.9, {"news": HIDDEN, "news_effect": NEWS_EFFECT},
-                    horizon=64),
+                    horizon=64, sl_spibb_parents=6, spibb_m=10, sl_spibb_m=20, sl_spibb_eps=0.3),
     "sepsis": Domain("Sepsis", sepsis, list(VITALS), "vitals", ["observed"], "diabetes", 0.9,
                      {"p_diabetes": P_DIABETES, "diabetes_effect": DIABETES_EFFECT}, sl_spibb_parents=4),
     "coffee": Domain("Coffee robot", coffee, ["coffee", "coffee+snack"], "domain", ["original"], "variant",
                      0.9, horizon=256),
-    "taxi": Domain("Taxi", taxi, ["deterministic", "noisy"], "navigation", ["original"], "variant", 0.99),
+    "taxi": Domain("Taxi", taxi, ["deterministic", "noisy"], "navigation", ["original"], "variant", 0.99,
+                   sl_spibb_parents=4, spibb_m=10, sl_spibb_m=20, sl_spibb_eps=0.01),
 }  # fmt: skip

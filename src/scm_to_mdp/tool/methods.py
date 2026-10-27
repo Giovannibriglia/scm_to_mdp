@@ -567,6 +567,8 @@ def standard_methods(
     exact: bool = True,
     deep: bool = False,
     state_parents: int = 3,
+    spibb_options: dict | None = None,
+    sl_spibb_options: dict | None = None,
 ) -> dict[str, Method]:
     """Every named method (experiments/exp1 and exp2 pick theirs in their protocol.py):
     ours (BIC / PCMCI+ / GES / DYNOTEARS -> IMDP; BIC -> IMDP with hull or padded families; the same
@@ -672,8 +674,11 @@ def standard_methods(
             "difarl", "fqi", discovery_options={"p_threshold": 0.005}, solver_options={"max_iter": 30}
         ),
     }
-    methods["flat SPIBB"] = Method("spibb", "spibb")
-    methods["SL-SPIBB"] = Method("sl_spibb", "spibb", learning_options={"d": state_parents})
+    # SPIBB's count threshold m, SL-SPIBB's eps and the baseline policy (baselines/spibb.py)
+    methods["flat SPIBB"] = Method("spibb", "spibb", learning_options=dict(spibb_options or {}))
+    methods["SL-SPIBB"] = Method(
+        "sl_spibb", "spibb", learning_options={"d": state_parents, **(sl_spibb_options or {})}
+    )
     methods["FOCUS"] = Method("focus", "vi")
     if deep:
         methods["offline DQN"] = Method("offline_dqn", "greedy_q")

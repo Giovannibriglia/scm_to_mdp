@@ -1,7 +1,9 @@
 """PCMCI+ (Runge, UAI 2020, https://arxiv.org/abs/2003.03685) with Tigramite (step S2).
 
 Each episode is one time series over the slice-t columns (m*, a*); the last row of an episode holds
-the final state and missing actions. Settings: G^2 test, tau_max = 1. Link assumptions: only the time
+the final state and missing actions. Settings: G^2 test (on sparse tables, fewer than 10 rows per cell,
+the p-value comes from permutations within the strata: the chi-square one is unreliable there,
+citests.py), tau_max = 1. Link assumptions: only the time
 order. Every variable at t may depend on anything at t-1; within a step, a state may cause the action
 (the behaviour policy reads the state), an action never causes a state of the same step, and two state
 variables may be linked either way (a same-step edge: in the 2-slice model, x' -> y'). The output is a
@@ -14,13 +16,15 @@ from tigramite.data_processing import DataFrame
 from tigramite.independence_tests.gsquared import Gsquared
 from tigramite.pcmci import PCMCI
 
+from scm_to_mdp.citests import enough_rows, g2_permutation_pvalue
 from scm_to_mdp.core import NEXT_MARK, Candidates, Dataset
 
 MISSING = -99.0
 
 
 class FastGsquared(Gsquared):
-    """Tigramite's G^2 test, vectorised: the same statistic and the same degrees of freedom
+    """Tigramite's G^2 test, vectorised, with a permutation p-value on sparse tables
+    (citests.enough_rows, citests.g2_permutation_pvalue): the same statistic and the same degrees of freedom
     (Gsquared.get_dependence_measure), but Tigramite loops in Python over every cell of the
     conditioning variables' joint table, empty cells included, whose number grows exponentially with
     the conditioning set; here only the observed strata are tabulated, with one bincount. A test
@@ -47,7 +51,19 @@ class FastGsquared(Gsquared):
         zero_cols = (cols[:, 0, :] == 0).sum(1)
         dof = int(((cy - 1 - zero_rows) * (cx - 1 - zero_cols)).sum())
         self._temp_dof = max(dof, 1)
+        cells = int(((cy - zero_rows) * (cx - zero_cols)).sum())  # the cells of the tables used
+        if not enough_rows(len(x), cells):  # sparse tables: the chi-square p-value is unreliable,
+            self._p_value = g2_permutation_pvalue(x, y, z)  # use the permutation one (citests.py)
         return gsquare
+
+    def get_analytic_significance(self, value, T, dim, xyz):
+        """The chi-square p-value, or the permutation p-value of a test on sparse tables."""
+        p_value = getattr(self, "_p_value", None)
+        if p_value is None:
+            return super().get_analytic_significance(value, T, dim, xyz)
+        self._p_value = None
+        del self._temp_dof
+        return p_value
 
 
 def episodes(dataset: Dataset) -> dict[int, np.ndarray]:

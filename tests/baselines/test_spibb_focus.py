@@ -44,14 +44,14 @@ def test_spibb_keeps_the_behaviour_on_bootstrapped_pairs(problem):
 def test_spibb_with_no_trusted_pair_returns_the_behaviour(problem):
     _, expert, _ = problem
     sol = spibb.solve(spibb.flat_model(expert, m=10**9), GAMMA)
-    assert np.allclose(sol.probs, spibb.estimated_behaviour(expert))
+    assert np.allclose(sol.probs, spibb.baseline_policy(expert, "mle"))
 
 
 def test_structure_learning_spibb_improves_on_the_logger(problem):
     """On this data (seed 0, 400 rollouts); SPIBB's improvement holds with high probability, not
     always: with 100 rollouts it fails on 1 seed out of 6."""
     truth, expert, _ = problem
-    logger = spibb.estimated_behaviour(expert)
+    logger = spibb.baseline_policy(expert, "mle")
     base = evaluate(as_result(logger), expert, truth, GAMMA)
     sl = solve(learn(expert, Method("sl_spibb", "spibb", learning_options={"d": 3})), expert, GAMMA)
     flat = solve(learn(expert, Method("spibb", "spibb")), expert, GAMMA)
@@ -61,7 +61,7 @@ def test_structure_learning_spibb_improves_on_the_logger(problem):
 
 def test_a_stochastic_policy_is_evaluated_exactly(problem):
     truth, expert, _ = problem
-    probs = spibb.estimated_behaviour(expert)
+    probs = spibb.baseline_policy(expert, "mle")
     out = evaluate(as_result(probs), expert, truth, GAMMA)
     full = np.zeros((truth.n_states, truth.P.shape[1]))
     full[:, truth.actions_of(expert)] = probs

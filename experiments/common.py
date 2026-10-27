@@ -73,15 +73,18 @@ KINDS = ("mdp", "imdp")  # the scripts' two families: no guarantee (-> MDP) and 
 DEEP = ("offline DQN", "offline CQL")
 
 
-def methods(names, sl_spibb_parents: int = 3) -> dict:
-    """The named methods of tool.standard_methods and tool.oracle_methods, in the order given."""
+def methods(names, domain) -> dict:
+    """The named methods of tool.standard_methods and tool.oracle_methods, in the order given, with the
+    domain's SPIBB settings (domains.Domain) and the uniform logger as SPIBB's baseline policy."""
     every = (
         standard_methods(
             max_parents=None,
             delta=DELTA,
             exact=False,
             deep=any(name in DEEP for name in names),
-            state_parents=sl_spibb_parents,
+            state_parents=domain.sl_spibb_parents,
+            spibb_options={"m": domain.spibb_m, "behaviour": "uniform"},
+            sl_spibb_options={"m": domain.sl_spibb_m, "eps": domain.sl_spibb_eps, "behaviour": "uniform"},
         )
         | oracle_methods()
     )
@@ -111,7 +114,7 @@ def grid(experiment: str, domain: str, kind: str, names, rewards: bool = False) 
         failure_horizon=FAILURE_HORIZON,
         gamma=d.gamma,
         n_starts=N_STARTS,
-        methods=methods(names, d.sl_spibb_parents),
+        methods=methods(names, d),
         limits=LIMITS,
         solve_factor=SOLVE_FACTOR,
         solve_floor_s=SOLVE_FLOOR_S,

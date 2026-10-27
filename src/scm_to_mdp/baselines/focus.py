@@ -14,39 +14,33 @@ Zhu, Chen, Tian, Zhang, Yu, "Offline Reinforcement Learning with Causal Structur
 
 Our discrete version (not a reproduction; every choice fixed before any run):
   - the CI test is the G^2 test for discrete variables, stratified by the conditioning set (they
-    use the kernel test KCI, for continuous variables);
+    use the kernel test KCI, for continuous variables), with a permutation p-value on sparse tables,
+    where the chi-square one wrongly finds dependences (citests.g2_pvalue);
   - the masked world model is the factored maximum-likelihood model on the learned parents (a
     parent row never seen: uniform), i.e. the tabular counterpart of their masked network;
-  - u(s, a), MOPO's ensemble disagreement: `ensemble` bootstrap resamples of the transitions, each
-    giving a factored model; u(s, a) = max over members of sum_j TV(member_j, model_j) at (s, a),
-    with TV = 1 for a parent row the data never show; lambda is given in units of the range of the
-    step reward (lambda * (r_max - r_min) * u);
+  - u(s, a), an ensemble-disagreement penalty, as in MOPO's "ens. pen." ablation (MOPO's default is
+    the largest learned standard deviation, which has no tabular counterpart that penalises rows
+    seen once): `ensemble` bootstrap resamples of the transitions (MOPO trains 7 networks and keeps
+    5), each giving a factored model; u(s, a) = max over members of sum_j TV(member_j, model_j) at
+    (s, a), with TV = 1 for a parent row the data never show (a sum of factor TVs bounds the TV of
+    the joint next state); lambda is given in units of the range of the step reward
+    (lambda * (r_max - r_min) * u);
   - the policy is optimal in the penalised MDP (value iteration), as MOPO's policy optimisation
     aims for. The promise is its value there: an estimate, not a certified bound;
   - lambda = 0.3, from a pilot before the grids (seed 0; SysAdmin N = 3, 6; Sepsis, 2 vitals;
     Chemistry, 5 objects; uniform and expert loggers; two budgets each): the mean share of V*_obs
     was 0.82 (lambda = 0.1), 0.81 (0.3), 0.78 (1); of the two best we kept the more pessimistic.
+    The pilot read the true values, as MOPO's choice of lambda (from {0.5, 1, 2, 5}, the best per
+    dataset) did; MOPO's theory would ask for lambda = gamma / (1 - gamma) with our u (9 at gamma
+    0.9), which is far more pessimistic. FOCUS's paper gives no value.
+Eq. 13 favours a jump at a low rank, so with few tests it can accept a large p-value (e.g. 0.4) and
+add parents; this follows the paper.
 """
 
 import numpy as np
-from scipy.stats import chi2
 
+from scm_to_mdp.citests import g2_pvalue
 from scm_to_mdp.core import NEXT_MARK, Dataset, Graph, IntervalMDP, Reward, encode
-
-
-def g2_pvalue(x: np.ndarray, y: np.ndarray, strata: np.ndarray, card_x: int, card_y: int) -> float:
-    """G^2 test of x independent of y given discrete strata (degrees of freedom from seen values)."""
-    ids, z = np.unique(strata, return_inverse=True)
-    table = np.bincount((z * card_x + x) * card_y + y, minlength=len(ids) * card_x * card_y)
-    table = table.reshape(len(ids), card_x, card_y).astype(float)
-    total = table.sum((1, 2), keepdims=True)
-    expected = table.sum(2, keepdims=True) * table.sum(1, keepdims=True) / np.maximum(total, 1)
-    with np.errstate(divide="ignore", invalid="ignore"):
-        g = 2 * np.where(table > 0, table * np.log(table / expected), 0.0).sum()
-    rows_used = (table.sum(2) > 0).sum(1)
-    cols_used = (table.sum(1) > 0).sum(1)
-    dof = int(((rows_used - 1) * (cols_used - 1)).clip(min=0).sum())
-    return 1.0 if dof == 0 else float(chi2.sf(g, dof))
 
 
 def threshold(p_values: np.ndarray) -> float:
@@ -72,7 +66,7 @@ def discover(dataset: Dataset) -> Graph:
         )
         for j, v in enumerate(dataset.state_vars):
             y = df[v + NEXT_MARK].to_numpy()
-            p[i, j] = g2_pvalue(X[:, i], y, strata, cards[i], dataset.cards[v])
+            p[i, j] = g2_pvalue(X[:, i], y, strata)
     p_star = threshold(p.ravel())
     parents = {
         v: tuple(inputs[i] for i in range(len(inputs)) if p[i, j] <= p_star)
@@ -86,6 +80,7 @@ def _factored(dataset: Dataset, parents: dict, rows: np.ndarray):
     rows were seen: ([S, K, n, C], [S, K, n] bool)."""
     df, B, actions = dataset.df, dataset.B, dataset.actions
     S, K, cards = len(B), len(actions), dataset.state_cards
+    assert dataset.inputs == dataset.state_vars + dataset.action_vars  # the column order of inputs_at
     inputs_at = np.concatenate([np.repeat(B[:, None, :], K, 1), np.repeat(actions[None, :, :], S, 0)], 2)
     F = np.zeros((S, K, len(cards), max(cards)))
     seen = np.zeros((S, K, len(cards)), dtype=bool)
