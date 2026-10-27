@@ -138,6 +138,9 @@ def fit(dataset: Dataset, lambda_w: float = LAMBDA, lambda_a: float = LAMBDA, ta
     Y, owner, X = _design(dataset)
     Ys, keep_y = _standardise(Y)
     Xs, keep_x = _standardise(X)
+    if Xs.shape[1] == 0:  # no next-state variable varies in the data (e.g. 10 transitions): no edge
+        return Candidates("graph_class", frozenset(), frozenset(), keep_vstructures=False,
+                          report={"intra_weights": 0})  # fmt: skip
     W, A = solve(Xs, Ys, lambda_w, lambda_a)
     targets = [v for v, k in zip(dataset.next_vars, keep_x, strict=True) if k]
     owners = [o for o, k in zip(owner, keep_y, strict=True) if k]

@@ -28,3 +28,15 @@ def test_finds_sysadmin_parents_from_uniform_data():
     data = truth.learner_spec.read(env.sample(250, 20, "random"))
     graph = bic_best.select(dynotears.fit(data), data)
     assert graph.parents == {v: tuple(truth.true_parents[v]) for v in data.state_vars}
+
+
+def test_no_varying_next_state_gives_an_empty_graph():
+    """A tiny dataset where no next-state variable changes (seen in the full runs at 10 transitions):
+    nothing to fit, so no edge (the solver used to fail)."""
+    env = SysAdmin(2, 0)
+    truth = env.ground_truth()
+    df = env.sample(1, 10, "random")
+    for v in truth.learner_spec.state_vars:  # every machine stays as it is
+        df[v + "'"] = df[v] = df[v].iloc[0]
+    candidates = dynotears.fit(truth.learner_spec.read(df))
+    assert not candidates.directed and not candidates.undirected
