@@ -6,6 +6,7 @@
 #   bash experiments/run_chain.sh exp1                  # every domain of experiment 1, in the order below
 #   bash experiments/run_chain.sh exp2 sysadmin taxi    # only these domains
 #   RESUME=1 bash experiments/run_chain.sh exp1         # continue the latest runs
+#   SHOW=1 bash experiments/run_chain.sh exp1           # also show each script's output (progress bar) here
 # Logs: results/<exp>/logs/ (chain.log: start, end and exit code of every grid; <script>.log: its output).
 set -u
 cd "$(dirname "$0")/.."
@@ -30,8 +31,13 @@ for domain in "${DOMAINS[@]}"; do
         script="${domain}_${kind}"
         echo "$(stamp) start $script" | tee -a "$LOG/chain.log"
         start=$(date +%s)
-        "$PY" "experiments/$EXP/$script.py" ${FLAGS[@]+"${FLAGS[@]}"} >> "$LOG/$script.log" 2>&1
-        rc=$?
+        if [ "${SHOW:-0}" = "1" ]; then  # to the terminal and the log
+            "$PY" "experiments/$EXP/$script.py" ${FLAGS[@]+"${FLAGS[@]}"} 2>&1 | tee -a "$LOG/$script.log"
+            rc=${PIPESTATUS[0]}  # the script's exit code, not tee's
+        else  # to the log only
+            "$PY" "experiments/$EXP/$script.py" ${FLAGS[@]+"${FLAGS[@]}"} >> "$LOG/$script.log" 2>&1
+            rc=$?
+        fi
         echo "$(stamp) end   $script rc=$rc ($(( ($(date +%s) - start) / 60 )) min)" | tee -a "$LOG/chain.log"
     done
 done

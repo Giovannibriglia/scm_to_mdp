@@ -36,6 +36,7 @@ bash experiments/run_chain.sh exp1                     # all of experiment 1
 bash experiments/run_chain.sh exp2                     # all of experiment 2
 bash experiments/run_chain.sh exp1 sysadmin taxi       # only these domains
 RESUME=1 bash experiments/run_chain.sh exp1            # continue a stopped chain
+SHOW=1 bash experiments/run_chain.sh exp1              # also show each script's progress here (else: tail -f its log)
 ```
 
 Results go to `results/<experiment>/<domain>_<kind>_<date>_<time>/` (tables and figures in `summary/`).
