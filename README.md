@@ -98,7 +98,7 @@ Coffee robot, Taxi; sizes calibrated so that the oracle solves each within 8 GB)
   counts as `bugs` the runs whose set contains the truth while a check fails (0 expected);
 - **many rewards, experiment 1 on Sepsis only** (`src/scm_to_mdp/reward_family.py`): every learned
   model is re-planned, not re-learned, under 20 random rewards (dense, sparse goals, white noise, and
-  "stress" rewards on the least-visited states) at 10, 100, 1k and 10k episodes, and under Sepsis's 3
+  "stress" rewards on the least-visited states) at every number of episodes, and under Sepsis's 3
   alternative rewards (`results_transfer.csv`); `rf_safe_all` says whether the promise held for every
   random reward. Sepsis is the domain where this test is cleanest: nothing is hidden (so the promise
   for every reward is a theorem, not a hope), the vitals have treatment-specific parents (a missing

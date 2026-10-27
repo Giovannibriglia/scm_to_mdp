@@ -61,9 +61,10 @@ SAVE_MODELS = "all"  # the models (and pictures) of the first seed at every numb
 POLICIES = [Policy("uniform")]
 # random rewards on the same dynamics, for the grids that ask for them (grid(..., rewards=True)):
 # per_family rewards of each family (dense, sparse, noise, stress), every learned model re-planned
-# under each at these numbers of episodes (one solve per reward: about 55 s per IMDP solve at 2,048
-# states; max_states: skip larger problems, None: every size)
-REWARD_FAMILY = RewardFamily(per_family=5, n_rollouts=(10, 100, 1000, 10000), max_states=None)
+# under each (one solve per reward: about 55 s per IMDP solve at 2,048 states). n_rollouts: the
+# numbers of episodes evaluated (None: every one of N_EPISODES); max_states: skip larger problems
+# (None: every size)
+REWARD_FAMILY = RewardFamily(per_family=5, n_rollouts=None, max_states=None)
 KINDS = ("mdp", "imdp")  # the scripts' two families: no guarantee (-> MDP) and with a promise (-> IMDP)
 DEEP = ("offline DQN", "offline CQL")
 
