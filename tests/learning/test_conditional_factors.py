@@ -58,7 +58,9 @@ def test_model_errors_of_point_and_interval_models_with_a_same_step_parent(lake)
 
     truth, data, graph = lake
     point = model_errors(nbn_point.learn(data, graph), truth, data, 0.9)
-    assert {"tv_data", "tv_uniform", "kl_data"} <= set(point) and not any(k.startswith("contain") for k in point)
+    assert {"tv_data", "tv_uniform", "kl_data"} <= set(point) and not any(
+        k.startswith("contain") for k in point
+    )
     assert 0.0 <= point["tv_data"] < 0.2
     bounds = model_errors(nbn_intervals.learn(data, graph, delta=0.05), truth, data, 0.9)
     assert "contain_data" in bounds and "tv_data" not in bounds and bounds["width_seen"] > 0
@@ -79,7 +81,7 @@ def test_the_store_keeps_the_conditional_factors(lake, tmp_path):
 
     method = Method("causal", "box_robust_vi", discovery="oracle", selection="given")
     result = solve(learn(data, method, None, truth.true_parents), data, 0.9)
-    info = {"method": "true graph -> RMDP", "size_label": "4x4-1", "n_rollouts": 400}
+    info = {"method": "true graph -> IMDP", "size_label": "4x4-1", "n_rollouts": 400}
     store.save(tmp_path, result, data, truth, info, pictures_max_states=16)
     back = store.load(tmp_path)["model"]
     assert list(back.conditional) == [0]

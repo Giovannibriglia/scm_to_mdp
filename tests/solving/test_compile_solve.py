@@ -62,3 +62,92 @@ def test_robust_promise_is_a_lower_bound_even_with_a_loose_tolerance():
             true_value = -1 / (1 - gamma)
             assert solution.V[0] <= true_value + 1e-12, (gamma, tol)
             assert solution.V[0] >= true_value - tol - 1e-9, (gamma, tol)  # and still within tol
+
+
+def _robust_vi_reference(L, U, reward, gamma, n_iter=400):
+    """The textbook form: per (s, a), sort the next states by value and fill the room greedily."""
+    V = np.zeros(L.shape[0])
+    for _ in range(n_iter):
+        W = reward.backup(V, gamma)
+        Q = np.empty(L.shape[:2])
+        for s in range(L.shape[0]):
+            for k in range(L.shape[1]):
+                p, free = L[s, k].copy(), 1.0 - L[s, k].sum()
+                for j in np.argsort(W):
+                    add = min(U[s, k, j] - L[s, k, j], free)
+                    p[j] += add
+                    free -= add
+                Q[s, k] = reward.R[s, k] + p @ W
+        V = Q.max(1)
+    return V
+
+
+def test_robust_vi_matches_the_textbook_form():
+    from scm_to_mdp.core import Reward
+
+    rng = np.random.default_rng(1)
+    S, K = 12, 3
+    P = rng.dirichlet(np.ones(S) * 0.3, size=(S, K))
+    L, U = np.clip(P - 0.05, 0, 1), np.clip(P + 0.05, 0, 1)
+    reward = Reward(rng.random((S, K)), rng.random(S), rng.random(S) < 0.2)
+    fast = robust_vi.solve(IntervalMDP(L, U, reward), GAMMA, tol=1e-10)
+    assert np.allclose(fast.V, _robust_vi_reference(L, U, reward, GAMMA), atol=1e-6)
+
+
+def _optimistic_reference(mdp, gamma, tol=1e-7):
+    """The optimistic value iteration as it was written before the shared loop (copies at every sweep)."""
+    from scm_to_mdp.solving.stopping import stop_at
+
+    L, U = mdp.L, mdp.U
+    V = np.zeros(L.shape[0])
+    while True:
+        W = mdp.reward.backup(V, gamma)
+        order = np.argsort(-W)
+        lower, room, w = L[..., order], (U - L)[..., order], W[order]
+        remaining = 1.0 - lower.sum(-1, keepdims=True)
+        given_before = np.cumsum(room, -1) - room
+        extra = np.clip(remaining - given_before, 0.0, room)
+        V_new = (mdp.reward.R + ((lower + extra) * w).sum(-1)).max(1)
+        step = np.abs(V_new - V).max()
+        if step < stop_at(tol, gamma):
+            return V_new + gamma / (1 - gamma) * step
+        V = V_new
+
+
+def _random_imdp(S, K, width, seed):
+    from scm_to_mdp.core import Reward
+
+    rng = np.random.default_rng(seed)
+    P = rng.dirichlet(np.ones(S) * 0.2, size=(S, K))
+    L, U = np.clip(P - width, 0, 1), np.clip(P + width, 0, 1)
+    unseen = rng.random((S, K)) < 0.2  # rows never seen: the whole simplex
+    L[unseen], U[unseen] = 0.0, 1.0
+    return IntervalMDP(L, U, Reward(rng.normal(size=(S, K)), rng.normal(size=S), rng.random(S) < 0.1))
+
+
+def test_cooperative_nature_is_the_optimistic_mirror(env, dataset):
+    import pytest
+
+    from scm_to_mdp.evaluation import optimistic_values
+
+    _, learned_mdp = learned(env, dataset)
+    for mdp, gamma in [
+        (_random_imdp(30, 3, 0.05, 0), 0.9),
+        (_random_imdp(60, 4, 0.2, 1), 0.95),
+        (learned_mdp, GAMMA),
+    ]:
+        up = robust_vi.solve(mdp, gamma, nature="cooperative")
+        assert np.allclose(up.V, _optimistic_reference(mdp, gamma), atol=1e-9)  # the old loop, same values
+        assert np.all(up.V >= robust_vi.solve(mdp, gamma).V - 1e-9)  # optimistic >= pessimistic
+        fixed = robust_vi.solve(mdp, gamma, tol=1e-13, nature="cooperative").V  # (corrected upward)
+        loose = optimistic_values(mdp, gamma)  # the certificate's tol 1e-5: still an upper bound ...
+        assert np.all(loose >= fixed - 1e-11) and np.max(loose - fixed) <= 1e-5  # ... within tol
+    with pytest.raises(ValueError, match="nature"):
+        robust_vi.solve(learned_mdp, GAMMA, nature="neutral")
+
+
+def test_a_cooperative_solver_carries_no_guarantee():
+    from scm_to_mdp.tool import Method
+
+    assert Method("flat_rmdp", "robust_vi").guarantee
+    assert not Method("flat_rmdp", "robust_vi", solver_options={"nature": "cooperative"}).guarantee

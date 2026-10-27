@@ -4,7 +4,10 @@ agents. Schnitzer, Abate, Parker (AAAI 2026, App. E.3) use a two-agent version a
 their PRISM model (two agents driven by one command, no holes, a cost per move) differs from Gym,
 so this module follows Gym and adds the second agent with its own actions.
 
-Map: Gym's "4x4" or "8x8" (S start, F frozen, H hole, G goal). Every agent starts on S.
+Map: Gym's "4x4" or "8x8" (S start, F frozen, H hole, G goal), or "<n>x<n>" for any other n >= 3: a
+random map in the manner of Gym's generate_random_map (each cell frozen w.p. 0.8, S in the top-left
+corner, G in the bottom-right one, redrawn until G can be reached from S), drawn with a fixed seed per
+size (MAP_SEED + n), so that every run seed sees the same lake of that size. Every agent starts on S.
 Variables, one per dimension:
     state     x<i> (column 0..n-1) and y<i> (row 0..n-1, 0 = top) of every agent i
     action    a<i> in 0..3 for every agent: 0 left, 1 down, 2 right, 3 up (Gym's order)
@@ -51,9 +54,51 @@ MAPS = {  # Gymnasium's toy_text/frozen_lake.py, MAPS
     "4x4": ["SFFF", "FHFH", "FFFH", "HFFG"],
     "8x8": ["SFFFFFFF", "FFFFFFFF", "FFFHFFFF", "FFFFFHFF", "FFFHFFFF", "FHHFFFHF", "FHFFHFHF", "FFFHFFFG"],
 }
+MAP_SEED = 20261026  # random maps: one lake per size, whatever the run's seed
+P_FROZEN = 0.8  # Gym's generate_random_map default
 MOVES = ["left", "down", "right", "up"]
 STEP = {0: (0, -1), 1: (1, 0), 2: (0, 1), 3: (-1, 0)}  # (row, column)
 AXES = ("joint", "independent")
+
+
+def reachable(grid: list[str]) -> bool:
+    """Can G be reached from S over frozen cells (four directions)?"""
+    n = len(grid)
+    start = next((r, c) for r in range(n) for c in range(n) if grid[r][c] == "S")
+    seen, todo = {start}, [start]
+    while todo:
+        r, c = todo.pop()
+        if grid[r][c] == "G":
+            return True
+        for dr, dc in STEP.values():
+            nr, nc = r + dr, c + dc
+            if 0 <= nr < n and 0 <= nc < n and (nr, nc) not in seen and grid[nr][nc] != "H":
+                seen.add((nr, nc))
+                todo.append((nr, nc))
+    return False
+
+
+def random_map(n: int, p_frozen: float = P_FROZEN, seed: int | None = None) -> list[str]:
+    """An n x n lake: frozen w.p. p_frozen (else a hole), S top-left, G bottom-right, G reachable."""
+    if n < 3:
+        raise ValueError("a random map needs n >= 3")
+    rng = np.random.default_rng(MAP_SEED + n if seed is None else seed)
+    while True:
+        cells = rng.choice(["F", "H"], size=(n, n), p=[p_frozen, 1 - p_frozen])
+        cells[0, 0], cells[-1, -1] = "S", "G"
+        grid = ["".join(row) for row in cells]
+        if reachable(grid):
+            return grid
+
+
+def lake(map_name: str) -> list[str]:
+    """Gym's map of that name, or the random "<n>x<n>" map (random_map)."""
+    if map_name in MAPS:
+        return MAPS[map_name]
+    rows, _, cols = map_name.partition("x")
+    if not (rows.isdigit() and rows == cols):
+        raise ValueError(f"map_name must be one of {list(MAPS)} or '<n>x<n>', not {map_name!r}")
+    return random_map(int(rows))
 
 
 class FrozenLake(Env):
@@ -72,7 +117,7 @@ class FrozenLake(Env):
             raise ValueError("n_agents must be 1 or 2")
         if axes not in AXES:
             raise ValueError(f"axes must be one of {AXES}")
-        self.grid = MAPS[map_name]
+        self.grid = lake(map_name)
         self.size, self.n_agents, self.slippery = len(self.grid), n_agents, slippery
         self.wind, self.wind_effect, self.axes = wind, wind_effect, axes
         if max_model_gb is not None:

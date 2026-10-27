@@ -8,7 +8,8 @@
     policies    uniform, expert eps 0.05, expert eps 0, confounded (sells sector 0 during news w.p. 0.95)
     hidden      the news (src/scm_to_mdp/envs/stock_trading.py) lowers the rise probability of ONE stock,
                 s0_0 (x 0.4), w.p. 0.1 in the data, 0.3 and 0.6 at deployment
-    rollouts    10 ... 1600 (horizon 20, gamma 0.9), 5 seeds, the standard methods with the per-(s,a)
+    episodes    N_EPISODES of HORIZON = 256 steps (gamma 0.9), 5 seeds, the standard methods with the
+                per-(s,a)
                 product set (every variable is 0/1)
 
 No trap (no end state, no sparse goal): the control domain of claim A, where the robust arms should
@@ -17,7 +18,7 @@ only pay for their guarantee.
 Expectations for this domain, written 2026-10-24 before the runs:
     H1  structure pays off: small families per sector against 2^(N(M+1)) rows of the flat model (A);
     H2  no trap: the point models do as well as or better than the robust arms in true value; among
-        the arms whose promise holds, the causal ones beat flat RMDP (A1);
+        the arms whose promise holds, the causal ones beat flat IMDP (A1);
     H3  scale 0.4: weaker dependence between stocks, so discovery misses edges at small budgets;
     H4  sector0_only and loss_aversion change which sectors to hold: rows the expert rarely visits
         (B1); confounded: the promise fails for s0_0 (control).
@@ -34,7 +35,7 @@ import dataclasses
 import warnings
 from pathlib import Path
 
-from protocol import DEEP_BASELINES, DELTA, N_ROLLOUTS, SEEDS, SHIFT_HIDDEN, TRAIN_HIDDEN, policies
+from protocol import DEEP_BASELINES, DELTA, HORIZON, SAVE_MODELS, SEEDS, SHIFT_HIDDEN, TRAIN_HIDDEN, policies
 
 from scm_to_mdp.envs import StockTrading
 from scm_to_mdp.tool import Grid, Limits, report_grid, run_folder, run_grid, standard_methods
@@ -43,7 +44,9 @@ warnings.filterwarnings("ignore", category=FutureWarning)
 
 SIZES = ["2x2", "2x3", "3x2", "3x3"]  # sectors x stocks per sector
 SCALES = [0.8, 0.4]
-HORIZON, GAMMA = 20, 0.9
+# of HORIZON steps: 200 ... 32k transitions (was 10 ... 1600 rollouts of 20)
+N_EPISODES = [1, 2, 4, 8, 16, 32, 64, 128]
+GAMMA = 0.9
 NEWS_EFFECT = 0.6
 MODEL_GB = 12.0  # the true model of 3x3 with news (8192 states) needs about 7.5 GB to build
 LIMITS = Limits(
@@ -76,7 +79,8 @@ GRID = Grid(
     knobs=SCALES,
     knob_name="scale",
     policies=policies(),
-    n_rollouts=N_ROLLOUTS,
+    n_rollouts=N_EPISODES,  # one rollout = one episode of HORIZON steps
+    save_models=SAVE_MODELS,
     seeds=SEEDS,
     horizon=HORIZON,
     gamma=GAMMA,

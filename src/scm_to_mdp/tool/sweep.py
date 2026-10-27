@@ -7,7 +7,7 @@ An Experiment says how to build the problem and its data, and what to sweep:
         make_env=make_env,      # (size, seed) -> an object with .ground_truth() -> MDPGroundTruth
         collect=collect,        # (env, n_rollouts) -> DataFrame of transitions, index (episode, t)
         sizes=[3, 4, 5], n_rollouts=[50, 100, 200], seeds=[0, 1, 2],
-        methods={"BIC -> RMDP": Method(...), ...},
+        methods={"BIC -> IMDP": Method(...), ...},
     )
 
 For one (size, seed) the data are collected once, with the largest number of rollouts, and every
@@ -25,6 +25,15 @@ Rules:
   "too_large" when the true model does not fit in memory), a failed evaluation gets status "error"
   for that method, and a (size, seed) whose worker process died twice gets status "crashed". These
   rows count as finished: delete them from results.csv to run them again.
+- Relative solve limit (optional, Experiment.solve_factor): on every dataset the oracle methods
+  (methods.oracle_methods) run first, with the memory limit but no time limit, and report the mean time
+  of one sweep of value iteration (Solution.iteration_s). Every other method may then solve for
+  max(solve_floor_s, solve_factor x that time x the sweeps its stopping rule may need at the rate gamma
+  from the data's reward scale, solving/stopping.iterations_bound): the oracle's work at the worst rate.
+  Its total time is not the yardstick: its sharp set can converge in a few sweeps (an episode that ends,
+  e.g. Taxi), where a wide learned set needs the full rate gamma. The limit applied, and every value
+  iteration's sweeps and their mean time, are written in the row (solve_limit_s, solve_iterations,
+  solve_iteration_s). Without an oracle that finished, the absolute Limits.timeout_s["solve"] applies.
 - Settings (optional): knob and policy label the rows (e.g. a topology and a behaviour policy; see
   tool/grid.py, which makes one Experiment per knob and policy). behaviour(env) -> [S, A], the
   logger as an exact table, adds its coverage and confounding bias to every row (behaviour.py),
@@ -64,15 +73,16 @@ from tqdm import tqdm
 from scm_to_mdp.data import first_rollouts
 from scm_to_mdp.evaluation import COVERAGE_COUNTS, actions_absent, coverage, random_starts
 from scm_to_mdp.ground_truth import ModelTooLarge
+from scm_to_mdp.solving.stopping import iterations_bound, reward_scale
 from scm_to_mdp.tool import store
 from scm_to_mdp.tool.evaluate import evaluate, reference_values
-from scm_to_mdp.tool.methods import STEPS, STOPPED, Limits, Method, learn, replan, solve
+from scm_to_mdp.tool.methods import RENAMED, STEPS, STOPPED, Limits, Method, learn, replan, solve
 
 # the columns of results.csv, in order (one row per size, seed, number of rollouts and method)
 KEYS = ["experiment", "knob", "policy", "size", "size_label", "n_states", "seed", "n_rollouts", "transitions"]
 KEYS += ["method"]
 METHOD = ["role", "guarantee", "learner", "discovery", "selection", "solver"]
-STATUS = ["status", "failed_step", "error"]
+STATUS = ["status", "failed_step", "error", "solve_limit_s", "solve_iterations", "solve_iteration_s"]
 STEP_COLUMNS = [f"{step}_{x}" for step in STEPS for x in ("status", "s", "gb")]
 VALUES = ["V_star_obs", "V_star", "V_star_K", "V_random", "V_random_K", "V_oracle_K"]
 VALUES += ["promise", "true", "regret", "norm_regret"]
@@ -130,6 +140,9 @@ class Experiment:
     behaviour: Callable[[Any], np.ndarray] | None = None  # env -> logger table [S, A] (coverage, bias)
     horizon: int | None = None  # rollout length, for the coverage and bias of `behaviour`
     settings: dict = field(default_factory=dict)  # constants of make_env / collect, checked on resume
+    # relative solve limit (module docstring): None = the absolute Limits.timeout_s["solve"]
+    solve_factor: float | None = None
+    solve_floor_s: float = 60.0
 
 
 def true_model_size(truth) -> dict:
@@ -227,7 +240,9 @@ def run_point(exp: Experiment, size, seed: int, stopped_from: dict) -> list[dict
             point |= coverage(truth, data, exp.gamma, truth.parents_in(data))
         point["actions_absent"] = actions_absent(truth, data)
         shared: dict = {}  # discovery + selection, shared by the methods of this dataset (methods.learn)
-        for name, method in exp.methods.items():
+        kernel = None  # the oracle's true observed kernel on this dataset's action vectors (once)
+        sweep_s: list[float] = []  # the oracles' mean time of one value-iteration sweep on this dataset
+        for name, method in _oracles_first(exp.methods):
             if n >= stopped.get(name, math.inf):
                 rows.append({**point, "method": name, **method.describe(), "status": "skipped"})
                 for task, (_, task_reward, task_ref) in tasks.items():
@@ -236,9 +251,16 @@ def run_point(exp: Experiment, size, seed: int, stopped_from: dict) -> list[dict
                     rows.append({**task_point, "method": name, **method.describe(), "status": "skipped"})
                 continue
             parents = given_graph(method.discovery, truth, env, exp, seed, graphs)
+            if method.learner == "oracle" and kernel is None:
+                kernel = truth.observed_kernel()[:, truth.actions_of(data), :]
+            limits = step_limits(exp, method, sweep_s, data.reward)
             # shared: one discovery and selection per dataset for the methods that have the same ones
-            learned = learn(data, method, exp.limits, parents, seed=seed, shared=shared)
-            result = solve(learned, data, exp.gamma, exp.limits, seed=seed)
+            learned = learn(data, method, limits, parents, seed=seed, shared=shared, kernel=kernel)
+            result = solve(learned, data, exp.gamma, limits, seed=seed)
+            if method.learner == "oracle" and result.ok and result.info.get("solve_iteration_s") is not None:
+                sweep_s.append(result.info["solve_iteration_s"])
+            if limits is not None and method.learner != "oracle":
+                result.info["solve_limit_s"] = limits.timeout_s.get("solve")
             graph = {"parents": json.dumps(result.graph.parents)} if result.graph is not None else {}
             try:
                 metrics = evaluate(result, data, truth, exp.gamma, starts)
@@ -265,6 +287,31 @@ def run_point(exp: Experiment, size, seed: int, stopped_from: dict) -> list[dict
         if first and len(data.B) <= exp.pictures_max_states:
             _guarded(folder, store.draw_ground_truth, truth, data, title, folder / "ground_truth")
     return rows
+
+
+def _oracles_first(methods: dict) -> list:
+    """The oracle methods, then the others (each in the given order)."""
+    items = list(methods.items())
+    return [x for x in items if x[1].learner == "oracle"] + [x for x in items if x[1].learner != "oracle"]
+
+
+def step_limits(exp: Experiment, method, sweep_s: list[float], reward=None):
+    """The limits of one method on one dataset: an oracle has the memory limit and no time limit on
+    learning and solving when the solve limit is relative; with exp.solve_factor, the other methods
+    solve within max(floor, factor x the oracle's slowest sweep x the sweeps the method's stopping rule
+    may need at the rate gamma, from the reward's scale); else exp.limits as they are."""
+    lim = exp.limits
+    if lim is None or exp.solve_factor is None:
+        return lim
+    if method.learner == "oracle":
+        free = {k: v for k, v in lim.timeout_s.items() if k not in ("learning", "relax", "solve")}
+        return dataclasses.replace(lim, timeout_s=free)
+    if not sweep_s or reward is None:  # no oracle finished on this dataset: the absolute limit
+        return lim
+    tol = method.solver_options.get("tol", 1e-8 if method.solver == "vi" else 1e-7)  # the solvers' defaults
+    sweeps = iterations_bound(reward_scale(reward), tol, exp.gamma)
+    relative = max(exp.solve_floor_s, exp.solve_factor * max(sweep_s) * sweeps)
+    return dataclasses.replace(lim, timeout_s={**lim.timeout_s, "solve": relative})
 
 
 def given_graph(discovery, truth, env, exp: Experiment, seed: int, cache: dict) -> dict | None:
@@ -350,6 +397,11 @@ def _config(exp: Experiment) -> dict:
         | (  # only when on: older runs resume
             {"shifts": True} if exp.shifts is not None else {}
         )
+        | (
+            {"solve_factor": exp.solve_factor, "solve_floor_s": exp.solve_floor_s}
+            if exp.solve_factor is not None
+            else {}
+        )
     )
 
 
@@ -393,6 +445,8 @@ def read_results(out_dir: Path, current: bool = False, name: str = "results.csv"
     for column in ("knob", "policy"):  # a plain Experiment has empty labels
         if column not in res:
             res[column] = ""
+    if "method" in res:  # older method names (methods.RENAMED)
+        res["method"] = res["method"].replace(RENAMED)
     meta = Path(out_dir) / "meta.json"
     if current and meta.exists() and len(res):
         m = json.loads(meta.read_text())

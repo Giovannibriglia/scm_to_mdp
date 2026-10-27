@@ -111,3 +111,17 @@ def test_taxi_ends_at_the_destination_and_never_starts_there():
     passenger, destination = env.B[:, 2], env.B[:, 3]
     assert np.array_equal(truth.reward.terminal, passenger == destination)
     assert truth.start[passenger == destination].sum() == 0 and truth.n_states == 500
+
+
+def test_random_frozen_lakes_are_fixed_per_size_and_solvable():
+    from scm_to_mdp.envs import FrozenLake
+    from scm_to_mdp.envs.frozen_lake import MAPS, lake, reachable
+
+    assert lake("4x4") == MAPS["4x4"] and lake("8x8") == MAPS["8x8"]  # Gym's maps unchanged
+    for n in (3, 5, 6, 10):
+        grid = lake(f"{n}x{n}")
+        assert len(grid) == n and all(len(row) == n for row in grid) and reachable(grid)
+        assert grid[0][0] == "S" and grid[-1][-1] == "G" and lake(f"{n}x{n}") == grid
+    assert FrozenLake("5x5", 1, seed=0).grid == FrozenLake("5x5", 1, seed=3).grid  # one lake per size
+    with pytest.raises(ValueError, match="map_name"):
+        lake("4x5")

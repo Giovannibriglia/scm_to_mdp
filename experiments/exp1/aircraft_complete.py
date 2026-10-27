@@ -9,7 +9,7 @@
                 0.95)
     hidden      the turbulence (src/scm_to_mdp/envs/aircraft.py) halves the success of an intended climb
                 or descent (the own altitude only), w.p. 0.1 in the data, 0.3 and 0.6 at deployment
-    rollouts    10 ... 1600 (horizon 20, gamma 0.95), 5 seeds, the standard methods (no per-(s,a)
+    episodes    N_EPISODES of HORIZON = 256 steps (gamma 0.95), 5 seeds, the standard methods (no per-(s,a)
                 product set)
 
 Expectations for this domain, written 2026-10-24 before the runs:
@@ -31,7 +31,7 @@ import dataclasses
 import warnings
 from pathlib import Path
 
-from protocol import DEEP_BASELINES, DELTA, N_ROLLOUTS, SEEDS, SHIFT_HIDDEN, TRAIN_HIDDEN, policies
+from protocol import DEEP_BASELINES, DELTA, HORIZON, SAVE_MODELS, SEEDS, SHIFT_HIDDEN, TRAIN_HIDDEN, policies
 
 from scm_to_mdp.envs import Aircraft
 from scm_to_mdp.tool import Grid, Limits, report_grid, run_folder, run_grid, standard_methods
@@ -40,7 +40,9 @@ warnings.filterwarnings("ignore", category=FutureWarning)
 
 SIZES = ["8x6", "12x8", "15x15"]  # width x height
 PROXIMITY = ["on", "off"]
-HORIZON, GAMMA = 20, 0.95
+# of HORIZON steps: 200 ... 32k transitions (was 10 ... 1600 rollouts of 20)
+N_EPISODES = [1, 2, 4, 8, 16, 32, 64, 128]
+GAMMA = 0.95
 TURBULENCE_EFFECT = 0.5
 MODEL_GB = 12.0
 LIMITS = Limits(
@@ -73,7 +75,8 @@ GRID = Grid(
     knobs=PROXIMITY,
     knob_name="proximity",
     policies=policies(),
-    n_rollouts=N_ROLLOUTS,
+    n_rollouts=N_EPISODES,  # one rollout = one episode of HORIZON steps
+    save_models=SAVE_MODELS,
     seeds=SEEDS,
     horizon=HORIZON,
     gamma=GAMMA,

@@ -1,11 +1,11 @@
 """Calibration of the promises: 100 seeds on one small setting per domain, to test "the promise holds
 w.p. >= 1 - delta" (protocol.py, claim A), which the 5 seeds of the complete grids can only describe.
 
-For each domain: its smallest size and one knob, the uniform and the eps = 0.05 expert loggers, 25, 100
-and 400 rollouts (Sepsis: 100, 250, 500 patients), 100 seeds, four arms:
-    true graph -> RMDP       the guarantee with the right structure (1 - delta by the union bound)
-    BIC -> RMDP              the graph chosen from the same data: the 1 - delta is conditional on it
-    flat RMDP                no structure (1 - delta by the union bound)
+For each domain: its smallest size and one knob, the uniform and the eps = 0.05 expert loggers, 2, 8
+and 32 episodes of protocol.HORIZON = 256 steps (Sepsis: 8, 16, 32), 100 seeds, four arms:
+    true graph -> IMDP       the guarantee with the right structure (1 - delta by the union bound)
+    BIC -> IMDP              the graph chosen from the same data: the 1 - delta is conditional on it
+    flat IMDP                no structure (1 - delta by the union bound)
     flat MDP                 no guarantee: the contrast (its "promise" is its own value estimate)
 No transfer, no shift, no saved models.
 
@@ -34,18 +34,18 @@ warnings.filterwarnings("ignore", category=FutureWarning)
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 SEEDS = list(range(100))
-ARMS = ["true graph -> RMDP", "BIC -> RMDP", "flat RMDP", "flat MDP"]
+ARMS = ["true graph -> IMDP", "BIC -> IMDP", "flat IMDP", "flat MDP"]
 POLICIES = [Policy("uniform"), Policy("expert", epsilon=0.05)]
-# domain script -> (size, knob, numbers of rollouts)
+# domain script -> (size, knob, numbers of episodes of protocol.HORIZON steps)
 SETTINGS = {
-    "sysadmin_complete": (3, "ring", [25, 100, 400]),
-    "sepsis_complete": (2, "observed", [100, 250, 500]),
-    "chemistry_complete": (4, "0.4", [25, 100, 400]),
-    "aircraft_complete": ("8x6", "on", [25, 100, 400]),
-    "drone_complete": ("3-1", "gust", [25, 100, 400]),
-    "stock_complete": ("2x2", 0.8, [25, 100, 400]),
-    "frozenlake_complete": ("4x4-1", "wind", [25, 100, 400]),
-    "coffee_complete": ("coffee", "original", [25, 100, 400]),
+    "sysadmin_complete": (3, "ring", [2, 8, 32]),
+    "sepsis_complete": (2, "observed", [8, 16, 32]),
+    "chemistry_complete": (4, "0.4", [2, 8, 32]),
+    "aircraft_complete": ("8x6", "on", [2, 8, 32]),
+    "drone_complete": ("3-1", "gust", [2, 8, 32]),
+    "stock_complete": ("2x2", 0.8, [2, 8, 32]),
+    "frozenlake_complete": ("4x4-1", "wind", [2, 8, 32]),
+    "coffee_complete": ("coffee", "original", [2, 8, 32]),
 }
 OUT_DIR = Path(__file__).resolve().parents[2] / "results" / "exp1" / "calibration"
 

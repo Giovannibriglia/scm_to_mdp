@@ -1,11 +1,14 @@
 """Frozen Lake (slippery), uniform logger: every causal discovery -> MDP method against the baselines without
 a guarantee (S2-S9).
 
-    size        map - agents: 4x4-1, 8x8-1 (Gym's maps, one agent: 16, 64 states), 4x4-2 (two agents: 256
-                states; experiment 1's 8x8-2 needs a server); independent axes
-    knob        wind: "wind" (experiment 1 also runs "calm")
+    size        the map, per number of agents (the knob): one agent on 4x4, 8x8 (Gym's maps), 16x16,
+                32x32 (random maps, envs/frozen_lake.py: 16 ... 1,024 observed states); two agents on 4x4,
+                5x5, 6x6, 7x7 (256 ... 2,401 observed states, 16 joint actions; 8x8 does not fit: the dense
+                true model needs ~17 GB); independent axes
+    knob        agents: 1 or 2; the wind is on in both (experiment 1 also runs "calm")
     logger      uniform (every action tried in every visited state: no positivity problem)
-    rollouts    50, 250, 750 (horizon 50, gamma 0.95), 5 seeds (protocol.py)
+    episodes    N_EPISODES of HORIZON = 256 steps (gamma 0.95), 5 seeds; solving limited to 3 x the oracle
+                (protocol.py)
     methods     BIC / PCMCI+ / GES / DYNOTEARS -> MDP (point estimates, value iteration; no guarantee),
                 flat MDP, DiFaRL, FOCUS, offline DQN, offline CQL, and true graph -> MDP as the reference
                 (protocol.py, MDP_METHODS)
@@ -25,47 +28,57 @@ import dataclasses
 import warnings
 from pathlib import Path
 
-from protocol import DELTA, MDP_METHODS, N_ROLLOUTS, POLICIES, SEEDS, TRAIN_HIDDEN, methods
+from protocol import (
+    DELTA,
+    HORIZON,
+    LIMITS,
+    MDP_METHODS,
+    POLICIES,
+    SAVE_MODELS,
+    SEEDS,
+    SOLVE_FACTOR,
+    SOLVE_FLOOR_S,
+    TRAIN_HIDDEN,
+    methods,
+)
 
 from scm_to_mdp.envs import FrozenLake
-from scm_to_mdp.tool import Grid, Limits, report_grid, run_folder, run_grid
+from scm_to_mdp.tool import Grid, report_grid, run_folder, run_grid
 
 warnings.filterwarnings("ignore", category=FutureWarning)
 
-SIZES = ["4x4-1", "8x8-1", "4x4-2"]  # map - number of agents
-WIND = "wind"
-HORIZON, GAMMA = 50, 0.95
+AGENTS = ["1", "2"]  # the knob
+SIZES = {"1": ["4x4", "8x8", "16x16", "32x32"], "2": ["4x4", "5x5", "6x6", "7x7"]}  # maps, per knob
+N_EPISODES = [1, 4, 16, 64, 256, 1024]  # of HORIZON steps: 256 ... 262k transitions
+GAMMA = 0.95
 WIND_EFFECT = 0.5
 MODEL_GB = 12.0
-LIMITS = Limits(
-    mem_gb=2.5,  # peak 0.5 GB (offline CQL, 4x4-2, 750 rollouts)
-    timeout_s={"discovery": 120.0, "selection": 120.0, "learning": 120.0, "training": 1800.0, "solve": 600.0},
-)
 OUT_DIR = Path(__file__).resolve().parents[2] / "results" / "trials" / "frozenlake_uniform_mdp"
 METHODS = methods(MDP_METHODS)
 
 
-def make_env(size: str, wind: str, seed: int) -> FrozenLake:
-    map_name, agents = str(size).split("-")
-    wind_p = TRAIN_HIDDEN if wind == "wind" else None
-    return FrozenLake(map_name, int(agents), seed, slippery=True, wind=wind_p, wind_effect=WIND_EFFECT,
-                      axes="independent", max_model_gb=MODEL_GB)  # fmt: skip
+def make_env(map_name: str, agents: str, seed: int) -> FrozenLake:
+    return FrozenLake(str(map_name), int(agents), seed, slippery=True, wind=TRAIN_HIDDEN,
+                      wind_effect=WIND_EFFECT, axes="independent", max_model_gb=MODEL_GB)  # fmt: skip
 
 
 GRID = Grid(
     name="Frozen Lake",
     make_env=make_env,
     sizes=SIZES,
-    size_name="map-agents",
-    knobs=[WIND],
-    knob_name="wind",
+    size_name="map",
+    knobs=AGENTS,
+    knob_name="agents",
     policies=POLICIES,
-    n_rollouts=N_ROLLOUTS,
+    n_rollouts=N_EPISODES,  # one rollout = one episode of HORIZON steps
     seeds=SEEDS,
     horizon=HORIZON,
     gamma=GAMMA,
     methods=METHODS,
     limits=LIMITS,
+    solve_factor=SOLVE_FACTOR,
+    solve_floor_s=SOLVE_FLOOR_S,
+    save_models=SAVE_MODELS,
     workers="auto",
     out_dir=OUT_DIR,
     reward_transfer=False,

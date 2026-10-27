@@ -18,6 +18,24 @@ leaves up to 99 * tol, and made a robust promise exceed the true value by about 
 tol = 1e-6.
 """
 
+import math
+
+import numpy as np
+
+
+def iterations_bound(scale: float, tol: float, gamma: float) -> int:
+    """How many sweeps value iteration may need from V = 0 at the worst rate gamma: the first step is at
+    most `scale` (the largest |R| + |r_next|), and every later one at most gamma times the one before,
+    so the step falls below stop_at(tol, gamma) after at most this many sweeps."""
+    if scale <= 0:
+        return 1
+    return 1 + max(0, math.ceil(math.log(stop_at(tol, gamma) / scale) / math.log(gamma)))
+
+
+def reward_scale(reward) -> float:
+    """max |R| + max |r_next|: a bound on the first step of value iteration from V = 0."""
+    return float(np.abs(reward.R).max() + (np.abs(reward.r_next).max() if reward.r_next.size else 0.0))
+
 
 def stop_at(tol: float, gamma: float) -> float:
     """The step size below which the iterate is within tol of the fixed point."""

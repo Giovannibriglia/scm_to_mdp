@@ -1,14 +1,15 @@
-"""Stock trading, uniform logger: every causal discovery -> RMDP method against flat RMDP and SPIBB (S2-S9).
+"""Stock trading, uniform logger: every causal discovery -> IMDP method against flat IMDP and SPIBB (S2-S9).
 
-    size        sectors x stocks: 2x2, 2x3, 3x2 (64, 256, 512 observed states; experiment 1's 3x3 needs a
-                server)
+    size        sectors x stocks: 1x2 ... 4x2 (9 sizes, 8 ... 4,096 observed states; 4x2's oracle peaks at
+                ~7.3 GB of the 8 GB limit)
     knob        scale 0.8: P(rise) = 0.1 + 0.8 k / M (Schnitzer, Abate, Parker's; experiment 1 also runs 0.4)
     logger      uniform (every action tried in every visited state: no positivity problem)
-    rollouts    50, 250, 750 (horizon 20, gamma 0.9), 5 seeds (protocol.py)
-    methods     BIC / PCMCI+ / GES / DYNOTEARS -> RMDP with the plain discovered graph (no widening of
-                the families: no "support", "hull" or "pad"), flat RMDP, flat SPIBB and SL-SPIBB (safe
+    episodes    N_EPISODES of HORIZON = 256 steps (gamma 0.9), 5 seeds; solving limited to 3 x the oracle
+                (protocol.py)
+    methods     BIC / PCMCI+ / GES / DYNOTEARS -> IMDP with the plain discovered graph (no widening of
+                the families: no "support", "hull" or "pad"), flat IMDP, flat SPIBB and SL-SPIBB (safe
                 policy improvement: a guarantee over the behaviour policy, not a value bound; SL-SPIBB
-                with candidate parent sets of 3 state variables), and true graph -> RMDP as the
+                with candidate parent sets of 3 state variables), and true graph -> IMDP as the
                 reference (protocol.py, RMDP_METHODS)
     evaluation  only in the MDP the data come from (no reward transfer, no dynamics shift)
     hidden      as in experiment 1: the news lowers the rise probability of stock s0_0 (x 0.4) w.p. 0.1 at
@@ -26,22 +27,31 @@ import dataclasses
 import warnings
 from pathlib import Path
 
-from protocol import DELTA, N_ROLLOUTS, POLICIES, RMDP_METHODS, SEEDS, TRAIN_HIDDEN, methods
+from protocol import (
+    DELTA,
+    HORIZON,
+    LIMITS,
+    POLICIES,
+    RMDP_METHODS,
+    SAVE_MODELS,
+    SEEDS,
+    SOLVE_FACTOR,
+    SOLVE_FLOOR_S,
+    TRAIN_HIDDEN,
+    methods,
+)
 
 from scm_to_mdp.envs import StockTrading
-from scm_to_mdp.tool import Grid, Limits, report_grid, run_folder, run_grid
+from scm_to_mdp.tool import Grid, report_grid, run_folder, run_grid
 
 warnings.filterwarnings("ignore", category=FutureWarning)
 
-SIZES = ["2x2", "2x3", "3x2"]  # sectors x stocks per sector
+SIZES = ["1x2", "1x3", "1x4", "2x2", "1x6", "2x3", "3x2", "2x4", "4x2"]  # sectors x stocks per sector
+N_EPISODES = [1, 4, 16, 64, 256, 1024]  # of HORIZON steps: 256 ... 262k transitions
 SCALE = 0.8
-HORIZON, GAMMA = 20, 0.9
+GAMMA = 0.9
 NEWS_EFFECT = 0.6
 MODEL_GB = 12.0
-LIMITS = Limits(
-    mem_gb=2.5,  # peak without BIC 0.3 GB (3x2, 750 rollouts)
-    timeout_s={"discovery": 120.0, "selection": 120.0, "learning": 120.0, "training": 1800.0, "solve": 600.0},
-)
 OUT_DIR = Path(__file__).resolve().parents[2] / "results" / "trials" / "stock_uniform_rmdp"
 METHODS = methods(RMDP_METHODS, state_parents=3)
 
@@ -60,12 +70,15 @@ GRID = Grid(
     knobs=[SCALE],
     knob_name="scale",
     policies=POLICIES,
-    n_rollouts=N_ROLLOUTS,
+    n_rollouts=N_EPISODES,  # one rollout = one episode of HORIZON steps
     seeds=SEEDS,
     horizon=HORIZON,
     gamma=GAMMA,
     methods=METHODS,
     limits=LIMITS,
+    solve_factor=SOLVE_FACTOR,
+    solve_floor_s=SOLVE_FLOOR_S,
+    save_models=SAVE_MODELS,
     workers="auto",
     out_dir=OUT_DIR,
     reward_transfer=False,

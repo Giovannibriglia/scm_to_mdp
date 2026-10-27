@@ -5,7 +5,8 @@
                 to each side; independent axes); 500 states, 6 actions
     knob        variant: original
     logger      uniform (every action tried in every visited state: no positivity problem)
-    rollouts    50, 250, 750 (horizon 50, gamma 0.99), 5 seeds (protocol.py)
+    episodes    N_EPISODES of HORIZON = 256 steps (gamma 0.99), 5 seeds; solving limited to 3 x the oracle
+                (protocol.py)
     methods     BIC / PCMCI+ / GES / DYNOTEARS -> MDP (point estimates, value iteration; no guarantee),
                 flat MDP, DiFaRL, FOCUS, offline DQN, offline CQL, and true graph -> MDP as the reference
                 (protocol.py, MDP_METHODS)
@@ -24,20 +25,28 @@ import dataclasses
 import warnings
 from pathlib import Path
 
-from protocol import DELTA, MDP_METHODS, N_ROLLOUTS, POLICIES, SEEDS, methods
+from protocol import (
+    DELTA,
+    HORIZON,
+    LIMITS,
+    MDP_METHODS,
+    POLICIES,
+    SAVE_MODELS,
+    SEEDS,
+    SOLVE_FACTOR,
+    SOLVE_FLOOR_S,
+    methods,
+)
 
 from scm_to_mdp.envs import Taxi
-from scm_to_mdp.tool import Grid, Limits, report_grid, run_folder, run_grid
+from scm_to_mdp.tool import Grid, report_grid, run_folder, run_grid
 
 warnings.filterwarnings("ignore", category=FutureWarning)
 
 SIZES = ["deterministic", "noisy"]
+N_EPISODES = [1, 4, 16, 64, 256]  # of HORIZON steps: 256 ... 65.5k transitions
 VARIANT = "original"
-HORIZON, GAMMA = 50, 0.99  # gamma 0.99: with -1 per step and +20 at delivery (exp1/taxi_complete.py)
-LIMITS = Limits(
-    mem_gb=2.5,  # peak 0.5 GB (offline CQL, noisy, 750 rollouts)
-    timeout_s={"discovery": 60.0, "selection": 60.0, "learning": 120.0, "training": 1800.0, "solve": 600.0},
-)
+GAMMA = 0.99  # gamma 0.99: with -1 per step and +20 at delivery (exp1/taxi_complete.py)
 OUT_DIR = Path(__file__).resolve().parents[2] / "results" / "trials" / "taxi_uniform_mdp"
 METHODS = methods(MDP_METHODS)
 
@@ -54,12 +63,15 @@ GRID = Grid(
     knobs=[VARIANT],
     knob_name="variant",
     policies=POLICIES,
-    n_rollouts=N_ROLLOUTS,
+    n_rollouts=N_EPISODES,  # one rollout = one episode of HORIZON steps
     seeds=SEEDS,
     horizon=HORIZON,
     gamma=GAMMA,
     methods=METHODS,
     limits=LIMITS,
+    solve_factor=SOLVE_FACTOR,
+    solve_floor_s=SOLVE_FLOOR_S,
+    save_models=SAVE_MODELS,
     workers="auto",
     out_dir=OUT_DIR,
     reward_transfer=False,

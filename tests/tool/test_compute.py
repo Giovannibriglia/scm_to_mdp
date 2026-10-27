@@ -121,7 +121,7 @@ def make_env(n, topology, seed):
 grid = Grid(
     name="g", make_env=make_env, sizes=[2, 3], knobs=["ring", "star"],
     policies=[Policy("uniform"), Policy("expert")], n_rollouts=[10, 30], seeds=[0, 1], horizon=8,
-    methods={"BIC -> RMDP": Method("causal", "box_robust_vi", discovery="bic", selection="bic_best"),
+    methods={"BIC -> IMDP": Method("causal", "box_robust_vi", discovery="bic", selection="bic_best"),
              "flat MDP": Method("flat_mdp", "vi")},
     limits=Limits(mem_gb=1), workers=sys.argv[2], out_dir=Path(sys.argv[1]), save_models="none",
 )

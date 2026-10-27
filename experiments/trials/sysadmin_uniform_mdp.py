@@ -1,10 +1,11 @@
 """SysAdmin ring, uniform logger: every causal discovery -> MDP method against the baselines without a
 guarantee (S2-S9).
 
-    size        N = 2 ... 8 machines (2^N observed states, N + 1 actions)
+    size        N = 2 ... 11 machines (2^N observed states: 4 ... 2,048; N + 1 actions)
     knob        topology: ring (the one-way ring, in-degree 3)
     logger      uniform (every action tried in every visited state: no positivity problem)
-    rollouts    50, 250, 750 (horizon 20, gamma 0.9), 5 seeds (protocol.py)
+    episodes    N_EPISODES of HORIZON = 256 steps (gamma 0.9), 5 seeds; solving limited to 3 x the oracle
+                (protocol.py)
     methods     BIC / PCMCI+ / GES / DYNOTEARS -> MDP (point estimates, value iteration; no guarantee),
                 flat MDP, DiFaRL, FOCUS, offline DQN, offline CQL, and true graph -> MDP as the reference
                 (protocol.py, MDP_METHODS)
@@ -24,21 +25,30 @@ import dataclasses
 import warnings
 from pathlib import Path
 
-from protocol import DELTA, MDP_METHODS, N_ROLLOUTS, POLICIES, SEEDS, TRAIN_HIDDEN, methods
+from protocol import (
+    DELTA,
+    HORIZON,
+    LIMITS,
+    MDP_METHODS,
+    POLICIES,
+    SAVE_MODELS,
+    SEEDS,
+    SOLVE_FACTOR,
+    SOLVE_FLOOR_S,
+    TRAIN_HIDDEN,
+    methods,
+)
 
 from scm_to_mdp.envs import SysAdmin
-from scm_to_mdp.tool import Grid, Limits, report_grid, run_folder, run_grid
+from scm_to_mdp.tool import Grid, report_grid, run_folder, run_grid
 
 warnings.filterwarnings("ignore", category=FutureWarning)
 
-SIZES = [2, 3, 4, 5, 6, 7, 8]
+SIZES = [2, 3, 4, 5, 6, 7, 8, 9, 10, 11]
+N_EPISODES = [1, 4, 16, 64, 256, 1024]  # of HORIZON steps: 256 ... 262k transitions
 TOPOLOGY = "ring"
-HORIZON, GAMMA = 20, 0.9
+GAMMA = 0.9
 STORM_EFFECT = 0.8  # a storm multiplies machine 0's P(up) by 1 - 0.8 (experiments/exp1/sysadmin_complete.py)
-LIMITS = Limits(
-    mem_gb=2.5,  # peak without BIC 0.5 GB (offline CQL, N = 8, 750 rollouts)
-    timeout_s={"discovery": 60.0, "selection": 60.0, "learning": 60.0, "training": 600.0, "solve": 600.0},
-)
 OUT_DIR = Path(__file__).resolve().parents[2] / "results" / "trials" / "sysadmin_uniform_mdp"
 METHODS = methods(MDP_METHODS)
 
@@ -55,12 +65,15 @@ GRID = Grid(
     knobs=[TOPOLOGY],
     knob_name="topology",
     policies=POLICIES,
-    n_rollouts=N_ROLLOUTS,
+    n_rollouts=N_EPISODES,  # one rollout = one episode of HORIZON steps
     seeds=SEEDS,
     horizon=HORIZON,
     gamma=GAMMA,
     methods=METHODS,
     limits=LIMITS,
+    solve_factor=SOLVE_FACTOR,
+    solve_floor_s=SOLVE_FLOOR_S,
+    save_models=SAVE_MODELS,
     workers="auto",
     out_dir=OUT_DIR,
     reward_transfer=False,

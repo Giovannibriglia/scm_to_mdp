@@ -8,7 +8,7 @@ one action variable with 6 values; the episode ends when the passenger is at the
     size        navigation: "deterministic" (Dietterich's Sec. 3.1) or "noisy" (0.8 intended, 0.1 to each
                 side, his Fickle Taxi, Sec. 7.1, with our independent axes)
     policies    uniform, expert eps 0.05, expert eps 0 (no hidden variable: no confounded logger, no shift)
-    rollouts    25 ... 800 (horizon 50, gamma 0.99), 5 seeds, the standard methods (not 0/1)
+    episodes    N_EPISODES of HORIZON = 256 steps (gamma 0.99), 5 seeds, the standard methods (not 0/1)
     transfer    pickup_only, costly_moves (ours)
 
 Why it is here: context-specific structure. The passenger changes only when the taxi is on the right
@@ -32,7 +32,7 @@ import dataclasses
 import warnings
 from pathlib import Path
 
-from protocol import DEEP_BASELINES, DELTA, SEEDS, policies
+from protocol import DEEP_BASELINES, DELTA, HORIZON, SAVE_MODELS, SEEDS, policies
 
 from scm_to_mdp.envs import Taxi
 from scm_to_mdp.tool import Grid, Limits, report_grid, run_folder, run_grid, standard_methods
@@ -40,8 +40,9 @@ from scm_to_mdp.tool import Grid, Limits, report_grid, run_folder, run_grid, sta
 warnings.filterwarnings("ignore", category=FutureWarning)
 
 SIZES = ["deterministic", "noisy"]
-N_ROLLOUTS = [25, 50, 100, 200, 400, 800]
-HORIZON, GAMMA = 50, 0.99
+# of HORIZON steps: 1.25k ... 40k transitions (was 25 ... 800 rollouts of 50)
+N_EPISODES = [4, 8, 16, 32, 64, 128, 256]
+GAMMA = 0.99
 LIMITS = Limits(
     mem_gb=6.0,
     timeout_s={"discovery": 60.0, "selection": 60.0, "learning": 120.0, "solve": 300.0, "training": 1800.0},
@@ -61,7 +62,8 @@ GRID = Grid(
     knobs=["original"],
     knob_name="variant",
     policies=policies(confounded=False),
-    n_rollouts=N_ROLLOUTS,
+    n_rollouts=N_EPISODES,  # one rollout = one episode of HORIZON steps
+    save_models=SAVE_MODELS,
     seeds=SEEDS,
     horizon=HORIZON,
     gamma=GAMMA,

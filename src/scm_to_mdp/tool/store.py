@@ -6,7 +6,7 @@ number: Experiment(save_models="all")), every method's model goes to
     <out_dir>/models/<size_label>/n=<n_rollouts>/<method>/
         model.npz      the model the solver used, the policy and its promise: the factor intervals
                        (lo, hi [S, K, n, C], FactorBounds) for a causal method, the transition
-                       intervals (L, U [S, K, S], IntervalMDP) for flat RMDP and flat MDP, the
+                       intervals (L, U [S, K, S], IntervalMDP) for flat IMDP and flat MDP, the
                        Q-table (Q [S, K]) for offline DQN and CQL, nothing for DiFaRL (its action
                        groups are in results.csv); with the reward
                        (R, r_next, terminal), the action vectors and pi, V

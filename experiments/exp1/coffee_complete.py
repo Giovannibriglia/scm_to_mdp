@@ -8,7 +8,8 @@ are from the paper and which are ours).
     size        "coffee" (6 binary variables, 64 states, 4 actions), "coffee+snack" (8 variables, 256
                 states, 6 actions)
     policies    uniform, expert eps 0.05, expert eps 0 (no hidden variable: no confounded logger, no shift)
-    rollouts    5 ... 800 (horizon 20, gamma 0.9), 5 seeds, the standard methods with the per-(s,a)
+    episodes    N_EPISODES of HORIZON = 256 steps (gamma 0.9), 5 seeds, the standard methods with the
+                per-(s,a)
                 product set (every variable is 0/1)
 
 What it adds: the only graph small enough to read by hand (claim C: summary/edges.csv, the cbn pictures),
@@ -31,7 +32,7 @@ import dataclasses
 import warnings
 from pathlib import Path
 
-from protocol import DEEP_BASELINES, DELTA, SEEDS, policies
+from protocol import DEEP_BASELINES, DELTA, HORIZON, SAVE_MODELS, SEEDS, policies
 
 from scm_to_mdp.envs import Coffee
 from scm_to_mdp.tool import Grid, Limits, report_grid, run_folder, run_grid, standard_methods
@@ -39,8 +40,9 @@ from scm_to_mdp.tool import Grid, Limits, report_grid, run_folder, run_grid, sta
 warnings.filterwarnings("ignore", category=FutureWarning)
 
 SIZES = ["coffee", "coffee+snack"]
-N_ROLLOUTS = [5, 10, 25, 50, 100, 200, 400, 800]  # coffee+snack needs more than 200
-HORIZON, GAMMA = 20, 0.9
+# of HORIZON steps: 100 ... 16k transitions (was 5 ... 800 rollouts of 20)
+N_EPISODES = [1, 2, 4, 8, 16, 32, 64]
+GAMMA = 0.9
 LIMITS = Limits(
     mem_gb=6.0,
     timeout_s={"discovery": 60.0, "selection": 60.0, "learning": 60.0, "solve": 60.0, "training": 600.0},
@@ -60,7 +62,8 @@ GRID = Grid(
     knobs=["original"],
     knob_name="variant",
     policies=policies(confounded=False),
-    n_rollouts=N_ROLLOUTS,
+    n_rollouts=N_EPISODES,  # one rollout = one episode of HORIZON steps
+    save_models=SAVE_MODELS,
     seeds=SEEDS,
     horizon=HORIZON,
     gamma=GAMMA,

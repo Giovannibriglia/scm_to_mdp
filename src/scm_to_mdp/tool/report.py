@@ -3,10 +3,14 @@
     report(out_dir)
 
 writes into out_dir:
-    tables.md                                    every table, for every number of rollouts
-    figures/rollouts=<n>/{performance,validity,structure,time,memory}.{pdf,png}
-                                                 the figures over the problem size, one folder per n
-    figures/sample_efficiency.{pdf,png}          rollouts needed for a 95%-optimal policy
+    tables.md                                    every table, for every number of episodes
+    figures/episodes=<n>/{performance,validity,structure,time,memory}.{pdf,png}
+                                                 the figures over the problem size (x: observed
+                                                 states), one folder per number of episodes n; the
+                                                 title gives the dataset's transitions (n x horizon,
+                                                 less where episodes end early)
+    figures/sample_efficiency.{pdf,png}          transitions needed for a 95%-optimal policy
+A "rollout" in results.csv (n_rollouts) is one episode; "transitions" counts its samples.
 and prints the main tables. Baselines, oracle methods and ours are told apart by the role column
 (set by the Method: flat_rmdp, flat_mdp and difarl are the baselines).
 """
@@ -78,8 +82,12 @@ def report(out_dir, target: float = 0.95, delta: float | None = 0.05, show: bool
         if at_n.empty:
             continue
         axis = figures.Axis(at_n, sizes, [labels[s] for s in sizes], size_name)
-        title = f"{name}, {n} rollouts"
-        folder = fig_dir / f"rollouts={n}"
+        samples = (
+            pd.to_numeric(at_n["transitions"], errors="coerce").median() if "transitions" in at_n else np.nan
+        )
+        shown_samples = f" ({figures.samples_label(samples)} transitions)" if np.isfinite(samples) else ""
+        title = f"{name}, {n} episodes{shown_samples}"
+        folder = fig_dir / f"episodes={n}"
         figures.performance(at_n, axis, methods, styles, k, title, folder / "performance")
         normalized = folder / "performance_normalized"
         figures.performance_normalized(at_n, axis, methods, styles, target, k, title, normalized)
@@ -97,10 +105,14 @@ def report(out_dir, target: float = 0.95, delta: float | None = 0.05, show: bool
             "learning": timeouts.get("learning"),
             "solve": timeouts.get("solve"),
         }
+        if "solve_limit_s" in at_n and pd.to_numeric(at_n["solve_limit_s"], errors="coerce").notna().any():
+            per_size = pd.to_numeric(at_n["solve_limit_s"], errors="coerce").groupby(at_n["size"]).mean()
+            per_size = per_size.reindex(axis.order).fillna(timeouts.get("solve") or np.nan)
+            time_limits["solve"] = per_size.to_numpy(float)  # relative: one limit per size
         figures.resources(at_n, axis, methods, styles, "s", time_limits, title, folder / "time", history=res)
         mem = dict.fromkeys(figures.STEP_TITLES, limits["mem_gb"])
         figures.resources(at_n, axis, methods, styles, "gb", mem, title, folder / "memory", history=res)
-        lines += [f"## {n} rollouts", ""]
+        lines += [f"## {n} episodes{shown_samples}", ""]
         for column, caption, fmt in [
             (
                 "optimal_share",
@@ -127,7 +139,7 @@ def report(out_dir, target: float = 0.95, delta: float | None = 0.05, show: bool
             if text:
                 lines += [f"{caption} (mean over seeds):", "```", text, "```", ""]
                 if n == max(meta["n_rollouts"]) and column in ("optimal_share", "safe"):
-                    shown += [f"{caption}, {n} rollouts (mean over seeds):", text, ""]
+                    shown += [f"{caption}, {n} episodes (mean over seeds):", text, ""]
         if delta is not None and "safe" in at_n:
             gate = figures.normalised(at_n)
             valid = figures.validity_gate(gate, delta)
@@ -164,16 +176,16 @@ def report(out_dir, target: float = 0.95, delta: float | None = 0.05, show: bool
         methods,
         styles,
         target,
-        f"{name}: rollouts for a {target:.0%}-optimal policy",
+        f"{name}: transitions for a {target:.0%}-optimal policy",
         fig_dir / "sample_efficiency",
     )
     if len(summary):
 
         def cell(r):
-            if not np.isfinite(r["median"]):
-                return f"> {max(meta['n_rollouts'])}"
-            hi = "inf" if not np.isfinite(r["q75"]) else f"{r['q75']:.0f}"
-            return f"{r['median']:.0f} [{r['q25']:.0f}, {hi}]"
+            if not np.isfinite(r["median_t"]):
+                return f"> {figures.samples_label(figures.sample_grid(res)[-1])}"
+            hi = "inf" if not np.isfinite(r["q75_t"]) else figures.samples_label(r["q75_t"])
+            return f"{figures.samples_label(r['median_t'])} [{figures.samples_label(r['q25_t'])}, {hi}]"
 
         table = summary.assign(cell=summary.apply(cell, axis=1)).pivot(
             index="size", columns="method", values="cell"
@@ -183,7 +195,7 @@ def report(out_dir, target: float = 0.95, delta: float | None = 0.05, show: bool
         )
         table.index = pd.Index([labels[s] for s in table.index], name=size_name)
         caption = (
-            f"Rollouts for a {target:.0%}-optimal policy: median over seeds [quartiles]; '>' = not reached"
+            f"Transitions for a {target:.0%}-optimal policy: median over seeds [quartiles]; '>' = not reached"
         )
         lines += [f"## {caption}", "", "```", table.to_string(), "```", ""]
         shown += [caption + ":", table.to_string(), ""]

@@ -1,5 +1,7 @@
 """Value iteration on an exact MDP (step S8; also gives V* on the true model)."""
 
+import time
+
 import numpy as np
 
 from scm_to_mdp.core import Reward, Solution
@@ -8,12 +10,14 @@ from scm_to_mdp.solving.stopping import stop_at
 
 def solve(P: np.ndarray, reward: Reward, gamma: float, tol: float = 1e-8) -> Solution:
     """P [S, A, S']. Q(s, a) = R(s, a) + sum_s' P(s' | s, a) (r_next(s') + gamma V(s'))."""
-    V = np.zeros(P.shape[0])
+    V, start, sweeps = np.zeros(P.shape[0]), time.perf_counter(), 0
     while True:
         Q = reward.R + P @ reward.backup(V, gamma)  # [S, A]
         V_new = Q.max(1)
+        sweeps += 1
         if np.abs(V_new - V).max() < stop_at(tol, gamma):
-            return Solution(V_new, Q.argmax(1))
+            seconds = (time.perf_counter() - start) / sweeps
+            return Solution(V_new, Q.argmax(1), iterations=sweeps, iteration_s=seconds)
         V = V_new
 
 

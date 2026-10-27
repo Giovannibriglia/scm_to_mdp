@@ -31,8 +31,8 @@ def fake_results(rng) -> pd.DataFrame:
     for size, states in [("3", 8), ("4", 16), ("5", 32)]:
         for seed in range(3):
             for n in [50, 100]:
-                for method, role in [("BIC -> RMDP", "ours"), ("flat MDP", "baseline")]:
-                    stopped = method == "BIC -> RMDP" and size == "5" and n == 100
+                for method, role in [("BIC -> IMDP", "ours"), ("flat MDP", "baseline")]:
+                    stopped = method == "BIC -> IMDP" and size == "5" and n == 100
                     row = {"size": size, "n_states": states, "seed": seed, "n_rollouts": n, "method": method}
                     row |= {"role": role, "guarantee": role == "ours", "V_star": 10.0, "V_random": 5.0}
                     row |= {
@@ -43,7 +43,7 @@ def fake_results(rng) -> pd.DataFrame:
                         m: rng.random()
                         for m in ["regret", "gap", "regret_K", "gap_K", "violation_rate", "worst_violation"]
                     }
-                    row |= {"safe": method == "BIC -> RMDP", "shd": int(size) if role == "ours" else np.nan}
+                    row |= {"safe": method == "BIC -> IMDP", "shd": int(size) if role == "ours" else np.nan}
                     row |= {"sid": 2 * int(size) if role == "ours" else np.nan}
                     for step in ["discovery", "learning", "solve"]:
                         row |= {f"{step}_s": rng.random() * 10, f"{step}_gb": rng.random()}
@@ -54,9 +54,9 @@ def fake_results(rng) -> pd.DataFrame:
 
 def test_result_figures(tmp_path):
     res = fake_results(np.random.default_rng(0))
-    methods = ["BIC -> RMDP", "flat MDP"]
-    styles = method_styles({"BIC -> RMDP": ("ours", True), "flat MDP": ("baseline", False)})
-    assert styles["flat MDP"]["ls"] == "--" and styles["BIC -> RMDP"]["ls"] == "-"
+    methods = ["BIC -> IMDP", "flat MDP"]
+    styles = method_styles({"BIC -> IMDP": ("ours", True), "flat MDP": ("baseline", False)})
+    assert styles["flat MDP"]["ls"] == "--" and styles["BIC -> IMDP"]["ls"] == "-"
     at = res[res["n_rollouts"] == 100]
     axis = figures.Axis(at, ["3", "4", "5"], ["N=3", "N=4", "N=5"], "N")
     figures.performance(at, axis, methods, styles, 20, "t", tmp_path / "performance")

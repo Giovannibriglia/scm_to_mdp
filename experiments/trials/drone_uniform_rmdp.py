@@ -1,14 +1,14 @@
-"""Drone delivery, uniform logger: every causal discovery -> RMDP method against flat RMDP and SPIBB (S2-S9).
+"""Drone delivery, uniform logger: every causal discovery -> IMDP method against flat IMDP and SPIBB (S2-S9).
 
-    size        grid side - drones: 3-1, 4-1, 5-1, 6-1 (one drone: 27 ... 216 states), 3-2 (two drones: 729
-                states, 36 joint actions; experiment 1's 4-2 needs a server)
+    size        grid side - drones: 3-1 ... 12-1 (one drone: 27 ... 1,728 observed states, 6 actions)
     knob        gust: "gust" (experiment 1 also runs "calm")
     logger      uniform (every action tried in every visited state: no positivity problem)
-    rollouts    50, 250, 750 (horizon 50, gamma 0.95), 5 seeds (protocol.py)
-    methods     BIC / PCMCI+ / GES / DYNOTEARS -> RMDP with the plain discovered graph (no widening of
-                the families: no "support", "hull" or "pad"), flat RMDP, flat SPIBB and SL-SPIBB (safe
+    episodes    N_EPISODES of HORIZON = 256 steps (gamma 0.95), 5 seeds; solving limited to 3 x the oracle
+                (protocol.py)
+    methods     BIC / PCMCI+ / GES / DYNOTEARS -> IMDP with the plain discovered graph (no widening of
+                the families: no "support", "hull" or "pad"), flat IMDP, flat SPIBB and SL-SPIBB (safe
                 policy improvement: a guarantee over the behaviour policy, not a value bound; SL-SPIBB
-                with candidate parent sets of 3 state variables), and true graph -> RMDP as the
+                with candidate parent sets of 3 state variables), and true graph -> IMDP as the
                 reference (protocol.py, RMDP_METHODS)
     evaluation  only in the MDP the data come from (no reward transfer, no dynamics shift)
     hidden      as in experiment 1: a gust, w.p. 0.1 at every step, pushes drone 0 one cell further in -y
@@ -26,22 +26,31 @@ import dataclasses
 import warnings
 from pathlib import Path
 
-from protocol import DELTA, N_ROLLOUTS, POLICIES, RMDP_METHODS, SEEDS, TRAIN_HIDDEN, methods
+from protocol import (
+    DELTA,
+    HORIZON,
+    LIMITS,
+    POLICIES,
+    RMDP_METHODS,
+    SAVE_MODELS,
+    SEEDS,
+    SOLVE_FACTOR,
+    SOLVE_FLOOR_S,
+    TRAIN_HIDDEN,
+    methods,
+)
 
 from scm_to_mdp.envs import Drone
-from scm_to_mdp.tool import Grid, Limits, report_grid, run_folder, run_grid
+from scm_to_mdp.tool import Grid, report_grid, run_folder, run_grid
 
 warnings.filterwarnings("ignore", category=FutureWarning)
 
-SIZES = ["3-1", "4-1", "5-1", "6-1", "3-2"]  # grid side - number of drones
+SIZES = ["3-1", "4-1", "5-1", "6-1", "7-1", "8-1", "9-1", "10-1", "11-1", "12-1"]  # grid side - drones
+N_EPISODES = [1, 4, 16, 64, 256, 1024]  # of HORIZON steps: 256 ... 262k transitions
 GUST = "gust"
-HORIZON, GAMMA = 50, 0.95
+GAMMA = 0.95
 GUST_EFFECT = 0.5
 MODEL_GB = 12.0
-LIMITS = Limits(
-    mem_gb=3.0,  # peak without BIC 1.8 GB (flat RMDP learning, 3-2, 750 rollouts)
-    timeout_s={"discovery": 120.0, "selection": 120.0, "learning": 120.0, "training": 1800.0, "solve": 600.0},
-)
 OUT_DIR = Path(__file__).resolve().parents[2] / "results" / "trials" / "drone_uniform_rmdp"
 METHODS = methods(RMDP_METHODS, state_parents=3)
 
@@ -60,12 +69,15 @@ GRID = Grid(
     knobs=[GUST],
     knob_name="gust",
     policies=POLICIES,
-    n_rollouts=N_ROLLOUTS,
+    n_rollouts=N_EPISODES,  # one rollout = one episode of HORIZON steps
     seeds=SEEDS,
     horizon=HORIZON,
     gamma=GAMMA,
     methods=METHODS,
     limits=LIMITS,
+    solve_factor=SOLVE_FACTOR,
+    solve_floor_s=SOLVE_FLOOR_S,
+    save_models=SAVE_MODELS,
     workers="auto",
     out_dir=OUT_DIR,
     reward_transfer=False,

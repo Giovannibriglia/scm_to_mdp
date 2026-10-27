@@ -12,7 +12,7 @@
                 product of factors over the observed variables is right (the declared limit case of
                 this grid). Shift: diabetic w.p. 0.5 and 0.8 at deployment (with diabetes observed, a
                 change of the cause's distribution only: the causal kernel is unchanged, ECI pp. 77-79)
-    rollouts    100 ... 4000 patients (at most 20 steps, gamma 0.9), 5 seeds, the standard methods (no
+    episodes    N_EPISODES of HORIZON = 256 steps (gamma 0.9), 5 seeds, the standard methods (no
                 per-(s,a) product set: the vitals are not 0/1)
 
 Diabetes changes how blood pressure and glucose respond to vasopressors (Oberst & Sontag's simulator,
@@ -39,7 +39,7 @@ import dataclasses
 import warnings
 from pathlib import Path
 
-from protocol import DEEP_BASELINES, DELTA, SEEDS, policies
+from protocol import DEEP_BASELINES, DELTA, HORIZON, SAVE_MODELS, SEEDS, policies
 
 from scm_to_mdp.envs import Sepsis
 from scm_to_mdp.tool import Grid, Limits, Policy, report_grid, run_folder, run_grid, standard_methods
@@ -48,8 +48,9 @@ warnings.filterwarnings("ignore", category=FutureWarning)
 
 VITALS = {2: ("hr", "sysbp"), 3: ("hr", "sysbp", "o2"), 4: ("hr", "sysbp", "o2", "glucose")}
 DIABETES = ["absent", "observed", "hidden"]
-N_ROLLOUTS = [100, 250, 500, 1000, 2000, 4000]
-HORIZON, GAMMA = 20, 0.9
+# of HORIZON steps: 2k ... 80k transitions (was 100 ... 4000 patients of <= 20 steps)
+N_EPISODES = [8, 16, 32, 64, 128, 256]
+GAMMA = 0.9
 DIABETES_EFFECT = 1.5  # the diabetic response, scaled away from the non-diabetic one (1 = original)
 P_DIABETES, SHIFT_DIABETES = 0.2, [0.5, 0.8]
 LIMITS = Limits(
@@ -89,7 +90,8 @@ GRID = Grid(
     knobs=DIABETES,
     knob_name="diabetes",
     policies=policies(),
-    n_rollouts=N_ROLLOUTS,
+    n_rollouts=N_EPISODES,  # one rollout = one episode of HORIZON steps
+    save_models=SAVE_MODELS,
     seeds=SEEDS,
     horizon=HORIZON,
     gamma=GAMMA,

@@ -1,11 +1,11 @@
 """Drone delivery, uniform logger: every causal discovery -> MDP method against the baselines without a
 guarantee (S2-S9).
 
-    size        grid side - drones: 3-1, 4-1, 5-1, 6-1 (one drone: 27 ... 216 states), 3-2 (two drones: 729
-                states, 36 joint actions; experiment 1's 4-2 needs a server)
+    size        grid side - drones: 3-1 ... 12-1 (one drone: 27 ... 1,728 observed states, 6 actions)
     knob        gust: "gust" (experiment 1 also runs "calm")
     logger      uniform (every action tried in every visited state: no positivity problem)
-    rollouts    50, 250, 750 (horizon 50, gamma 0.95), 5 seeds (protocol.py)
+    episodes    N_EPISODES of HORIZON = 256 steps (gamma 0.95), 5 seeds; solving limited to 3 x the oracle
+                (protocol.py)
     methods     BIC / PCMCI+ / GES / DYNOTEARS -> MDP (point estimates, value iteration; no guarantee),
                 flat MDP, DiFaRL, FOCUS, offline DQN, offline CQL, and true graph -> MDP as the reference
                 (protocol.py, MDP_METHODS)
@@ -25,22 +25,31 @@ import dataclasses
 import warnings
 from pathlib import Path
 
-from protocol import DELTA, MDP_METHODS, N_ROLLOUTS, POLICIES, SEEDS, TRAIN_HIDDEN, methods
+from protocol import (
+    DELTA,
+    HORIZON,
+    LIMITS,
+    MDP_METHODS,
+    POLICIES,
+    SAVE_MODELS,
+    SEEDS,
+    SOLVE_FACTOR,
+    SOLVE_FLOOR_S,
+    TRAIN_HIDDEN,
+    methods,
+)
 
 from scm_to_mdp.envs import Drone
-from scm_to_mdp.tool import Grid, Limits, report_grid, run_folder, run_grid
+from scm_to_mdp.tool import Grid, report_grid, run_folder, run_grid
 
 warnings.filterwarnings("ignore", category=FutureWarning)
 
-SIZES = ["3-1", "4-1", "5-1", "6-1", "3-2"]  # grid side - number of drones
+SIZES = ["3-1", "4-1", "5-1", "6-1", "7-1", "8-1", "9-1", "10-1", "11-1", "12-1"]  # grid side - drones
+N_EPISODES = [1, 4, 16, 64, 256, 1024]  # of HORIZON steps: 256 ... 262k transitions
 GUST = "gust"
-HORIZON, GAMMA = 50, 0.95
+GAMMA = 0.95
 GUST_EFFECT = 0.5
 MODEL_GB = 12.0
-LIMITS = Limits(
-    mem_gb=2.5,  # peak without BIC 0.9 GB (true graph -> MDP relax, 3-2, 750 rollouts)
-    timeout_s={"discovery": 120.0, "selection": 120.0, "learning": 120.0, "training": 1800.0, "solve": 600.0},
-)
 OUT_DIR = Path(__file__).resolve().parents[2] / "results" / "trials" / "drone_uniform_mdp"
 METHODS = methods(MDP_METHODS)
 
@@ -59,12 +68,15 @@ GRID = Grid(
     knobs=[GUST],
     knob_name="gust",
     policies=POLICIES,
-    n_rollouts=N_ROLLOUTS,
+    n_rollouts=N_EPISODES,  # one rollout = one episode of HORIZON steps
     seeds=SEEDS,
     horizon=HORIZON,
     gamma=GAMMA,
     methods=METHODS,
     limits=LIMITS,
+    solve_factor=SOLVE_FACTOR,
+    solve_floor_s=SOLVE_FLOOR_S,
+    save_models=SAVE_MODELS,
     workers="auto",
     out_dir=OUT_DIR,
     reward_transfer=False,

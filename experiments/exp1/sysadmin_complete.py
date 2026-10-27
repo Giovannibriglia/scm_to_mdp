@@ -8,7 +8,8 @@ the claims, the loggers, the seeds, the shifts and the expectations common to ev
                 w.p. 0.95)
     hidden      the storm (src/scm_to_mdp/envs/sysadmin.py) hits machine 0 only (a machine that is not
                 repaired fails more: P(up) x 0.2), w.p. 0.1 in the data, 0.3 and 0.6 at deployment
-    rollouts    10 ... 1600 (horizon 20, gamma 0.9), 5 seeds, the standard methods with the per-(s,a)
+    episodes    N_EPISODES of HORIZON = 256 steps (gamma 0.9), 5 seeds, the standard methods with the
+                per-(s,a)
                 product set (every variable is 0/1)
 
 Expectations for this domain, written 2026-10-24 before the runs:
@@ -33,7 +34,7 @@ import dataclasses
 import warnings
 from pathlib import Path
 
-from protocol import DEEP_BASELINES, DELTA, N_ROLLOUTS, SEEDS, SHIFT_HIDDEN, TRAIN_HIDDEN, policies
+from protocol import DEEP_BASELINES, DELTA, HORIZON, SAVE_MODELS, SEEDS, SHIFT_HIDDEN, TRAIN_HIDDEN, policies
 
 from scm_to_mdp.envs import SysAdmin
 from scm_to_mdp.tool import Grid, Limits, report_grid, run_folder, run_grid, standard_methods
@@ -42,7 +43,9 @@ warnings.filterwarnings("ignore", category=FutureWarning)
 
 SIZES = [2, 3, 4, 5, 6, 7, 8, 9, 10]
 TOPOLOGIES = ["ring", "bidirectional", "star", "ring+crash"]
-HORIZON, GAMMA = 20, 0.9
+# of HORIZON steps: 200 ... 32k transitions (was 10 ... 1600 rollouts of 20)
+N_EPISODES = [1, 2, 4, 8, 16, 32, 64, 128]
+GAMMA = 0.9
 STORM_EFFECT, CRASH_COST = 0.8, 10.0  # a storm multiplies machine 0's P(up) by 1 - 0.8
 LIMITS = Limits(
     mem_gb=8.0,
@@ -74,7 +77,8 @@ GRID = Grid(
     knobs=TOPOLOGIES,
     knob_name="topology",
     policies=policies(),
-    n_rollouts=N_ROLLOUTS,
+    n_rollouts=N_EPISODES,  # one rollout = one episode of HORIZON steps
+    save_models=SAVE_MODELS,
     seeds=SEEDS,
     horizon=HORIZON,
     gamma=GAMMA,

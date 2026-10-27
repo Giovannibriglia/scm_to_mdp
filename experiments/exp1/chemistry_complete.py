@@ -8,7 +8,8 @@
     hidden      the catalyst (src/scm_to_mdp/envs/chemistry.py) drives the reaction of one object (w.p.
                 0.95 with it, 0.3 without), on w.p. 0.1 in the data, 0.3 and 0.6 at deployment; with
                 density 0 there is no reaction and it changes nothing (a negative control)
-    rollouts    10 ... 1600 (horizon 20, gamma 0.9), 5 seeds (the seed also draws the graph and the target
+    episodes    N_EPISODES of HORIZON = 256 steps (gamma 0.9), 5 seeds (the seed also draws the graph and
+                the target
                 colours), the standard methods (no per-(s,a) product set: 3 colours)
 8 objects are left out: with the catalyst the true model has 13,122 states and needs about 25 GB.
 
@@ -32,7 +33,7 @@ import dataclasses
 import warnings
 from pathlib import Path
 
-from protocol import DEEP_BASELINES, DELTA, N_ROLLOUTS, SEEDS, SHIFT_HIDDEN, TRAIN_HIDDEN, policies
+from protocol import DEEP_BASELINES, DELTA, HORIZON, SAVE_MODELS, SEEDS, SHIFT_HIDDEN, TRAIN_HIDDEN, policies
 
 from scm_to_mdp.envs import Chemistry
 from scm_to_mdp.tool import Grid, Limits, report_grid, run_folder, run_grid, standard_methods
@@ -41,7 +42,9 @@ warnings.filterwarnings("ignore", category=FutureWarning)
 
 SIZES = [4, 5, 6, 7]
 DENSITIES = ["0.0", "0.4", "1.0"]
-HORIZON, GAMMA = 20, 0.9
+# of HORIZON steps: 200 ... 32k transitions (was 10 ... 1600 rollouts of 20)
+N_EPISODES = [1, 2, 4, 8, 16, 32, 64, 128]
+GAMMA = 0.9
 LIMITS = Limits(
     mem_gb=8.0,
     timeout_s={"discovery": 60.0, "selection": 60.0, "learning": 120.0, "solve": 120.0, "training": 600.0},
@@ -72,7 +75,8 @@ GRID = Grid(
     knobs=DENSITIES,
     knob_name="density",
     policies=policies(),
-    n_rollouts=N_ROLLOUTS,
+    n_rollouts=N_EPISODES,  # one rollout = one episode of HORIZON steps
+    save_models=SAVE_MODELS,
     seeds=SEEDS,
     horizon=HORIZON,
     gamma=GAMMA,

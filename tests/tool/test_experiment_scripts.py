@@ -46,7 +46,7 @@ def test_every_grid_follows_the_protocol(module):
     assert grid.seeds == protocol.SEEDS and grid.reward_transfer
     labels = {p.label for p in grid.policies}
     assert {"uniform", "expert ε=0.05", "expert ε=0"} <= labels
-    assert {"logger-Markov graph -> RMDP", "random matched graph -> RMDP", "true graph + 1 -> RMDP"} <= set(
+    assert {"logger-Markov graph -> IMDP", "random matched graph -> IMDP", "true graph + 1 -> IMDP"} <= set(
         grid.methods
     )
     assert {"offline DQN", "offline CQL"} <= set(grid.methods)

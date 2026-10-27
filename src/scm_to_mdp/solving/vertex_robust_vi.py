@@ -10,6 +10,8 @@ S * K * 2^n * 2^n float64 numbers: with K = n + 1 actions (SysAdmin), 1.2 GB at 
 n = 9.
 """
 
+import time
+
 import numpy as np
 
 from scm_to_mdp.core import FactorBounds, Solution, all_states
@@ -30,11 +32,15 @@ def solve(bounds: FactorBounds, gamma: float, tol: float = 1e-7) -> Solution:
     for i in range(n):
         q_i = q[:, :, :, i, None]  # [S, K, C, 1]
         kernels *= np.where(B[:, i][None, None, None, :] == 1, q_i, 1 - q_i)
-    V = np.zeros(B.shape[0])
+    V, start, sweeps = np.zeros(B.shape[0]), time.perf_counter(), 0
     while True:
+        sweeps += 1
         Q = bounds.reward.R + (kernels @ bounds.reward.backup(V, gamma)).min(-1)  # nature: the worst vertex
         V_new = Q.max(1)
         step = np.abs(V_new - V).max()
         if step < stop_at(tol, gamma):
-            return Solution(sound_lower_bound(V_new, step, gamma), Q.argmax(1))
+            seconds = (time.perf_counter() - start) / sweeps
+            return Solution(
+                sound_lower_bound(V_new, step, gamma), Q.argmax(1), iterations=sweeps, iteration_s=seconds
+            )
         V = V_new

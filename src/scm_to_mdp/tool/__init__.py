@@ -16,7 +16,16 @@ from scm_to_mdp.data import DataSpec
 from scm_to_mdp.ground_truth import MDPGroundTruth, ModelTooLarge
 from scm_to_mdp.tool.evaluate import evaluate
 from scm_to_mdp.tool.grid import Grid, Policy, experiments, run_grid
-from scm_to_mdp.tool.methods import BASELINES, Limits, Method, Result, learn, solve, standard_methods
+from scm_to_mdp.tool.methods import (
+    BASELINES,
+    Limits,
+    Method,
+    Result,
+    learn,
+    oracle_methods,
+    solve,
+    standard_methods,
+)
 from scm_to_mdp.tool.report import report
 from scm_to_mdp.tool.report_grid import report_grid
 from scm_to_mdp.tool.runs import run_folder
@@ -46,4 +55,5 @@ __all__ = [
     "run_grid",
     "solve",
     "standard_methods",
+    "oracle_methods",
 ]

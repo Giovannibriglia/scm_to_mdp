@@ -1,13 +1,14 @@
-"""SysAdmin ring, uniform logger: every causal discovery -> RMDP method against flat RMDP and SPIBB (S2-S9).
+"""SysAdmin ring, uniform logger: every causal discovery -> IMDP method against flat IMDP and SPIBB (S2-S9).
 
-    size        N = 2 ... 8 machines (2^N observed states, N + 1 actions)
+    size        N = 2 ... 11 machines (2^N observed states: 4 ... 2,048; N + 1 actions)
     knob        topology: ring (the one-way ring, in-degree 3)
     logger      uniform (every action tried in every visited state: no positivity problem)
-    rollouts    50, 250, 750 (horizon 20, gamma 0.9), 5 seeds (protocol.py)
-    methods     BIC / PCMCI+ / GES / DYNOTEARS -> RMDP with the plain discovered graph (no widening of
-                the families: no "support", "hull" or "pad"), flat RMDP, flat SPIBB and SL-SPIBB (safe
+    episodes    N_EPISODES of HORIZON = 256 steps (gamma 0.9), 5 seeds; solving limited to 3 x the oracle
+                (protocol.py)
+    methods     BIC / PCMCI+ / GES / DYNOTEARS -> IMDP with the plain discovered graph (no widening of
+                the families: no "support", "hull" or "pad"), flat IMDP, flat SPIBB and SL-SPIBB (safe
                 policy improvement: a guarantee over the behaviour policy, not a value bound; SL-SPIBB
-                with candidate parent sets of 3 state variables), and true graph -> RMDP as the
+                with candidate parent sets of 3 state variables), and true graph -> IMDP as the
                 reference (protocol.py, RMDP_METHODS)
     evaluation  only in the MDP the data come from (no reward transfer, no dynamics shift)
     hidden      as in experiment 1: the storm hits machine 0 w.p. 0.1 at every step and is never in the
@@ -25,21 +26,30 @@ import dataclasses
 import warnings
 from pathlib import Path
 
-from protocol import DELTA, N_ROLLOUTS, POLICIES, RMDP_METHODS, SEEDS, TRAIN_HIDDEN, methods
+from protocol import (
+    DELTA,
+    HORIZON,
+    LIMITS,
+    POLICIES,
+    RMDP_METHODS,
+    SAVE_MODELS,
+    SEEDS,
+    SOLVE_FACTOR,
+    SOLVE_FLOOR_S,
+    TRAIN_HIDDEN,
+    methods,
+)
 
 from scm_to_mdp.envs import SysAdmin
-from scm_to_mdp.tool import Grid, Limits, report_grid, run_folder, run_grid
+from scm_to_mdp.tool import Grid, report_grid, run_folder, run_grid
 
 warnings.filterwarnings("ignore", category=FutureWarning)
 
-SIZES = [2, 3, 4, 5, 6, 7, 8]
+SIZES = [2, 3, 4, 5, 6, 7, 8, 9, 10, 11]
+N_EPISODES = [1, 4, 16, 64, 256, 1024]  # of HORIZON steps: 256 ... 262k transitions
 TOPOLOGY = "ring"
-HORIZON, GAMMA = 20, 0.9
+GAMMA = 0.9
 STORM_EFFECT = 0.8  # a storm multiplies machine 0's P(up) by 1 - 0.8 (experiments/exp1/sysadmin_complete.py)
-LIMITS = Limits(
-    mem_gb=2.5,  # peak without BIC 0.3 GB (N = 8, 750 rollouts); BIC needs 2.1 GB at N = 7
-    timeout_s={"discovery": 60.0, "selection": 60.0, "learning": 60.0, "training": 600.0, "solve": 600.0},
-)
 OUT_DIR = Path(__file__).resolve().parents[2] / "results" / "trials" / "sysadmin_uniform_rmdp"
 METHODS = methods(RMDP_METHODS, state_parents=3)
 
@@ -56,12 +66,15 @@ GRID = Grid(
     knobs=[TOPOLOGY],
     knob_name="topology",
     policies=POLICIES,
-    n_rollouts=N_ROLLOUTS,
+    n_rollouts=N_EPISODES,  # one rollout = one episode of HORIZON steps
     seeds=SEEDS,
     horizon=HORIZON,
     gamma=GAMMA,
     methods=METHODS,
     limits=LIMITS,
+    solve_factor=SOLVE_FACTOR,
+    solve_floor_s=SOLVE_FLOOR_S,
+    save_models=SAVE_MODELS,
     workers="auto",
     out_dir=OUT_DIR,
     reward_transfer=False,

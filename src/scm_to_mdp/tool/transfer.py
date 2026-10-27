@@ -5,11 +5,11 @@ environment's alternative rewards (Env.alternative_rewards; methods.replan: mode
 re-solve their learned model, model-free ones keep their policy and have no promise) and evaluated
 exactly on the same true transitions with that reward. For one setting this writes
 
-    figures/transfer/<task>/rollouts=<n>/   performance, performance_normalized, validity
-    figures/transfer/average/rollouts=<n>/  performance_normalized and validity averaged over the
+    figures/transfer/<task>/episodes=<n>/   performance, performance_normalized, validity
+    figures/transfer/average/episodes=<n>/  performance_normalized and validity averaged over the
                                             tasks (normalised per task first), and transfer_gap: the
                                             average over the tasks minus the original reward
-and a "Reward transfer" section of tables.md (per task and averaged, at every number of rollouts).
+and a "Reward transfer" section of tables.md (per task and averaged, at every number of episodes).
 """
 
 from pathlib import Path
@@ -74,7 +74,7 @@ def report_transfer(
         axis = figures.Axis(at_n, sizes, [labels[s] for s in sizes], size_name)
         for task in tasks:
             rows = at_n[at_n["task"] == task]
-            folder, title = fig_dir / task / f"rollouts={n}", f"{name}, {word} {task}, {n} rollouts"
+            folder, title = fig_dir / task / f"episodes={n}", f"{name}, {word} {task}, {n} episodes"
             figures.performance(rows, axis, methods, styles, k, title, folder / "performance")
             figures.performance_normalized(
                 rows, axis, methods, styles, target, k, title, folder / "performance_normalized"
@@ -83,7 +83,7 @@ def report_transfer(
             text = table(figures.normalised(rows), "norm_value", lambda x: f"{x:.2f}")
             if text:
                 lines += [
-                    f"## {task}, {n} rollouts: normalised value (0 random, 1 optimal), nominal start",
+                    f"## {task}, {n} episodes: normalised value (0 random, 1 optimal), nominal start",
                     "```",
                     text,
                     "```",
@@ -91,8 +91,8 @@ def report_transfer(
                 ]
         averaged = average(at_n)
         folder, title = (
-            fig_dir / "average" / f"rollouts={n}",
-            f"{name}, mean over {len(tasks)} {what}, {n} rollouts",
+            fig_dir / "average" / f"episodes={n}",
+            f"{name}, mean over {len(tasks)} {what}, {n} episodes",
         )
         figures.performance_normalized(
             averaged, axis, methods, styles, target, k, title, folder / "performance_normalized"
@@ -107,7 +107,7 @@ def report_transfer(
         ]:
             text = table(averaged, column, fmt)
             if text:
-                lines += [f"## average, {n} rollouts: {caption}", "```", text, "```", ""]
+                lines += [f"## average, {n} episodes: {caption}", "```", text, "```", ""]
         text = table(gap, "gap_value", lambda x: f"{x:+.2f}")
         if text:
             lines += [

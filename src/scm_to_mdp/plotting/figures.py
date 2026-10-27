@@ -13,7 +13,8 @@ that size finished; in the time / memory figures, a method stopped by that limit
 after such a stop) has its marker on the limit line, at every size concerned.
 
 Figure over the problem size and the number of rollouts:
-    sample_efficiency   rollouts needed for a policy that is at least 95% optimal
+    sample_efficiency   transitions (samples: rollouts x horizon) needed for a policy that is at
+                        least 95% optimal
 """
 
 import matplotlib.pyplot as plt
@@ -27,16 +28,36 @@ STEP_TITLES = {"discovery": "Causal discovery", "learning": "Parameter learning"
 STOPPED = ("timeout", "memout")
 
 
+def observed_states(res: pd.DataFrame) -> pd.Series:
+    """size -> number of observed states (what the learners see; the full states for older rows)."""
+    for column in ("n_observed_states", "n_states"):
+        if column in res and res[column].notna().any():
+            return pd.to_numeric(res[column], errors="coerce").groupby(res["size"]).median()
+    return pd.Series(np.nan, index=pd.Index(res["size"].unique()))  # no counts: the sizes' own labels
+
+
 class Axis:
-    """The x axis over problem sizes: the sizes in order, and their tick labels."""
+    """The x axis over problem sizes, placed by their number of observed states: on a log scale when
+    every size has its own number of states, else one tick per size (in the grid's order) labelled
+    with its states and its size (e.g. Taxi's two variants, both 500 states)."""
 
     def __init__(self, res: pd.DataFrame, sizes: list[str], labels: list[str], title: str):
         present = set(res["size"])
-        self.order = [s for s in sizes if s in present]
+        order = [s for s in sizes if s in present]
         names = dict(zip(sizes, labels, strict=True))
-        self.labels = [names[s] for s in self.order]
-        self.x = np.arange(len(self.order))
-        self.title = title
+        states = observed_states(res).reindex(order)
+        if states.notna().all() and states.nunique() == len(order):
+            self.order = sorted(order, key=lambda s: states[s])
+            self.x = np.log2(states[self.order].to_numpy(float))
+            self.labels = [f"{int(states[s]):,}" for s in self.order]
+            self.title = "observed states (log scale)"
+        else:
+            self.order = order
+            self.x = np.arange(len(order), dtype=float)
+            self.labels = [
+                f"{int(states[s]):,}\n{names[s]}" if np.isfinite(states[s]) else names[s] for s in order
+            ]
+            self.title = f"observed states ({title})"
         self.n_seeds = res.groupby("size")["seed"].nunique().reindex(self.order).values
 
     def mean_sem(self, res: pd.DataFrame, method: str, column: str):
@@ -63,7 +84,9 @@ class Axis:
         )
 
     def finish(self, ax, ylabel: str):
-        ax.set_xticks(self.x, self.labels)
+        many = len(self.x) > 10 or any("\n" in t for t in self.labels) and len(self.x) > 5
+        ax.set_xticks(self.x, self.labels, rotation=45 if many else 0, ha="right" if many else "center")
+        ax.minorticks_off()
         ax.set_xlabel(self.title)
         ax.set_ylabel(ylabel)
 
@@ -218,16 +241,17 @@ def normalised(res: pd.DataFrame) -> pd.DataFrame:
 def performance_normalized(res, axis: Axis, methods, styles, target: float, k: int, title: str, stem):
     """2 x 2, at the nominal start (left) and over the k random start states (right): top, the
     normalised value of the policy (0 = random, 1 = optimal over the observed state); bottom, the
-    share of the oracle's optimum V* (value iteration on the full ground-truth MDP). A line at
-    `target` in every panel (see normalised)."""
+    share of V*, the optimum of an agent that sees the full state (value iteration on the full
+    ground-truth MDP; not the "oracle" method, which sees the observed state). A line at `target` in
+    every panel (see normalised). Every panel shows 0% to 100% (a value outside is off the panel)."""
     setup()
     data = normalised(res)
     fig, axes = plt.subplots(2, 2, figsize=(FULL_WIDTH, 5.6), sharex=True)
     panels = [
         ("norm_value", "Normalised value, nominal start"),
         ("norm_value_K", f"Normalised value, {k} random starts"),
-        ("oracle_share", "Share of the oracle's optimum, nominal start"),
-        ("oracle_share_K", f"Share of the oracle's optimum, {k} random starts"),
+        ("oracle_share", "Share of V* (full state), nominal start"),
+        ("oracle_share_K", f"Share of V* (full state), {k} random starts"),
     ]
     shown = []
     for ax, (metric, panel) in zip(axes.flat, panels, strict=True):
@@ -243,9 +267,11 @@ def performance_normalized(res, axis: Axis, methods, styles, target: float, k: i
             lines.append((0.0, ":", "random ", "bottom"))
             ylabel = "(V^π − V_rand) / (V*_obs − V_rand)"
         else:
-            lines = [(1.0, "-", "oracle ", "bottom"), (target, "--", f"{target:.0%} ", "top")]
-            ylabel = "V^π / V*  (V* = VI on the true MDP)"
-            ax.yaxis.set_major_formatter(plt.FuncFormatter(lambda v, _: f"{v:.0%}"))
+            lines = [(1.0, "-", "V* ", "bottom"), (target, "--", f"{target:.0%} ", "top")]
+            ylabel = "V^π / V*  (V* = VI on the full MDP)"
+        ax.set_ylim(-0.02, 1.02)  # 0% to 100% in every panel
+        ax.set_yticks([0, 0.25, 0.5, 0.75, 1.0])
+        ax.yaxis.set_major_formatter(plt.FuncFormatter(lambda v, _: f"{v:.0%}"))
         for level, style, text, va in lines:
             ax.axhline(level, color="k", ls=style, lw=0.8)
             ax.text(axis.x[-1], level, text, va=va, ha="right", fontsize=7)
@@ -502,7 +528,7 @@ def parameter_learning(res, axis: Axis, methods, styles, delta: float | None, ti
 
 
 def _limit_marks(data, history, axis, method, step, kind) -> list[int]:
-    """Sizes (indices on the axis) where `method` was stopped by `kind` ("timeout" / "memout") in
+    """Sizes (their positions on the axis) where `method` was stopped by `kind` ("timeout" / "memout") in
     `step`, or skipped because of such a stop (the sweep's rule, tool/sweep.py: a stop at (size, n)
     skips every larger size with at least n rollouts, and larger n of the same size and seed)."""
     rank = {s: i for i, s in enumerate(axis.order)}
@@ -525,12 +551,14 @@ def _limit_marks(data, history, axis, method, step, kind) -> list[int]:
         same = (mine["rank"] == at) & (mine["seed"] == r.seed) & (mine["n_rollouts"] < r.n_rollouts)
         if (earlier | same).any():
             marks.add(at)
-    return sorted(marks)
+    return [float(axis.x[i]) for i in sorted(marks)]  # positions on the axis
 
 
 def resources(res, axis: Axis, methods, styles, unit: str, limits: dict, title: str, stem, history=None):
     """1 x 3: time (unit "s") or peak memory (unit "gb") of discovery, learning and solving.
-    limits: {step: limit or None}, drawn as a dashed line. "solve" includes the relaxation step.
+    limits: {step: limit or None}, drawn as a dashed line; a limit may also be an array, one value
+    per size of the axis (a relative solve limit, tool/sweep.py), drawn through the sizes. "solve"
+    includes the relaxation step.
     At every size where a method was stopped by this figure's limit (timeouts in the time figure,
     memouts in the memory figure), or skipped because of such a stop at a smaller size or number of
     rollouts, its marker sits on the dashed line. A step stopped by the other limit is an X at its
@@ -566,9 +594,10 @@ def resources(res, axis: Axis, methods, styles, unit: str, limits: dict, title: 
                 shown.append(m)
             st = styles[m]
             if marks:  # on the limit line: stopped by it, or skipped after it
+                at = dict(zip(axis.x, np.broadcast_to(np.asarray(limit, float), axis.x.shape), strict=True))
                 ax.plot(
                     np.array(marks) + _dodge(methods, m),
-                    np.full(len(marks), limit),
+                    np.array([at[x] for x in marks]),
                     ls="none",
                     marker=st["marker"],
                     markersize=7,
@@ -582,7 +611,7 @@ def resources(res, axis: Axis, methods, styles, unit: str, limits: dict, title: 
             values = pd.to_numeric(data.loc[other, column], errors="coerce")
             if values.notna().any():  # stopped by the other limit: an X at the measured value
                 other_shown = True
-                index = {o: i for i, o in enumerate(axis.order)}
+                index = {o: x for o, x in zip(axis.order, axis.x, strict=True)}
                 pos = data.loc[other, "size"].map(index) + _dodge(methods, m)
                 ax.plot(
                     pos,
@@ -594,7 +623,10 @@ def resources(res, axis: Axis, methods, styles, unit: str, limits: dict, title: 
                     markeredgecolor="k",
                     markeredgewidth=0.5,
                 )
-        if limit is not None:
+        if limit is not None and np.ndim(limit) > 0:  # one limit per size (relative solve limit)
+            ax.plot(axis.x, limit, color="k", ls="--", lw=0.9)
+            ax.text(axis.x[0], limit[0], " limit (x oracle)", va="bottom", fontsize=7)
+        elif limit is not None:
             ax.axhline(limit, color="k", ls="--", lw=0.9)
             label = f" limit {limit:g} {'s' if unit == 's' else 'GB'}"
             ax.text(axis.x[0], limit, label, va="bottom", fontsize=7)
@@ -632,12 +664,16 @@ def target_value(res: pd.DataFrame) -> pd.Series:
 
 
 def rollouts_needed(res: pd.DataFrame, target: float = 0.95) -> pd.DataFrame:
-    """For every (size, seed, method): n* = the smallest number of rollouts n of the grid such that the
-    policy is at least `target` optimal (true >= target * V_star_obs at the nominal start) at n and
-    at every larger n of the grid; inf if never. A run that stopped counts as not optimal. Sizes
-    with V_star_obs <= 0 have no such ratio and are left out."""
+    """For every (size, seed, method): n* = the smallest number of rollouts (episodes) n of the grid
+    such that the policy is at least `target` optimal (true >= target * V_star_obs at the nominal start)
+    at n and at every larger n of the grid; inf if never; t_star = the transitions (samples) of that
+    dataset: n* x the horizon, less where episodes end early. A run that stopped counts as not optimal.
+    Sizes with V_star_obs <= 0 have no such ratio and are left out. n_observed_states: what the
+    learners see (n_states counts the hidden variables too)."""
     rows = []
-    res = res.assign(_target=target_value(res))
+    res = res.assign(_target=target_value(res), _obs=observed_states(res).reindex(res["size"]).to_numpy())
+    if "transitions" not in res:
+        res = res.assign(transitions=np.nan)
     for (size, seed, method), g in res.groupby(["size", "seed", "method"]):
         g = g.sort_values("n_rollouts")
         v_star = g["_target"].iloc[0]
@@ -646,45 +682,76 @@ def rollouts_needed(res: pd.DataFrame, target: float = 0.95) -> pd.DataFrame:
         good = (g["status"] == "ok") & (pd.to_numeric(g["true"], errors="coerce") >= target * v_star)
         from_here = good[::-1].cummin()[::-1].to_numpy()  # good at n and at every larger n
         grid = g["n_rollouts"].to_numpy()
+        samples = pd.to_numeric(g["transitions"], errors="coerce").to_numpy(float)
         n_star = float(grid[from_here.argmax()]) if from_here.any() else np.inf
+        t_star = float(samples[from_here.argmax()]) if from_here.any() else np.inf
         rows.append(
             {
                 "size": size,
                 "n_states": g["n_states"].iloc[0],
+                "n_observed_states": g["_obs"].iloc[0],
                 "seed": seed,
                 "method": method,
                 "n_star": n_star,
+                "t_star": t_star,
             }
         )
-    return pd.DataFrame(rows, columns=["size", "n_states", "seed", "method", "n_star"])
+    columns = ["size", "n_states", "n_observed_states", "seed", "method", "n_star", "t_star"]
+    return pd.DataFrame(rows, columns=columns)
 
 
 def summarize_rollouts(needed: pd.DataFrame) -> pd.DataFrame:
-    """Median and quartiles of n* over seeds (values of the grid; inf = not reached)."""
+    """Median and quartiles over seeds of n* (median, q25, q75: values of the grid of rollouts) and of
+    the transitions t* (median_t, q25_t, q75_t); inf = not reached."""
 
     def q(x, p):
         return float(np.quantile(np.sort(x.to_numpy()), p, method="inverted_cdf"))
 
-    g = needed.groupby(["size", "n_states", "method"])["n_star"]
-    out = g.agg(median=lambda x: q(x, 0.5), q25=lambda x: q(x, 0.25), q75=lambda x: q(x, 0.75))
-    out["reached"] = g.agg(lambda x: float(np.isfinite(x).mean()))
+    if "t_star" not in needed:  # an older table: rollouts only
+        needed = needed.assign(t_star=np.nan)
+    if "n_observed_states" not in needed:
+        needed = needed.assign(n_observed_states=needed["n_states"])
+    needed = needed.assign(n_observed_states=needed["n_observed_states"].fillna(needed["n_states"]))
+    keys = ["size", "n_states", "n_observed_states", "method"]
+    g = needed.groupby(keys)
+    out = g["n_star"].agg(median=lambda x: q(x, 0.5), q25=lambda x: q(x, 0.25), q75=lambda x: q(x, 0.75))
+    out["reached"] = g["n_star"].agg(lambda x: float(np.isfinite(x).mean()))
+    for name, p in (("median_t", 0.5), ("q25_t", 0.25), ("q75_t", 0.75)):
+        out[name] = g["t_star"].agg(lambda x, p=p: q(x.fillna(np.inf), p))
     return out.reset_index()
+
+
+def sample_grid(res: pd.DataFrame) -> list[float]:
+    """The transitions of every number of rollouts of the grid (median over the runs): the y ticks of
+    the figures of samples needed."""
+    if "transitions" not in res or res["transitions"].isna().all():
+        return [float(n) for n in sorted(res["n_rollouts"].unique())]
+    t = pd.to_numeric(res["transitions"], errors="coerce").groupby(res["n_rollouts"]).median()
+    return [float(v) for v in t.sort_index().to_numpy()]
+
+
+def samples_label(v: float) -> str:
+    """12000 -> "12k", 1500000 -> "1.5M"."""
+    for div, unit in ((1e6, "M"), (1e3, "k")):
+        if v >= div:
+            return f"{v / div:.3g}{unit}"
+    return f"{v:.0f}"
 
 
 def sample_efficiency(
     res, sizes, labels, xlabel, methods, styles, target: float, title: str, stem
 ) -> pd.DataFrame:
-    """x: problem size, y: rollouts needed for a policy at least `target` optimal: the median over
-    seeds, with a band from the first to the third quartile (not a standard deviation: a seed that
-    never reaches the target has n* = inf). Not reached within the grid: an open marker on the line
-    above the largest number of rollouts. Returns the table of medians and quartiles."""
+    """x: observed states (Axis), y: transitions (samples) needed for a policy at least `target`
+    optimal: the median over seeds, with a band from the first to the third quartile (not a standard
+    deviation: a seed that never reaches the target has t* = inf). Not reached within the grid: an
+    open marker on the line above the largest dataset. Returns the table of medians and quartiles
+    (of the rollouts n* and of the transitions t*)."""
     setup()
     summary = summarize_rollouts(rollouts_needed(res, target))
-    grid = sorted(res["n_rollouts"].unique())
+    grid = sample_grid(res)
     top = grid[-1] * 1.8
-    order = [s for s in sizes if s in set(summary["size"])]
-    position = {s: i for i, s in enumerate(order)}
-    names = dict(zip(sizes, labels, strict=True))
+    axis = Axis(res[res["size"].isin(set(summary["size"]))], sizes, labels, xlabel)
+    position = dict(zip(axis.order, axis.x, strict=True))
     fig, ax = plt.subplots(figsize=(FULL_WIDTH, 4.6))
     shown = []
     for m in methods:
@@ -694,7 +761,7 @@ def sample_efficiency(
             continue
         st = styles[m]
         x = sub["size"].map(position).to_numpy(float) + 1.5 * _dodge(methods, m)
-        med, lo, hi = (sub[c].to_numpy() for c in ("median", "q25", "q75"))
+        med, lo, hi = (sub[c].to_numpy(float) for c in ("median_t", "q25_t", "q75_t"))
         reached = np.isfinite(med)
         y = np.where(reached, med, top)
         ax.plot(x, y, ls=st["ls"], color=st["color"], lw=1.4)
@@ -715,15 +782,13 @@ def sample_efficiency(
             )
         shown.append(m)
     ax.axhline(top, color="grey", ls=":", lw=0.8)
-    ax.text(-0.3, top, f" not reached with {grid[-1]} rollouts", va="bottom", fontsize=7.5, color="grey")
+    ax.text(axis.x[0], top, f" not reached with {samples_label(grid[-1])} transitions", va="bottom",
+            fontsize=7.5, color="grey")  # fmt: skip
     ax.set_yscale("log")
-    ax.set_xticks(range(len(order)), [names[s] for s in order])
-    ax.set_xlim(-0.4, len(order) - 0.6)
-    ax.minorticks_off()
-    ax.set_yticks(grid, [str(g) for g in grid])
+    axis.finish(ax, f"transitions for a {target:.0%}-optimal policy")
+    ax.set_xlim(axis.x[0] - 0.4, axis.x[-1] + 0.4)
+    ax.set_yticks(grid, [samples_label(g) for g in grid])
     ax.set_ylim(grid[0] / 1.4, top * 1.5)
-    ax.set_xlabel(xlabel)
-    ax.set_ylabel(f"rollouts for a {target:.0%}-optimal policy")
     ax.set_title(title)
     hollow = Line2D(
         [], [], ls="none", marker="o", color="k", markerfacecolor="white", label="not reached (median)"

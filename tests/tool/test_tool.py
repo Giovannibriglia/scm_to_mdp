@@ -14,11 +14,11 @@ GAMMA = 0.9
 ROOT = Path(__file__).resolve().parents[1]
 
 METHODS = {
-    "BIC -> RMDP": Method(
+    "BIC -> IMDP": Method(
         "causal", "box_robust_vi", discovery="bic", selection="bic_best", discovery_options={"max_parents": 3}
     ),
-    "true graph -> RMDP": Method("causal", "vertex_robust_vi", discovery="oracle", selection="given"),
-    "flat RMDP": Method("flat_rmdp", "robust_vi"),
+    "true graph -> IMDP": Method("causal", "vertex_robust_vi", discovery="oracle", selection="given"),
+    "flat IMDP": Method("flat_rmdp", "robust_vi"),
     "flat MDP": Method("flat_mdp", "vi"),
     "DiFaRL": Method("difarl", "fqi", solver_options={"max_iter": 30}),
 }
@@ -37,13 +37,13 @@ def test_every_method_learns_solves_and_is_evaluated(truth, dataset):
 
 
 def test_roles_and_guarantees():
-    assert METHODS["BIC -> RMDP"].role == "ours" and METHODS["BIC -> RMDP"].guarantee
-    assert METHODS["true graph -> RMDP"].role == "reference"
-    assert {METHODS[m].role for m in ["flat RMDP", "flat MDP", "DiFaRL"]} == {"baseline"}
+    assert METHODS["BIC -> IMDP"].role == "ours" and METHODS["BIC -> IMDP"].guarantee
+    assert METHODS["true graph -> IMDP"].role == "reference"
+    assert {METHODS[m].role for m in ["flat IMDP", "flat MDP", "DiFaRL"]} == {"baseline"}
     assert (
         not METHODS["flat MDP"].guarantee
         and not METHODS["DiFaRL"].guarantee
-        and METHODS["flat RMDP"].guarantee
+        and METHODS["flat IMDP"].guarantee
     )
 
 
@@ -81,11 +81,11 @@ def test_bad_methods_are_refused(kwargs, message):
 
 def test_oracle_needs_the_true_parents(dataset):
     with pytest.raises(ValueError, match="true_parents"):
-        learn(dataset, METHODS["true graph -> RMDP"])
+        learn(dataset, METHODS["true graph -> IMDP"])
 
 
 def test_without_ground_truth_only_the_promise(dataset):
-    result = solve(learn(dataset, METHODS["flat RMDP"]), dataset, GAMMA)
+    result = solve(learn(dataset, METHODS["flat IMDP"]), dataset, GAMMA)
     assert set(evaluate(result, dataset)) == {"promise"}
 
 
@@ -125,7 +125,7 @@ def collect(env, n_rollouts):
 exp = Experiment(
     name="tiny", make_env=make_env, collect=collect, sizes=[2, 3], n_rollouts=[20, 60], seeds=[0, 1],
     methods={
-        "BIC -> RMDP": Method("causal", "box_robust_vi", discovery="bic", selection="bic_best"),
+        "BIC -> IMDP": Method("causal", "box_robust_vi", discovery="bic", selection="bic_best"),
         "flat MDP": Method("flat_mdp", "vi"),
     },
     limits=Limits(mem_gb=2), workers=int(sys.argv[2]), out_dir=Path(sys.argv[1]), size_name="N",
@@ -166,14 +166,14 @@ def test_sweep_resume_and_report(tmp_path):
     assert meta["n_rollouts"] == [20, 60] and meta["size_labels"] == ["N=2", "N=3"]
     for n in [20, 60]:
         for name in ["performance", "validity", "structure", "time", "memory"]:
-            assert (out / "figures" / f"rollouts={n}" / f"{name}.png").exists()
+            assert (out / "figures" / f"episodes={n}" / f"{name}.png").exists()
     assert (out / "figures" / "sample_efficiency.pdf").exists() and (out / "tables.md").exists()
     assert (out / "models" / "N=2" / "ground_truth.png").exists()
     # the models of the first seed, at the largest number of rollouts, read back
     from scm_to_mdp.core import FactorBounds, IntervalMDP
     from scm_to_mdp.tool import load_model
 
-    bic = load_model(out / "models" / "N=3" / "n=60" / "BIC_RMDP")
+    bic = load_model(out / "models" / "N=3" / "n=60" / "BIC_IMDP")
     assert isinstance(bic["model"], FactorBounds) and set(bic["cbn"]["cpds"]) == {"m0'", "m1'", "m2'"}
     assert bic["info"]["seed"] == 0 and bic["solution"].V.shape == (8,)
     flat = load_model(out / "models" / "N=3" / "n=60" / "flat_MDP")

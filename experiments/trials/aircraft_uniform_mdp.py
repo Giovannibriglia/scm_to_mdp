@@ -1,11 +1,12 @@
 """Aircraft collision avoidance, uniform logger: every causal discovery -> MDP method against the baselines
 without a guarantee (S2-S9).
 
-    size        width x height: 8x6, 12x8 (441, 1053 observed states; experiment 1's 15x15 needs a server)
+    size        width x height: 4x3 ... 18x13 (10 sizes, 80 ... 3,724 observed states)
     knob        proximity "on": an intended climb or descent succeeds w.p. 0.5 instead of 0.8 while the
                 intruder is near (experiment 1 also runs "off")
     logger      uniform (every action tried in every visited state: no positivity problem)
-    rollouts    50, 250, 750 (horizon 20, gamma 0.95), 5 seeds (protocol.py)
+    episodes    N_EPISODES of HORIZON = 256 steps (gamma 0.95), 5 seeds; solving limited to 3 x the oracle
+                (protocol.py)
     methods     BIC / PCMCI+ / GES / DYNOTEARS -> MDP (point estimates, value iteration; no guarantee),
                 flat MDP, DiFaRL, FOCUS, offline DQN, offline CQL, and true graph -> MDP as the reference
                 (protocol.py, MDP_METHODS)
@@ -25,22 +26,31 @@ import dataclasses
 import warnings
 from pathlib import Path
 
-from protocol import DELTA, MDP_METHODS, N_ROLLOUTS, POLICIES, SEEDS, TRAIN_HIDDEN, methods
+from protocol import (
+    DELTA,
+    HORIZON,
+    LIMITS,
+    MDP_METHODS,
+    POLICIES,
+    SAVE_MODELS,
+    SEEDS,
+    SOLVE_FACTOR,
+    SOLVE_FLOOR_S,
+    TRAIN_HIDDEN,
+    methods,
+)
 
 from scm_to_mdp.envs import Aircraft
-from scm_to_mdp.tool import Grid, Limits, report_grid, run_folder, run_grid
+from scm_to_mdp.tool import Grid, report_grid, run_folder, run_grid
 
 warnings.filterwarnings("ignore", category=FutureWarning)
 
-SIZES = ["8x6", "12x8"]  # width x height
+SIZES = ["4x3", "5x4", "6x4", "8x5", "8x6", "10x7", "12x8", "14x10", "16x12", "18x13"]  # width x height
+N_EPISODES = [1, 4, 16, 64, 256, 1024]  # of HORIZON steps: 256 ... 262k transitions
 PROXIMITY = "on"
-HORIZON, GAMMA = 20, 0.95
+GAMMA = 0.95
 TURBULENCE_EFFECT = 0.5
 MODEL_GB = 12.0
-LIMITS = Limits(
-    mem_gb=2.5,  # peak 0.5 GB (offline DQN, 12x8, 750 rollouts)
-    timeout_s={"discovery": 120.0, "selection": 120.0, "learning": 120.0, "training": 1800.0, "solve": 600.0},
-)
 OUT_DIR = Path(__file__).resolve().parents[2] / "results" / "trials" / "aircraft_uniform_mdp"
 METHODS = methods(MDP_METHODS)
 
@@ -59,12 +69,15 @@ GRID = Grid(
     knobs=[PROXIMITY],
     knob_name="proximity",
     policies=POLICIES,
-    n_rollouts=N_ROLLOUTS,
+    n_rollouts=N_EPISODES,  # one rollout = one episode of HORIZON steps
     seeds=SEEDS,
     horizon=HORIZON,
     gamma=GAMMA,
     methods=METHODS,
     limits=LIMITS,
+    solve_factor=SOLVE_FACTOR,
+    solve_floor_s=SOLVE_FLOOR_S,
+    save_models=SAVE_MODELS,
     workers="auto",
     out_dir=OUT_DIR,
     reward_transfer=False,

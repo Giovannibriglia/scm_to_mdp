@@ -9,7 +9,7 @@
     policies    uniform, expert eps 0.05, expert eps 0; confounded (drone 0 climbs during gusts w.p.
                 0.95) only with gusts
     shift       gusts w.p. 0.3 and 0.6 at deployment (also after calm data)
-    rollouts    10 ... 1600 (horizon 50, gamma 0.95), 5 seeds, the standard methods (no per-(s,a)
+    episodes    N_EPISODES of HORIZON = 256 steps (gamma 0.95), 5 seeds, the standard methods (no per-(s,a)
                 product set)
 
 Wind drift p = 0.2 (theirs), with their per-axis marginals drawn independently per axis
@@ -35,7 +35,7 @@ import dataclasses
 import warnings
 from pathlib import Path
 
-from protocol import DEEP_BASELINES, DELTA, N_ROLLOUTS, SEEDS, SHIFT_HIDDEN, TRAIN_HIDDEN, policies
+from protocol import DEEP_BASELINES, DELTA, HORIZON, SAVE_MODELS, SEEDS, SHIFT_HIDDEN, TRAIN_HIDDEN, policies
 
 from scm_to_mdp.envs import Drone
 from scm_to_mdp.tool import Grid, Limits, Policy, report_grid, run_folder, run_grid, standard_methods
@@ -44,7 +44,9 @@ warnings.filterwarnings("ignore", category=FutureWarning)
 
 SIZES = ["3-1", "4-1", "5-1", "6-1", "3-2", "4-2"]  # grid side - number of drones
 GUSTS = ["calm", "gust"]
-HORIZON, GAMMA = 50, 0.95
+# of HORIZON steps: 500 ... 80k transitions (was 10 ... 1600 rollouts of 50)
+N_EPISODES = [2, 4, 8, 16, 32, 64, 128, 256]
+GAMMA = 0.95
 GUST_EFFECT = 0.5
 MODEL_GB = 12.0
 LIMITS = Limits(
@@ -81,7 +83,8 @@ GRID = Grid(
     knobs=GUSTS,
     knob_name="gust",
     policies=policies(),
-    n_rollouts=N_ROLLOUTS,
+    n_rollouts=N_EPISODES,  # one rollout = one episode of HORIZON steps
+    save_models=SAVE_MODELS,
     seeds=SEEDS,
     horizon=HORIZON,
     gamma=GAMMA,

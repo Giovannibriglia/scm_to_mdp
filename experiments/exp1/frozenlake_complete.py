@@ -9,7 +9,7 @@
     policies    uniform, expert eps 0.05, expert eps 0; confounded (agent 0 moves up during wind w.p.
                 0.95) only with wind
     shift       wind w.p. 0.3 and 0.6 at deployment (also after calm data)
-    rollouts    10 ... 1600 (horizon 50, gamma 0.95), 5 seeds, the standard methods (no per-(s,a)
+    episodes    N_EPISODES of HORIZON = 256 steps (gamma 0.95), 5 seeds, the standard methods (no per-(s,a)
                 product set: the cells are not 0/1)
 
 Every move is slippery, with our independent axes (envs/frozen_lake.py, axes "independent"): each of x and
@@ -17,9 +17,9 @@ y follows its marginal under Gym's slip (intended or perpendicular, 1/3 each), d
 true graph has no same-step edge. With two agents, the true graph has no edge between the agents.
 
 Expectations for this domain, written 2026-10-24 before the runs (after a one-seed pilot: 8x8-1, wind,
-expert eps 0.05, 100 rollouts, true graph -> RMDP at normalised regret 0.00, PCMCI+ 0.16, BIC 1.01):
-    H1  one agent: little structure (both axes need the whole cell): causal and flat RMDP close (A);
-        two agents: the factored arms pass the gate at fewer rollouts than flat RMDP;
+expert eps 0.05, 100 rollouts, true graph -> IMDP at normalised regret 0.00, PCMCI+ 0.16, BIC 1.01):
+    H1  one agent: little structure (both axes need the whole cell): causal and flat IMDP close (A);
+        two agents: the factored arms pass the gate at fewer rollouts than flat IMDP;
     H2  holes are traps: under eps = 0 the point models' Laplace guess for the moves the expert never
         tries spreads mass onto the goal (A2);
     H3  under eps = 0 the logger-Markov graph drops y from x' (seen in a check): its promise can fail
@@ -38,7 +38,7 @@ import dataclasses
 import warnings
 from pathlib import Path
 
-from protocol import DEEP_BASELINES, DELTA, N_ROLLOUTS, SEEDS, SHIFT_HIDDEN, TRAIN_HIDDEN, policies
+from protocol import DEEP_BASELINES, DELTA, HORIZON, SAVE_MODELS, SEEDS, SHIFT_HIDDEN, TRAIN_HIDDEN, policies
 
 from scm_to_mdp.envs import FrozenLake
 from scm_to_mdp.tool import Grid, Limits, Policy, report_grid, run_folder, run_grid, standard_methods
@@ -47,7 +47,9 @@ warnings.filterwarnings("ignore", category=FutureWarning)
 
 SIZES = ["4x4-1", "8x8-1", "4x4-2", "8x8-2"]  # map - number of agents
 WINDS = ["calm", "wind"]
-HORIZON, GAMMA = 50, 0.95
+# of HORIZON steps: 500 ... 80k transitions (was 10 ... 1600 rollouts of 50)
+N_EPISODES = [2, 4, 8, 16, 32, 64, 128, 256]
+GAMMA = 0.95
 WIND_EFFECT = 0.5
 MODEL_GB = 12.0
 LIMITS = Limits(
@@ -85,7 +87,8 @@ GRID = Grid(
     knobs=WINDS,
     knob_name="wind",
     policies=policies(),
-    n_rollouts=N_ROLLOUTS,
+    n_rollouts=N_EPISODES,  # one rollout = one episode of HORIZON steps
+    save_models=SAVE_MODELS,
     seeds=SEEDS,
     horizon=HORIZON,
     gamma=GAMMA,

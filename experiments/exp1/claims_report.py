@@ -31,28 +31,28 @@ BLUE, ORANGE, AQUA, YELLOW, MAGENTA, GREEN, VIOLET, RED = (
 )
 INK, MUTED, GRID = "#0b0b0b", "#52514e", "#e4e3df"
 CORE = {  # claim A: structure x model
-    "true graph -> RMDP": (BLUE, "-", "o"),
-    "BIC -> RMDP": (ORANGE, "-", "s"),
-    "flat RMDP": (AQUA, "-", "^"),
+    "true graph -> IMDP": (BLUE, "-", "o"),
+    "BIC -> IMDP": (ORANGE, "-", "s"),
+    "flat IMDP": (AQUA, "-", "^"),
     "true graph -> MDP": (BLUE, "--", "o"),
     "BIC -> MDP": (ORANGE, "--", "s"),
     "flat MDP": (AQUA, "--", "^"),
 }
 CONTROLS = {  # claim A3: is it the right structure or just a small model?
-    "true graph -> RMDP": (BLUE, "-", "o"),
-    "logger-Markov graph -> RMDP": (GREEN, "-", "D"),
-    "random matched graph -> RMDP": (VIOLET, "-", "v"),
-    "true graph + 1 -> RMDP": (RED, "-", "P"),
-    "flat RMDP": (AQUA, "-", "^"),
+    "true graph -> IMDP": (BLUE, "-", "o"),
+    "logger-Markov graph -> IMDP": (GREEN, "-", "D"),
+    "random matched graph -> IMDP": (VIOLET, "-", "v"),
+    "true graph + 1 -> IMDP": (RED, "-", "P"),
+    "flat IMDP": (AQUA, "-", "^"),
 }
-DISCOVERY = {  # every discovery algorithm -> RMDP (BIC's widened variants: same graph, wider sets)
-    "true graph -> RMDP": (BLUE, "-", "o"),
-    "BIC -> RMDP": (ORANGE, "-", "s"),
-    "BIC -> RMDP (hull)": (ORANGE, ":", "s"),
-    "BIC -> RMDP (padded)": (ORANGE, "-.", "s"),
-    "PCMCI+ -> RMDP": (YELLOW, "-", "X"),
-    "GES -> RMDP": (MAGENTA, "-", "*"),
-    "DYNOTEARS -> RMDP": (MUTED, "-", "h"),
+DISCOVERY = {  # every discovery algorithm -> IMDP (BIC's widened variants: same graph, wider sets)
+    "true graph -> IMDP": (BLUE, "-", "o"),
+    "BIC -> IMDP": (ORANGE, "-", "s"),
+    "BIC -> IMDP (hull)": (ORANGE, ":", "s"),
+    "BIC -> IMDP (padded)": (ORANGE, "-.", "s"),
+    "PCMCI+ -> IMDP": (YELLOW, "-", "X"),
+    "GES -> IMDP": (MAGENTA, "-", "*"),
+    "DYNOTEARS -> IMDP": (MUTED, "-", "h"),
 }
 BASELINES = ["offline CQL", "offline DQN", "flat SPIBB", "SL-SPIBB", "FOCUS", "DiFaRL"]
 LOGGERS = ["uniform", "expert ε=0.05", "expert ε=0"]
@@ -323,13 +323,13 @@ def main(grid_dir: Path):
         .agg({"norm_regret": "median", "safe": "mean"})
         .reset_index()
     )
-    finish(fig, axes, out, "fig_discovery", f"{name} - which discovery algorithm? (-> RMDP)", data)
-    point_arms = [a.replace("-> RMDP", "-> MDP") for a in arms if a.endswith("-> RMDP")]
+    finish(fig, axes, out, "fig_discovery", f"{name} - which discovery algorithm? (-> IMDP)", data)
+    point_arms = [a.replace("-> IMDP", "-> MDP") for a in arms if a.endswith("-> IMDP")]
     every = list(arms) + [a for a in point_arms if a in set(runs["method"])]
     found = runs[runs["method"].isin(every) & runs["policy"].isin(pols)]
     by = found.groupby(["method", "policy"])
     text += [
-        "## Discovery: every algorithm -> RMDP (and -> MDP), pooled sizes and n",
+        "## Discovery: every algorithm -> IMDP (and -> MDP), pooled sizes and n",
         "",
         "![](fig_discovery.png)",
         "",
@@ -371,14 +371,14 @@ def main(grid_dir: Path):
             f"{name} - B1: the same models re-planned under {len(tasks)} new rewards ({', '.join(tasks)})",
             data,
         )
-        gap = transfer[transfer["method"].isin(["true graph -> RMDP", "flat RMDP"])]
+        gap = transfer[transfer["method"].isin(["true graph -> IMDP", "flat IMDP"])]
         gap = gap.pivot_table(
             index=["policy", "task", "n_rollouts", "knob", "size", "seed"],
             columns="method",
             values="norm_regret",
         ).dropna()
-        gain = (gap["flat RMDP"] - gap["true graph -> RMDP"]).rename("gain").reset_index()
-        cov = transfer[transfer["method"] == "true graph -> RMDP"].assign(
+        gain = (gap["flat IMDP"] - gap["true graph -> IMDP"]).rename("gain").reset_index()
+        cov = transfer[transfer["method"] == "true graph -> IMDP"].assign(
             only_factored=lambda f: f["cov_joint_1"] - f["cov_factor_1"]
         )
         cov = cov.groupby(["policy", "task"])[["only_factored", "cov_joint_1"]].mean()
@@ -391,7 +391,7 @@ def main(grid_dir: Path):
             "",
             md(pivot(transfer, "norm_regret", list(keep), [25, 100, 400])),
             "",
-            "Gain of true graph -> RMDP over flat RMDP (regret difference, mean) against the task's "
+            "Gain of true graph -> IMDP over flat IMDP (regret difference, mean) against the task's "
             "occupancy that only a factored model can estimate (cov_joint_1 - cov_factor_1, mean):",
             "",
             md(b1, "{:.3f}"),
@@ -440,7 +440,7 @@ def main(grid_dir: Path):
 
     # ---- C: understanding (the learned model against the true kernel) ----------------------------------
     point = ["true graph -> MDP", "BIC -> MDP", "flat MDP"]
-    interval = ["true graph -> RMDP", "BIC -> RMDP", "flat RMDP"]
+    interval = ["true graph -> IMDP", "BIC -> IMDP", "flat IMDP"]
     fig, axes = figure_grid(1, 3)
     unconf = runs[runs["policy"].isin(plain)]
     for ax, (col, arms, label) in zip(

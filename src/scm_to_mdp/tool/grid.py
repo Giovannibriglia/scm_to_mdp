@@ -12,7 +12,9 @@ A Grid names one problem and what to vary:
         methods=standard_methods(...),
     )
 
-experiments(grid) turns it into one Experiment (tool/sweep.py) per (knob, policy), each in its own
+sizes may also be a dict {knob: sizes}, when each knob has its own (e.g. Frozen Lake's maps for one and
+for two agents: the knob is the number of agents). experiments(grid) turns it into one Experiment
+(tool/sweep.py) per (knob, policy), each in its own
 folder <out_dir>/<knob_name>=<knob>/<policy key>/ with its own results.csv, so a stopped grid
 resumes setting by setting. The data of a setting are drawn by the behaviour policy (Env.behaviour:
 "uniform", "expert", "confounded"), and every row gets the logger's coverage and confounding bias.
@@ -68,7 +70,7 @@ class Policy:
 class Grid:
     name: str
     make_env: Callable[[Any, Any, int], Any]  # (size, knob, seed) -> Env; defined at module top level
-    sizes: list
+    sizes: list | dict  # a list, or {knob: list} when each knob has its own sizes
     knobs: list
     policies: list[Policy]
     n_rollouts: list[int]
@@ -89,6 +91,9 @@ class Grid:
     reward_transfer: bool = False  # also evaluate under the environment's alternative rewards (sweep.py)
     # dynamics shift (sweep.py): (size, knob, seed) -> {name: Env} with other dynamics, same observed states
     shifts: Callable[[Any, Any, int], dict] | None = None
+    # relative solve limit (tool/sweep.py): max(solve_floor_s, solve_factor x the oracle's work at rate gamma)
+    solve_factor: float | None = None
+    solve_floor_s: float = 60.0
 
 
 # ---- the pieces an Experiment needs (top-level, so that worker processes can receive them) ----------
@@ -106,6 +111,23 @@ def collect_with(policy: Policy, gamma: float, horizon: int, env, n_rollouts: in
     return env.hide(env.sample(n_rollouts, horizon, logger_table(policy, gamma, env)))
 
 
+def sizes_of(grid: Grid, knob) -> list:
+    """The sizes of one knob."""
+    if isinstance(grid.sizes, dict):
+        if knob not in grid.sizes:
+            raise ValueError(f"no sizes for knob {knob!r}: sizes has {list(grid.sizes)}")
+        return list(grid.sizes[knob])
+    return list(grid.sizes)
+
+
+def all_sizes(grid: Grid) -> list:
+    """Every size of the grid, each once, in order (the knobs' own orders, one after the other)."""
+    out = []
+    for knob in grid.knobs:
+        out += [s for s in sizes_of(grid, knob) if s not in out]
+    return out
+
+
 def settings(grid: Grid) -> list[tuple[Any, Policy]]:
     """Every valid (knob, policy), in the grid's order."""
     return [(k, p) for k in grid.knobs for p in grid.policies if grid.skip is None or not grid.skip(k, p)]
@@ -121,7 +143,7 @@ def experiments(grid: Grid) -> list[Experiment]:
             name=f"{grid.name}, {grid.knob_name}={knob}, {policy.label}",
             make_env=partial(env_at, grid.make_env, knob),
             collect=partial(collect_with, policy, grid.gamma, grid.horizon),
-            sizes=list(grid.sizes),
+            sizes=sizes_of(grid, knob),
             n_rollouts=list(grid.n_rollouts),
             seeds=list(grid.seeds),
             methods=grid.methods,
@@ -140,6 +162,8 @@ def experiments(grid: Grid) -> list[Experiment]:
             pictures_max_states=grid.pictures_max_states,
             reward_transfer=grid.reward_transfer,
             shifts=None if grid.shifts is None else partial(env_at, grid.shifts, knob),
+            solve_factor=grid.solve_factor,
+            solve_floor_s=grid.solve_floor_s,
         )
         for knob, policy in settings(grid)
     ]
@@ -152,7 +176,8 @@ def write_grid_file(grid: Grid) -> None:
     description = {
         "name": grid.name,
         "size_name": grid.size_name,
-        "sizes": [str(s) for s in grid.sizes],
+        "sizes": [str(s) for s in all_sizes(grid)],
+        "sizes_by_knob": {str(k): [str(s) for s in sizes_of(grid, k)] for k in grid.knobs},
         "knob_name": grid.knob_name,
         "knobs": [str(k) for k in grid.knobs],
         "policies": [p.label for p in grid.policies],

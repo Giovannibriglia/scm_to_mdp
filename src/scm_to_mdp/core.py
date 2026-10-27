@@ -190,3 +190,6 @@ class Solution:
     V: np.ndarray  # [S] the value the method promises (for a robust method: a lower bound)
     pi: np.ndarray  # [S] the action (for a stochastic policy: its most likely action)
     probs: np.ndarray | None = None  # [S, K] a stochastic policy over the data's action vectors
+    # value iteration (plain or robust): its sweeps and their mean time, for the relative solve limit
+    iterations: int | None = None
+    iteration_s: float | None = None

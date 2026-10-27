@@ -15,10 +15,12 @@ Every table is built from lower levels only, and every level is saved in <out_di
                            C_all_bound, unvisited_pairs) and confounding bias (bias_max, bias_mean),
                            V_star_obs, V_star and the size of the true model
   level 1  rollouts_needed_by_seed.csv   n* per (knob, policy, size, seed, method): the fewest
-                           rollouts from which the policy is >= 95% of V_star_obs (inf: never)
+                           rollouts (episodes) from which the policy is >= 95% of V_star_obs (inf:
+                           never), and t*, the transitions (samples) of that dataset
   level 2  cells.csv       per (knob, policy, size, n_rollouts, method) and metric: mean, standard
                            error, min, max and number of seeds (long format)
-           rollouts_needed.csv          median and quartiles of n* over seeds, share of seeds reached
+           rollouts_needed.csv          median and quartiles of n* and of t* (median_t, q25_t,
+                           q75_t) over seeds, share of seeds reached
            promise_held.csv per (knob, policy, size, method): attempted runs (every status but
                            "skipped"), finished runs ("runs", status ok), runs whose promise holds in
                            every state, and the share among the finished runs
@@ -31,7 +33,7 @@ Every table is built from lower levels only, and every level is saved in <out_di
                            event the promise relies on); conditional: the graph was chosen from the
                            same data, so the 1 - delta is conditional on that choice
            box_looseness.csv  per (knob, policy, size, n_rollouts), on 0/1 domains: the promise and
-                           the true value of true graph -> RMDP with the per-(s,a) product set minus
+                           the true value of true graph -> IMDP with the per-(s,a) product set minus
                            the same with the box, and the share of the box's conservatism (true -
                            promise) due to the box; mean over the seeds
            coverage.csv    per (knob, policy, size, n_rollouts): the data's coverage of the best
@@ -41,7 +43,9 @@ Every table is built from lower levels only, and every level is saved in <out_di
            method_rank.csv mean rank of every method's n* over the cells, and how often it is best
 figures/<name>.{pdf,png} with figure_data/<name>.csv (exactly the numbers drawn), tables.md, and a
 README.md that lists all of the above. Each setting also gets its own report (tool/report.py) in its
-folder: the figures over the size for every number of rollouts.
+folder: the figures over the size for every number of episodes. The figures put the sizes at their
+number of observed states and count data in transitions (episodes x horizon, less where episodes
+end early); the tables keep both.
 """
 
 import json
@@ -51,7 +55,7 @@ import numpy as np
 import pandas as pd
 
 from scm_to_mdp.plotting import grid_figures
-from scm_to_mdp.plotting.figures import rollouts_needed, summarize_rollouts
+from scm_to_mdp.plotting.figures import rollouts_needed, sample_grid, samples_label, summarize_rollouts
 from scm_to_mdp.plotting.style import method_styles
 from scm_to_mdp.tool.report import ROLE_ORDER, report
 from scm_to_mdp.tool.sweep import read_results
@@ -61,7 +65,7 @@ METRICS = ["optimal_share", "regret", "norm_regret", "gap", "safe", "violation_r
 METRICS += ["missing_share", "extra_per_variable", "shd", "sid", "discovery_s", "learning_s", "solve_s"]
 METRICS += [f"{m}_{w}" for m in ("tv", "kl", "contain") for w in ("data", "task", "uniform")]
 METRICS += ["width_seen", "width_unseen", "lcov_factor_1", "lcov_alt", "cert_gap"]
-BOX, PRODUCT = "true graph -> RMDP", "true graph -> RMDP (per-(s,a) product)"
+BOX, PRODUCT = "true graph -> IMDP", "true graph -> factored IMDP (per-(s,a) product)"
 VALID_SHARE = 0.95  # a method is "valid" in a cell when its promise held in at least this share of runs
 
 
@@ -127,16 +131,17 @@ def needed_by_seed(runs: pd.DataFrame, target: float) -> pd.DataFrame:
         n = rollouts_needed(g, target)
         if len(n):  # a setting with nothing to evaluate (e.g. every size too large) has no n*
             parts.append(n.assign(knob=knob, policy=policy))
-    columns = SETTING + ["size", "n_states", "seed", "method", "n_star"]
+    columns = SETTING + ["size", "n_states", "n_observed_states", "seed", "method", "n_star", "t_star"]
     out = pd.concat(parts, ignore_index=True) if parts else pd.DataFrame(columns=columns)
-    return out[columns].astype({"n_star": float})
+    return out[columns].astype({"n_star": float, "t_star": float})
 
 
 def needed_summary(by_seed: pd.DataFrame) -> pd.DataFrame:
     parts = [
         summarize_rollouts(g).assign(knob=k, policy=p) for (k, p), g in by_seed.groupby(SETTING, sort=False)
     ]
-    columns = SETTING + ["size", "n_states", "method", "median", "q25", "q75", "reached"]
+    columns = SETTING + ["size", "n_states", "n_observed_states", "method", "median", "q25", "q75", "reached"]
+    columns += ["median_t", "q25_t", "q75_t"]
     return pd.concat(parts, ignore_index=True)[columns] if parts else pd.DataFrame(columns=columns)
 
 
@@ -262,10 +267,11 @@ def method_rank(summary: pd.DataFrame, best: pd.DataFrame) -> pd.DataFrame:
 # The report
 # ==========================================================================================
 def _fmt_n(r) -> str:
-    if not np.isfinite(r["median"]):
+    """The transitions needed: median [quartiles] over seeds."""
+    if not np.isfinite(r["median_t"]):
         return ">"
-    hi = "inf" if not np.isfinite(r["q75"]) else f"{r['q75']:.0f}"
-    return f"{r['median']:.0f} [{r['q25']:.0f}, {hi}]"
+    hi = "inf" if not np.isfinite(r["q75_t"]) else samples_label(r["q75_t"])
+    return f"{samples_label(r['median_t'])} [{samples_label(r['q25_t'])}, {hi}]"
 
 
 def report_grid(out_dir, target: float = 0.95, delta: float | None = 0.05, settings_too: bool = True) -> dict:
@@ -296,7 +302,7 @@ def report_grid(out_dir, target: float = 0.95, delta: float | None = 0.05, setti
         m for m in graph_methods if first.at[m, "role"] not in ("oracle", "reference", "control")
     ]
     guaranteed = [m for m in methods if bool(first.at[m, "guarantee"])]
-    n_grid = grid["n_rollouts"]
+    n_grid = sample_grid(runs)  # the transitions of every number of episodes (median over the runs)
     name = grid["name"]
 
     # ---- the tables, level by level ------------------------------------------------------------
@@ -367,13 +373,15 @@ def report_grid(out_dir, target: float = 0.95, delta: float | None = 0.05, setti
         done = runs[(runs["status"] == "ok") & runs["method"].isin(learned_graph)]
         curves = done.groupby(SETTING + ["n_rollouts", "method"])[["missing_share", "extra_per_variable"]]
         curves = curves.mean().reset_index()
+        samples = pd.to_numeric(runs["transitions"], errors="coerce").groupby(runs["n_rollouts"]).mean()
+        curves["transitions"] = curves["n_rollouts"].map(samples)
         for column, ylabel in [
             ("missing_share", "share of true edges missed"),
             ("extra_per_variable", "extra edges per variable"),
         ]:
             figure(
                 f"discovery_{column}",
-                curves[SETTING + ["n_rollouts", "method", column]],
+                curves[SETTING + ["n_rollouts", "transitions", "method", column]],
                 lambda stem, c=column, y=ylabel: grid_figures.discovery_errors(
                     curves, knobs, grid["knob_name"], policies, learned_graph, styles, c, y, name, stem
                 ),
@@ -389,7 +397,9 @@ def report_grid(out_dir, target: float = 0.95, delta: float | None = 0.05, setti
         )
     if guaranteed and "bias_mean" in runs:
         last = runs[
-            (runs["n_rollouts"] == max(n_grid)) & (runs["status"] == "ok") & runs["method"].isin(guaranteed)
+            (runs["n_rollouts"] == max(grid["n_rollouts"]))
+            & (runs["status"] == "ok")
+            & runs["method"].isin(guaranteed)
         ]
         conf = last[SETTING + ["size", "seed", "method", "bias_mean", "gap"]]
         figure(
@@ -403,14 +413,15 @@ def report_grid(out_dir, target: float = 0.95, delta: float | None = 0.05, setti
         f"# {name}: summary of the grid",
         "",
         f"{grid['size_name']} = {', '.join(sizes)}; {grid['knob_name']} = {', '.join(knobs)}; policies: "
-        f"{'; '.join(policies)}; rollouts {n_grid}; seeds {grid['seeds']}; horizon {grid['horizon']}; "
+        f"{'; '.join(policies)}; episodes {grid['n_rollouts']} (transitions "
+        f"{', '.join(samples_label(t) for t in n_grid)}); seeds {grid['seeds']}; horizon {grid['horizon']}; "
         f"gamma {grid['gamma']}.",
         "",
         f"Target: V^pi >= {target:.0%} of V*_obs (the best policy over the observed state) at that number "
-        "of rollouts and every larger one.",
+        "of episodes and every larger one.",
         "",
     ]
-    lines += ["## Rollouts needed (median [quartiles] over seeds; '>' = not reached)", ""]
+    lines += ["## Transitions needed (median [quartiles] over seeds; '>' = not reached)", ""]
     for policy in policies:
         for knob in knobs:
             cell = summary[(summary["policy"] == policy) & (summary["knob"] == knob)]
@@ -418,6 +429,11 @@ def report_grid(out_dir, target: float = 0.95, delta: float | None = 0.05, setti
                 continue
             t = cell.assign(v=cell.apply(_fmt_n, axis=1)).pivot(index="size", columns="method", values="v")
             t = t.reindex(index=[s for s in sizes if s in t.index], columns=[m for m in methods if m in t])
+            states = cell.groupby("size")["n_observed_states"].median()
+            t.index = [
+                f"{s} ({int(states[s]):,} states)" if np.isfinite(states.get(s, np.nan)) else s
+                for s in t.index
+            ]
             t.index.name = grid["size_name"]
             lines += [f"### {policy}, {grid['knob_name']} = {knob}", "```", t.to_string(), "```", ""]
     held_all = heat.copy()
@@ -432,12 +448,12 @@ def report_grid(out_dir, target: float = 0.95, delta: float | None = 0.05, setti
     b = best.pivot_table(index=SETTING, columns="size", values="best_valid_method", aggfunc="first")
     b = b.reindex(columns=[s for s in sizes if s in b.columns])
     lines += [
-        f"## Best valid method (promise held in >= {VALID_SHARE:.0%} of the cell's runs; fewest rollouts)",
+        f"## Best valid method (promise held in >= {VALID_SHARE:.0%} of the cell's runs; fewest episodes)",
         "```",
         b.to_string(),
         "```",
         "",
-        "## Mean rank of the rollouts needed (1 = fewest)",
+        "## Mean rank of the episodes needed (1 = fewest)",
         "```",
         rank.to_string(index=False),
         "```",

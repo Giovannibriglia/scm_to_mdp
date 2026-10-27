@@ -18,12 +18,15 @@ A Method names one choice per step. The learner is one of:
                  (Laroche et al.) or with structure learning (Simao & Spaan; baselines/spibb.py)
     "focus"      baseline: FOCUS's CI-test structure + a MOPO-penalised factored model (discrete
                  version, baselines/focus.py) -> an exact MDP with a penalised reward
+    "oracle"     not a learner: the true observed MDP (baselines/true_model.py), exact (L == U, for
+                 "vi") or within +-tol (for "robust_vi"); the sweep gives it the true kernel
 
 and the solver one of (which ones fit which learner: SOLVERS_FOR):
 
     "box_robust_vi"     relax the factored set to its box (Schnitzer et al.'s IA), then robust VI
     "vertex_robust_vi"  exact robust VI over the factored set (0/1 state variables only)
-    "robust_vi"         robust VI on an interval MDP
+    "robust_vi"         robust VI on an interval MDP (solver_options nature="cooperative": the optimistic
+                        mirror, an upper bound and no guarantee; the default "adversarial" is the promise)
     "vi"                value iteration on an exact MDP
     "fqi"               DiFaRL's decomposed fitted Q iteration (uses the data again)
     "greedy_q"          train the Q-network on the data (step "training"), then its greedy policy
@@ -45,7 +48,7 @@ from typing import Any
 
 import numpy as np
 
-from scm_to_mdp.baselines import difarl, flat_mdp, flat_rmdp, focus, offline_q, spibb
+from scm_to_mdp.baselines import difarl, flat_mdp, flat_rmdp, focus, offline_q, spibb, true_model
 from scm_to_mdp.compilation import product_bounds
 from scm_to_mdp.core import ActionGroups, Dataset, FactorBounds, Graph, IntervalMDP, Reward, Solution
 from scm_to_mdp.scm_learning import nbn_intervals, nbn_point
@@ -63,11 +66,12 @@ LEARNERS = (
     "spibb",
     "sl_spibb",
     "focus",
+    "oracle",
 )
-BASELINES = LEARNERS[1:]
+BASELINES = LEARNERS[1:-1]  # every learner but ours ("causal") and the oracle
 OFFLINE_Q = ("offline_dqn", "offline_cql")
 POINT_ALPHA = 1.0  # X -> MDP: Laplace (Dirichlet(1) posterior mean; scm_learning/nbn_point.py)
-WIDEN_K = 2  # BIC -> RMDP (hull / padded): inputs added to every family (scm_learning/nbn_intervals.py)
+WIDEN_K = 2  # BIC -> IMDP (hull / padded): inputs added to every family (scm_learning/nbn_intervals.py)
 CQL_ALPHA = 0.1  # offline CQL's penalty weight (baselines/offline_q.py says how it was chosen)
 GIVEN_GRAPHS = ("oracle", "logger_markov", "random_matched", "plus_one")  # graphs given, not discovered
 DISCOVERY = ("bic", "pcmci+", "ges", "dynotears") + GIVEN_GRAPHS
@@ -82,10 +86,32 @@ SOLVERS_FOR = {
     "spibb": ("spibb",),
     "sl_spibb": ("spibb",),
     "focus": ("vi",),
+    "oracle": ("vi", "robust_vi"),
 }
 ROBUST_SOLVERS = ("box_robust_vi", "vertex_robust_vi", "robust_vi")
 STEPS = ("discovery", "selection", "learning", "relax", "training", "solve")  # every step a method can have
 STOPPED = ("timeout", "memout")
+# Method names before 2026-10-26: the robust arms are interval MDPs, so "-> RMDP" became "-> IMDP" (and the
+# per-(s,a) product reference a factored IMDP). sweep.read_results renames older rows on reading.
+RENAMED = {
+    "flat RMDP": "flat IMDP",
+    "true graph -> RMDP (per-(s,a) product)": "true graph -> factored IMDP (per-(s,a) product)",
+    **{
+        f"{x} -> RMDP{tail}": f"{x} -> IMDP{tail}"
+        for x in (
+            "BIC",
+            "PCMCI+",
+            "GES",
+            "DYNOTEARS",
+            "true graph",
+            "oracle",
+            "logger-Markov graph",
+            "random matched graph",
+            "true graph + 1",
+        )  # fmt: skip
+        for tail in ("", " (hull)", " (padded)")
+    },
+}
 
 
 def discovery_function(name: str):
@@ -166,15 +192,22 @@ class Method:
                 "flat_mdp": flat_mdp.learn,
                 "spibb": spibb.flat_model,
                 "sl_spibb": spibb.sl_model,
+                "oracle": true_model.model,
             }.get(self.learner)
             if self.learner == "focus":
                 learn_fn = focus.penalised_mdp
                 _check_options(learn_fn, self.learning_options, 2, "learning (FOCUS)")
                 learn_fn = None
             if learn_fn is not None:
-                _check_options(learn_fn, self.learning_options, 1, "learning")
+                n_inputs = 2 if self.learner == "oracle" else 1
+                _check_options(learn_fn, self.learning_options, n_inputs, "learning")
             elif self.learning_options and self.learner != "focus":
                 raise ValueError(f"{self.learner} takes no learning options (its options are solver options)")
+            exact = self.learning_options.get("tol", 0) == 0
+            if self.learner == "oracle" and (self.solver == "vi") != exact:
+                raise ValueError(
+                    "the oracle is solved with 'vi' when tol = 0 and with 'robust_vi' when tol > 0"
+                )
         solver_fn = {
             "box_robust_vi": robust_vi.solve,
             "vertex_robust_vi": vertex_robust_vi.solve,
@@ -196,7 +229,9 @@ class Method:
     def role(self) -> str:
         """ "baseline" (no causal structure learned), "reference" (given the true graph: true graph ->
         RMDP, true graph -> MDP), "control" (given a wrong graph of a known kind: discovery/controls.py)
-        or "ours"."""
+        or "ours"; "oracle": the true observed MDP given to the solver."""
+        if self.learner == "oracle":
+            return "oracle"
         if self.learner in BASELINES:
             return "baseline"
         if self.discovery == "oracle":
@@ -207,7 +242,12 @@ class Method:
     def guarantee(self) -> bool:
         """Whether the method's promise is meant as a lower bound on the true value (for "causal":
         when the selected graph contains the true parents)."""
-        return self.solver in ROBUST_SOLVERS and self.learner in ("causal", "flat_rmdp")
+        adversarial = self.solver_options.get("nature", "adversarial") == "adversarial"  # robust_vi
+        return (
+            self.solver in ROBUST_SOLVERS
+            and self.learner in ("causal", "flat_rmdp", "oracle")
+            and adversarial
+        )
 
     def describe(self) -> dict:
         return {
@@ -296,10 +336,17 @@ def causal_learner(method: Method):
     return nbn_point if method.solver == "vi" else nbn_intervals
 
 
-def learning_steps(data: Dataset, method: Method, true_parents: dict | None = None, seed: int = 0) -> list:
+def learning_steps(
+    data: Dataset, method: Method, true_parents: dict | None = None, seed: int = 0, kernel=None
+) -> list:
     """The steps of method's learner as (name, function of the previous output). seed: the run's seed,
-    for the learners that draw random numbers (FOCUS's bootstrap ensemble) unless an option sets it."""
+    for the learners that draw random numbers (FOCUS's bootstrap ensemble) unless an option sets it.
+    kernel: the oracle's true observed kernel on the data's action vectors [S, K, S] (tool/sweep.py)."""
     m = method
+    if m.learner == "oracle":
+        if kernel is None:
+            raise ValueError("the oracle needs the true observed kernel (tool/sweep.py gives it)")
+        return [("learning", lambda d: true_model.model(kernel, d, **m.learning_options))]
     if m.learner == "causal":
         if m.discovery in GIVEN_GRAPHS:
             if true_parents is None:
@@ -386,15 +433,17 @@ def learn(
     true_parents: dict | None = None,
     seed: int = 0,
     shared: dict | None = None,
+    kernel=None,
 ) -> Result:
     """Learn a model from the data. true_parents: the graph of a given-graph discovery (the oracle's true
     parents, or a control graph); seed (the run's
     seed) only by learners that draw random numbers. shared: a dict kept across the methods of one
     dataset (tool/sweep.py): the first causal method with a given discovery and selection runs them and
     stores the graph (or how they stopped) and their step records; the others reuse it, so e.g.
-    BIC -> RMDP, BIC -> RMDP (hull) and BIC -> MDP run BIC once and report the same discovery time."""
+    BIC -> IMDP, BIC -> IMDP (hull) and BIC -> MDP run BIC once and report the same discovery time.
+    kernel: the oracle's true observed kernel (learning_steps)."""
     result, x = Result(method), data
-    steps = learning_steps(data, method, true_parents, seed)
+    steps = learning_steps(data, method, true_parents, seed, kernel)
     if not steps:
         return result  # model-free: nothing before the solver
     key = _shared_key(method) if shared is not None else None
@@ -454,6 +503,8 @@ def solve(result: Result, data: Dataset, gamma: float, limits: Limits | None = N
         if isinstance(x, offline_q.QTable):
             result.model = x  # what was learned: the Q-table (kept and saved)
     result.solution = x
+    if getattr(x, "iterations", None) is not None:  # value iteration: its sweeps and their mean time
+        result.info |= {"solve_iterations": x.iterations, "solve_iteration_s": x.iteration_s}
     return result
 
 
@@ -493,6 +544,15 @@ def replan(
     return solve(out, data, gamma, limits, seed)
 
 
+def oracle_methods(tol: float = true_model.TOL) -> dict[str, Method]:
+    """The oracle of every grid: the true observed MDP, exact (-> MDP, value iteration) and within
+    +-tol (-> RMDP, robust value iteration; baselines/true_model.py)."""
+    return {
+        "oracle -> IMDP": Method("oracle", "robust_vi", learning_options={"tol": tol}),
+        "oracle -> MDP": Method("oracle", "vi"),
+    }
+
+
 def standard_methods(
     max_parents: int | None = 3,
     delta: float = 0.05,
@@ -501,35 +561,35 @@ def standard_methods(
     state_parents: int = 3,
 ) -> dict[str, Method]:
     """The methods of experiment 1 (used by experiments/exp1/*_complete.py):
-    ours (BIC / PCMCI+ / GES / DYNOTEARS -> RMDP; BIC -> RMDP with hull or padded families; the same
+    ours (BIC / PCMCI+ / GES / DYNOTEARS -> IMDP; BIC -> IMDP with hull or padded families; the same
     four discoveries -> MDP, point estimates and value iteration, with true graph -> MDP), the references
-    (true graph -> RMDP with the box relaxation of our robust arms; with `exact`, for 0/1 state
-    variables, also true graph -> RMDP (per-(s,a) product): robust VI over the products of the factor
+    (true graph -> IMDP with the box relaxation of our robust arms; with `exact`, for 0/1 state
+    variables, also true graph -> factored IMDP (per-(s,a) product): robust VI over the products of the factor
     intervals, Schnitzer et al.'s exact solver, which is exact per (s, a) but still lets nature choose
     every (s, a) independently; the pair measures what the box costs), the controls (given wrong
     graphs of a known kind, discovery/controls.py: logger-Markov graph, random matched graph, true
-    graph + 1, each -> RMDP with the box) and the baselines (flat RMDP, flat MDP, DiFaRL, flat SPIBB,
+    graph + 1, each -> IMDP with the box) and the baselines (flat IMDP, flat MDP, DiFaRL, flat SPIBB,
     SL-SPIBB with candidate parent sets of `state_parents` state variables, FOCUS; with `deep`, also
     offline DQN and offline CQL). Every baseline uses the defaults of its module in baselines/."""
     causal = {"selection": "bic_best", "learning_options": {"delta": delta}}
     oracle = {"discovery": "oracle", "selection": "given", "learning_options": {"delta": delta}}
     methods = {
-        "BIC -> RMDP": Method(
+        "BIC -> IMDP": Method(
             "causal",
             "box_robust_vi",
             discovery="bic",
             discovery_options={"max_parents": max_parents},
             **causal,
         ),
-        "PCMCI+ -> RMDP": Method(
+        "PCMCI+ -> IMDP": Method(
             "causal", "box_robust_vi", discovery="pcmci+", discovery_options={"alpha": 0.01}, **causal
         ),
-        "GES -> RMDP": Method("causal", "box_robust_vi", discovery="ges", **causal),
-        "DYNOTEARS -> RMDP": Method("causal", "box_robust_vi", discovery="dynotears", **causal),
+        "GES -> IMDP": Method("causal", "box_robust_vi", discovery="ges", **causal),
+        "DYNOTEARS -> IMDP": Method("causal", "box_robust_vi", discovery="dynotears", **causal),
         # BIC's graph, with each family widened by the WIDEN_K inputs that BIC ranks next
         # (scm_learning/nbn_intervals.py): the hull over the families, or one padded family
         **{
-            f"BIC -> RMDP ({label})": Method(
+            f"BIC -> IMDP ({label})": Method(
                 "causal",
                 "box_robust_vi",
                 discovery="bic",
@@ -541,9 +601,13 @@ def standard_methods(
         },
         # the references: the true graph given, with the exact product set (Schnitzer et al.'s exact
         # solver, 0/1 variables; else the box relaxation, as our arms) or with point estimates and VI
-        "true graph -> RMDP": Method("causal", "box_robust_vi", **oracle),
+        "true graph -> IMDP": Method("causal", "box_robust_vi", **oracle),
         **(
-            {"true graph -> RMDP (per-(s,a) product)": Method("causal", "vertex_robust_vi", **oracle)}
+            {
+                "true graph -> factored IMDP (per-(s,a) product)": Method(
+                    "causal", "vertex_robust_vi", **oracle
+                )
+            }
             if exact
             else {}
         ),
@@ -551,9 +615,9 @@ def standard_methods(
         **{
             label: Method("causal", "box_robust_vi", **(oracle | {"discovery": control}))
             for label, control in (
-                ("logger-Markov graph -> RMDP", "logger_markov"),
-                ("random matched graph -> RMDP", "random_matched"),
-                ("true graph + 1 -> RMDP", "plus_one"),
+                ("logger-Markov graph -> IMDP", "logger_markov"),
+                ("random matched graph -> IMDP", "random_matched"),
+                ("true graph + 1 -> IMDP", "plus_one"),
             )
         },
         # certainty equivalence: the same discovery and selection, point estimates (nbn_point,
@@ -587,7 +651,7 @@ def standard_methods(
         "true graph -> MDP": Method(
             "causal", "vi", discovery="oracle", selection="given", learning_options={"alpha": POINT_ALPHA}
         ),  # fmt: skip
-        "flat RMDP": Method("flat_rmdp", "robust_vi", learning_options={"delta": delta}),
+        "flat IMDP": Method("flat_rmdp", "robust_vi", learning_options={"delta": delta}),
         "flat MDP": Method("flat_mdp", "vi"),
         "DiFaRL": Method(
             "difarl", "fqi", discovery_options={"p_threshold": 0.005}, solver_options={"max_iter": 30}

@@ -1,14 +1,16 @@
-"""Chemistry, uniform logger: every causal discovery -> RMDP method against flat RMDP and SPIBB (S2-S9).
+"""Chemistry, uniform logger: every causal discovery -> IMDP method against flat IMDP and SPIBB (S2-S9).
 
-    size        objects: 4, 5, 6, 7 (3 colours: 81 ... 2187 observed states)
+    size        objects: 2 ... 7 (3 colours: 9 ... 2,187 observed states; 8 objects needs ~25 GB for the
+                dense true model)
     knob        density of the reaction graph: 1.0, at most 2 parents (experiment 1 also runs 0.0 and
                 0.4); the seed also draws the graph and the target colours
     logger      uniform (every action tried in every visited state: no positivity problem)
-    rollouts    50, 250, 750 (horizon 20, gamma 0.9), 5 seeds (protocol.py)
-    methods     BIC / PCMCI+ / GES / DYNOTEARS -> RMDP with the plain discovered graph (no widening of
-                the families: no "support", "hull" or "pad"), flat RMDP, flat SPIBB and SL-SPIBB (safe
+    episodes    N_EPISODES of HORIZON = 256 steps (gamma 0.9), 5 seeds; solving limited to 3 x the oracle
+                (protocol.py)
+    methods     BIC / PCMCI+ / GES / DYNOTEARS -> IMDP with the plain discovered graph (no widening of
+                the families: no "support", "hull" or "pad"), flat IMDP, flat SPIBB and SL-SPIBB (safe
                 policy improvement: a guarantee over the behaviour policy, not a value bound; SL-SPIBB
-                with candidate parent sets of 3 state variables), and true graph -> RMDP as the
+                with candidate parent sets of 3 state variables), and true graph -> IMDP as the
                 reference (protocol.py, RMDP_METHODS)
     evaluation  only in the MDP the data come from (no reward transfer, no dynamics shift)
     hidden      as in experiment 1: the catalyst drives the reaction of one object (w.p. 0.95 with it, 0.3
@@ -26,20 +28,29 @@ import dataclasses
 import warnings
 from pathlib import Path
 
-from protocol import DELTA, N_ROLLOUTS, POLICIES, RMDP_METHODS, SEEDS, TRAIN_HIDDEN, methods
+from protocol import (
+    DELTA,
+    HORIZON,
+    LIMITS,
+    POLICIES,
+    RMDP_METHODS,
+    SAVE_MODELS,
+    SEEDS,
+    SOLVE_FACTOR,
+    SOLVE_FLOOR_S,
+    TRAIN_HIDDEN,
+    methods,
+)
 
 from scm_to_mdp.envs import Chemistry
-from scm_to_mdp.tool import Grid, Limits, report_grid, run_folder, run_grid
+from scm_to_mdp.tool import Grid, report_grid, run_folder, run_grid
 
 warnings.filterwarnings("ignore", category=FutureWarning)
 
-SIZES = [4, 5, 6, 7]
+SIZES = [2, 3, 4, 5, 6, 7]
+N_EPISODES = [1, 4, 16, 64, 256, 1024]  # of HORIZON steps: 256 ... 262k transitions
 DENSITY = "1.0"
-HORIZON, GAMMA = 20, 0.9
-LIMITS = Limits(
-    mem_gb=5.0,  # peak without BIC 3.7 GB (flat RMDP learning, 7 objects, 750 rollouts)
-    timeout_s={"discovery": 60.0, "selection": 60.0, "learning": 120.0, "training": 600.0, "solve": 600.0},
-)
+GAMMA = 0.9
 OUT_DIR = Path(__file__).resolve().parents[2] / "results" / "trials" / "chemistry_uniform_rmdp"
 METHODS = methods(RMDP_METHODS, state_parents=3)
 
@@ -58,12 +69,15 @@ GRID = Grid(
     knobs=[DENSITY],
     knob_name="density",
     policies=POLICIES,
-    n_rollouts=N_ROLLOUTS,
+    n_rollouts=N_EPISODES,  # one rollout = one episode of HORIZON steps
     seeds=SEEDS,
     horizon=HORIZON,
     gamma=GAMMA,
     methods=METHODS,
     limits=LIMITS,
+    solve_factor=SOLVE_FACTOR,
+    solve_floor_s=SOLVE_FLOOR_S,
+    save_models=SAVE_MODELS,
     workers="auto",
     out_dir=OUT_DIR,
     reward_transfer=False,
