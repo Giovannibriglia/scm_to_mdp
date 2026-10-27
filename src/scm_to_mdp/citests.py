@@ -11,7 +11,10 @@ action groups (DiFaRL). Two remedies:
                             early by Besag & Clifford's sequential rule (Biometrika 78(2), 1991): after
                             `enough` permutations at least as extreme as the data, p = enough / done, so
                             a clearly independent pair costs a few dozen permutations, a dependent one
-                            at most n_perm (smallest p-value 1 / (n_perm + 1))
+                            at most n_perm (smallest p-value 1 / (n_perm + 1)). The same test as the
+                            local permutation test of Tigramite's CMIsymb (whose statistic, the plug-in
+                            conditional mutual information, is G^2 / 2n): checked against it in
+                            tests/discovery/test_citests.py
     enough_rows             whether the chi-square p-value can be trusted: the usual rule of thumb
                             that the expected count of a cell should be at least about 5 (Cochran,
                             Biometrics 10(4), 1954), applied to the mean count over the cells of the
@@ -23,6 +26,8 @@ action groups (DiFaRL). Two remedies:
 
 import numpy as np
 
+N_PERM = 1999  # permutations of a test that does not stop early (smallest p-value 1 / 2000)
+SHUFFLES = ("fast", "lexsort")  # two ways to shuffle within the strata: the same permutations
 ROWS_PER_CELL = 10  # Cochran's rule of thumb is 5; across many strata we measured 8% false rejections
 # at alpha = 1% with 5.6 rows per cell (3 x 3 tables), and 1% at 22
 
@@ -62,36 +67,58 @@ def enough_rows(n_rows: int, cells: int, rows_per_cell: float = ROWS_PER_CELL) -
 
 
 def g2_permutation_pvalue(
-    x: np.ndarray, y: np.ndarray, strata: np.ndarray, n_perm: int = 1999, enough: int = 10, seed: int = 0
+    x: np.ndarray,
+    y: np.ndarray,
+    strata: np.ndarray,
+    n_perm: int = N_PERM,
+    enough: int = 10,
+    seed: int = 0,
+    shuffle: str = "fast",
 ) -> float:
     """p-value of x independent of y given the strata, from permutations of y within each stratum (see
-    the module docstring). 1.0 when no stratum has two different values of both x and y."""
+    the module docstring). 1.0 when no stratum has two different values of both x and y.
+
+    The rows are put in stratum order once; a permutation then sorts them by (stratum, random noise),
+    which keeps every stratum in place and shuffles the rows inside it uniformly. shuffle "fast" sorts
+    the floats stratum + noise with one argsort; "lexsort" sorts the pairs (np.lexsort, ~4x slower on
+    100k rows): with the same noise both give the same order, so the same p-value (the reference)."""
+    if shuffle not in SHUFFLES:
+        raise ValueError(f"shuffle must be one of {SHUFFLES}, not {shuffle!r}")
     _, z = np.unique(strata, return_inverse=True)
     _, x = np.unique(x, return_inverse=True)
     _, y = np.unique(y, return_inverse=True)
     cx, cy, nz = int(x.max()) + 1, int(y.max()) + 1, int(z.max()) + 1
+    by_stratum = np.argsort(z, kind="stable")
+    z, x, y = z[by_stratum], x[by_stratum], y[by_stratum]
+    cell = (z * cx + x) * cy  # each row's (stratum, x) part of its cell in the stratified tables
 
     def statistic(y_codes):
-        table = np.bincount((z * cx + x) * cy + y_codes, minlength=nz * cx * cy).reshape(nz, cx, cy)
+        table = np.bincount(cell + y_codes, minlength=nz * cx * cy).reshape(nz, cx, cy)
         return _g2(table.astype(float))
 
     observed = statistic(y)
     if observed <= 1e-12:
         return 1.0
     rng = np.random.default_rng(seed)
-    by_stratum = np.argsort(z, kind="stable")  # rows grouped by stratum
+    keys = z.astype(float)
     extreme = 0
     for done in range(1, n_perm + 1):
-        order = by_stratum[np.lexsort((rng.random(len(z)), z[by_stratum]))]  # shuffled within strata
-        shuffled = np.empty_like(y)
-        shuffled[by_stratum] = y[order]
-        extreme += statistic(shuffled) >= observed - 1e-9
+        noise = rng.random(len(z))  # in [0, 1): stratum + noise never passes the next stratum
+        order = np.argsort(keys + noise) if shuffle == "fast" else np.lexsort((noise, z))
+        extreme += statistic(y[order]) >= observed - 1e-9
         if extreme >= enough:  # sequential stop: clearly not significant
             return extreme / done
     return (extreme + 1) / (n_perm + 1)
 
 
-def g2_pvalue(x: np.ndarray, y: np.ndarray, strata: np.ndarray, n_perm: int = 1999, seed: int = 0) -> float:
+def g2_pvalue(
+    x: np.ndarray,
+    y: np.ndarray,
+    strata: np.ndarray,
+    n_perm: int = N_PERM,
+    seed: int = 0,
+    shuffle: str = "fast",
+) -> float:
     """p-value of x independent of y given the strata: the chi-square p-value of G^2 where it is reliable
     (enough_rows), the permutation p-value elsewhere (sparse strata). 1.0 without degrees of freedom."""
     from scipy.stats import chi2
@@ -101,4 +128,4 @@ def g2_pvalue(x: np.ndarray, y: np.ndarray, strata: np.ndarray, n_perm: int = 19
         return 1.0
     if enough_rows(len(x), cells):
         return float(chi2.sf(g, dof))
-    return g2_permutation_pvalue(x, y, strata, n_perm=n_perm, seed=seed)
+    return g2_permutation_pvalue(x, y, strata, n_perm=n_perm, seed=seed, shuffle=shuffle)

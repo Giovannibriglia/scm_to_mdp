@@ -1,9 +1,20 @@
 """PCMCI+ (Runge, UAI 2020, https://arxiv.org/abs/2003.03685) with Tigramite (step S2).
 
 Each episode is one time series over the slice-t columns (m*, a*); the last row of an episode holds
-the final state and missing actions. Settings: G^2 test (on sparse tables, fewer than 10 rows per cell,
-the p-value comes from permutations within the strata: the chi-square one is unreliable there,
-citests.py), tau_max = 1. Link assumptions: only the time
+the final state and missing actions. Settings: tau_max = 1 and one of four conditional independence
+tests (ci_test):
+
+    ours_fast   (default) G^2 with the chi-square p-value on dense tables and the permutation p-value
+                on sparse ones, fewer than 10 rows per cell (citests.py: the chi-square p-value is
+                unreliable there); permutations by the fast shuffle
+    ours        the same test with the reference shuffle (np.lexsort): the same p-values, ~4x slower
+                on 100k rows
+    cmisymb     Tigramite's CMIsymb: conditional mutual information (G^2 / 2n) with its local
+                permutation test on every table. Needs numba; quadratic in the rows (small data only)
+    gsquared    Tigramite's Gsquared: G^2 with the chi-square p-value on every table (what PCMCI+ does
+                out of the box; anti-conservative on sparse tables)
+
+Link assumptions: only the time
 order. Every variable at t may depend on anything at t-1; within a step, a state may cause the action
 (the behaviour policy reads the state), an action never causes a state of the same step, and two state
 variables may be linked either way (a same-step edge: in the 2-slice model, x' -> y'). The output is a
@@ -16,10 +27,11 @@ from tigramite.data_processing import DataFrame
 from tigramite.independence_tests.gsquared import Gsquared
 from tigramite.pcmci import PCMCI
 
-from scm_to_mdp.citests import enough_rows, g2_permutation_pvalue
+from scm_to_mdp.citests import N_PERM, enough_rows, g2_permutation_pvalue
 from scm_to_mdp.core import NEXT_MARK, Candidates, Dataset
 
 MISSING = -99.0
+CI_TESTS = ("ours_fast", "ours", "cmisymb", "gsquared")
 
 
 class FastGsquared(Gsquared):
@@ -28,7 +40,12 @@ class FastGsquared(Gsquared):
     (Gsquared.get_dependence_measure), but Tigramite loops in Python over every cell of the
     conditioning variables' joint table, empty cells included, whose number grows exponentially with
     the conditioning set; here only the observed strata are tabulated, with one bincount. A test
-    with several X or Y variables goes to Tigramite's code."""
+    with several X or Y variables goes to Tigramite's code. shuffle, n_perm: those of the permutation
+    p-value (citests.g2_permutation_pvalue)."""
+
+    def __init__(self, shuffle: str = "fast", n_perm: int = N_PERM, **kwargs):
+        super().__init__(**kwargs)
+        self.shuffle, self.n_perm = shuffle, n_perm
 
     def get_dependence_measure(self, array, xyz, data_type=None):
         if (xyz == 0).sum() != 1 or (xyz == 1).sum() != 1 or self.n_symbs is not None:
@@ -53,7 +70,8 @@ class FastGsquared(Gsquared):
         self._temp_dof = max(dof, 1)
         cells = int(((cy - zero_rows) * (cx - zero_cols)).sum())  # the cells of the tables used
         if not enough_rows(len(x), cells):  # sparse tables: the chi-square p-value is unreliable,
-            self._p_value = g2_permutation_pvalue(x, y, z)  # use the permutation one (citests.py)
+            # use the permutation one (citests.py)
+            self._p_value = g2_permutation_pvalue(x, y, z, n_perm=self.n_perm, shuffle=self.shuffle)
         return gsquare
 
     def get_analytic_significance(self, value, T, dim, xyz):
@@ -121,11 +139,32 @@ def mixed_graph(graph, dataset: Dataset):
     return directed, undirected
 
 
-def fit(dataset: Dataset, alpha: float = 0.01) -> Candidates:
+def ci_test(name: str, n_perm: int = N_PERM):
+    """The conditional independence test `name` (CI_TESTS, see the module docstring)."""
+    if name in ("ours_fast", "ours"):
+        return FastGsquared(
+            significance="analytic", shuffle="fast" if name == "ours_fast" else "lexsort", n_perm=n_perm
+        )
+    if name == "gsquared":
+        return Gsquared(significance="analytic")
+    if name == "cmisymb":
+        try:
+            from tigramite.independence_tests.cmisymb import CMIsymb
+        except ImportError as err:
+            raise ImportError("ci_test='cmisymb' needs numba (Tigramite's CMIsymb imports it)") from err
+        return CMIsymb(significance="shuffle_test", sig_samples=n_perm)
+    raise ValueError(f"ci_test must be one of {CI_TESTS}, not {name!r}")
+
+
+def fit(
+    dataset: Dataset, alpha: float = 0.01, ci_test_name: str = "ours_fast", n_perm: int = N_PERM
+) -> Candidates:
+    """PCMCI+ at level alpha with the conditional independence test ci_test_name (CI_TESTS); n_perm: the
+    permutations of a permutation p-value."""
     data = DataFrame(
         episodes(dataset), analysis_mode="multiple", var_names=dataset.inputs, missing_flag=MISSING
     )
-    pcmci = PCMCI(dataframe=data, cond_ind_test=FastGsquared(significance="analytic"), verbosity=0)
+    pcmci = PCMCI(dataframe=data, cond_ind_test=ci_test(ci_test_name, n_perm), verbosity=0)
     result = pcmci.run_pcmciplus(
         tau_min=0, tau_max=1, pc_alpha=alpha, link_assumptions=link_assumptions(dataset)
     )
