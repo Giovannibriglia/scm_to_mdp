@@ -151,3 +151,44 @@ def test_a_cooperative_solver_carries_no_guarantee():
 
     assert Method("flat_rmdp", "robust_vi").guarantee
     assert not Method("flat_rmdp", "robust_vi", solver_options={"nature": "cooperative"}).guarantee
+
+
+def _evaluate_on_every_action(mdp, policy, gamma, nature, n_iter=600):
+    """The policy evaluation before on_policy: nature solved at every (s, a), then weighted."""
+    inner = robust_vi.Nature(mdp, nature)
+    V = np.zeros(mdp.L.shape[0])
+    for _ in range(n_iter):
+        V = (policy * (mdp.reward.R + inner.expectation(mdp.reward.backup(V, gamma)))).sum(1)
+    return V
+
+
+def test_evaluation_on_the_policy_actions_is_exact():
+    """on_policy keeps only the actions the policy plays: the same values (deterministic or stochastic
+    policy, either nature), from any start, and the same one-step backup."""
+    rng = np.random.default_rng(7)
+    mdp = _random_imdp(40, 5, 0.1, 3)
+    S, K = mdp.L.shape[:2]
+    deterministic = np.eye(K)[rng.integers(0, K, S)]
+    stochastic = rng.dirichlet(np.ones(K), S) * (rng.random((S, K)) < 0.5)
+    stochastic[np.arange(S), rng.integers(0, K, S)] += 0.1  # every state plays at least one action
+    stochastic /= stochastic.sum(1, keepdims=True)
+    for policy in (deterministic, stochastic):
+        restricted, probs = robust_vi.on_policy(mdp, policy)
+        assert restricted.L.shape[1] == int((policy > 0).sum(1).max()) and np.allclose(probs.sum(1), 1)
+        for nature in robust_vi.NATURES:
+            reference = _evaluate_on_every_action(mdp, policy, GAMMA, nature)
+            for V0 in (None, rng.normal(size=S) * 10):
+                V = robust_vi.evaluate(mdp, policy, GAMMA, tol=1e-11, nature=nature, V0=V0)
+                assert np.allclose(V, reference, atol=1e-8), (nature, V0 is None)
+            W = rng.normal(size=S)
+            full = (policy * robust_vi.Nature(mdp, nature).expectation(W)).sum(1)
+            assert np.allclose((probs * robust_vi.Nature(restricted, nature).expectation(W)).sum(1), full)
+    assert robust_vi.on_policy(mdp, deterministic)[0].L.shape == (S, 1, S)
+
+
+def test_a_warm_start_gives_the_same_robust_solution():
+    mdp = _random_imdp(40, 4, 0.1, 5)
+    for nature in robust_vi.NATURES:
+        cold = robust_vi.solve(mdp, GAMMA, tol=1e-10, nature=nature)
+        warm = robust_vi.solve(mdp, GAMMA, tol=1e-10, nature=nature, V0=cold.V + 0.01)
+        assert np.allclose(cold.V, warm.V, atol=1e-8) and warm.iterations < cold.iterations

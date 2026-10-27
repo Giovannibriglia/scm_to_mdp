@@ -162,18 +162,21 @@ def structure_distances(graph: Graph, true_parents: dict[str, tuple[str, ...]], 
 CERTIFICATE_TOL = 1e-5  # V_opt: the stopping rule's distance to the fixed point (it stays an upper bound)
 
 
-def optimistic_values(model, gamma: float, tol: float = CERTIFICATE_TOL) -> np.ndarray:
+def optimistic_values(
+    model, gamma: float, tol: float = CERTIFICATE_TOL, V0: np.ndarray | None = None
+) -> np.ndarray:
     """[S] V_opt: the best value over policies AND kernels of the interval MDP (a FactorBounds is first
     relaxed to its box, as box_robust_vi does; for the exact product set the box is a superset, so
     V_opt stays an upper bound): robust value iteration with a cooperative nature (solving/robust_vi.py),
     returned as a sound UPPER bound on the fixed point (solving/stopping.py). tol 1e-5 rather than the
     solvers' 1e-7: a quarter fewer sweeps, and V_opt moved by at most 4e-14 on learned Chemistry
-    models (the corrected iterate is close to the fixed point when the error shrinks at one rate)."""
+    models (the corrected iterate is close to the fixed point when the error shrinks at one rate).
+    V0: the start (e.g. the robust solver's V, below V_opt and close to it; any start is sound)."""
     from scm_to_mdp.compilation import product_bounds
     from scm_to_mdp.solving import robust_vi
 
     mdp = product_bounds.compile(model) if isinstance(model, FactorBounds) else model
-    return robust_vi.solve(mdp, gamma, tol=tol, nature="cooperative").V
+    return robust_vi.solve(mdp, gamma, tol=tol, nature="cooperative", V0=V0).V
 
 
 def certificate(model, truth: MDPGroundTruth, solution: Solution, V_true: np.ndarray, V_star: np.ndarray,

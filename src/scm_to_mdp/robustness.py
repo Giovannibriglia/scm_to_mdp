@@ -83,17 +83,19 @@ def checks(
     of the policy (evaluation.true_values); V_opt_obs [S_obs]: the certificate's optimistic values."""
     from scm_to_mdp.evaluation import observed_average
 
-    mdp = interval_mdp(model)
-    S, K = mdp.L.shape[:2]
-    pi = policy_table(solution, K)
+    full = interval_mdp(model)
+    S, K = full.L.shape[:2]
+    pi_full = policy_table(solution, K)
+    mdp, pi = robust_vi.on_policy(full, pi_full)  # the actions the policy plays: exact, K times cheaper
     live = ~np.asarray(data.reward.terminal, dtype=bool)
     start = np.bincount(truth.observed_index(), weights=truth.start, minlength=S)  # over observed states
     _, V_star_full = truth.observed_optimal(gamma)
     V_star, V_pi = observed_average(truth, V_star_full), observed_average(truth, V_true)
     span = float(start @ V_star - start @ observed_average(truth, truth.random_policy_values(gamma)))
 
-    V_lo = robust_vi.evaluate(mdp, pi, gamma, nature="adversarial")
-    V_up = robust_vi.evaluate(mdp, pi, gamma, nature="cooperative")
+    # started at the solver's promise and at V_opt (both close); any start gives the same sound bounds
+    V_lo = robust_vi.evaluate(mdp, pi, gamma, nature="adversarial", V0=solution.V)
+    V_up = robust_vi.evaluate(mdp, pi, gamma, nature="cooperative", V0=V_opt_obs)
     backup = (
         pi * (mdp.reward.R + robust_vi.Nature(mdp).expectation(mdp.reward.backup(solution.V, gamma)))
     ).sum(1)
@@ -108,7 +110,7 @@ def checks(
         terminal = np.asarray(data.reward.terminal, dtype=bool)
         worst = robust_vi.Nature(mdp, "cooperative")  # nature makes failure as likely as it can
         p_up = reach_probability(lambda f: (pi * worst.expectation(f)).sum(1), failure, terminal, horizon)
-        p_true_full = _true_reach_probability(truth, data, pi, horizon)
+        p_true_full = _true_reach_probability(truth, data, pi_full, horizon)
         p_true = observed_average(truth, p_true_full)
         out |= {
             "pfail_up": float(start @ p_up),

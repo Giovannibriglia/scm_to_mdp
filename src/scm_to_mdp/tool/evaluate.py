@@ -85,14 +85,13 @@ def evaluate(
         metrics.update({k: learned[k] for k in ("lcov_factor_1", "lcov_alt")})
     if result.method.solver in ROBUST_SOLVERS and isinstance(result.model, (FactorBounds, IntervalMDP)):
         V_true = evaluation.true_values(truth, data, solution, gamma)
-        V_opt_obs = evaluation.optimistic_values(result.model, gamma)
+        box = robustness.interval_mdp(result.model)  # compiled once for V_opt and the checks
+        V_opt_obs = evaluation.optimistic_values(box, gamma, V0=solution.V)
         metrics.update(
             evaluation.certificate(result.model, truth, solution, V_true, V_target, gamma, starts, V_opt_obs)
         )
         if result.method.guarantee:  # the promise's robustness checks (robustness.py)
-            metrics.update(
-                robustness.checks(result.model, solution, truth, data, gamma, V_true, V_opt_obs, horizon)
-            )
+            metrics.update(robustness.checks(box, solution, truth, data, gamma, V_true, V_opt_obs, horizon))
     return metrics
 
 
