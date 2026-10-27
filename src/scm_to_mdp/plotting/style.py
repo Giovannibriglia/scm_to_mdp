@@ -46,8 +46,8 @@ ARM_LABEL = {
     "DiFaRL": "DiFaRL",
     "full-fact -> IMDP": "full-fact → IMDP",
     "full-fact -> MDP": "full-fact → MDP",
-    "oracle -> IMDP": "oracle → IMDP (true MDP ± tol)",
-    "oracle -> MDP": "oracle → MDP (true MDP)",
+    "oracle -> IMDP": "oracle",  # the true observed MDP (± the solver's tolerance in an IMDP grid)
+    "oracle -> MDP": "oracle",  # a grid has one of the two
 }
 FULL_WIDTH = 7.0  # inches, a two-column paper's text width
 DPI = 500  # PNG resolution (the PDF is vector)
