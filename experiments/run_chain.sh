@@ -6,7 +6,7 @@
 #   bash experiments/run_chain.sh exp1                  # every domain of experiment 1, in the order below
 #   bash experiments/run_chain.sh exp2 sysadmin taxi    # only these domains
 #   RESUME=1 bash experiments/run_chain.sh exp1         # continue the latest runs
-#   SHOW=1 bash experiments/run_chain.sh exp1           # also show each script's output (progress bar) here
+#   SHOW=0 bash experiments/run_chain.sh exp1           # log only (default: also show each script's output here)
 # Logs: results/<exp>/logs/ (chain.log: start, end and exit code of every grid; <script>.log: its output).
 set -u
 cd "$(dirname "$0")/.."
@@ -31,7 +31,7 @@ for domain in "${DOMAINS[@]}"; do
         script="${domain}_${kind}"
         echo "$(stamp) start $script" | tee -a "$LOG/chain.log"
         start=$(date +%s)
-        if [ "${SHOW:-0}" = "1" ]; then  # to the terminal and the log
+        if [ "${SHOW:-1}" = "1" ]; then  # to the terminal (progress bar) and the log
             "$PY" "experiments/$EXP/$script.py" ${FLAGS[@]+"${FLAGS[@]}"} 2>&1 | tee -a "$LOG/$script.log"
             rc=${PIPESTATUS[0]}  # the script's exit code, not tee's
         else  # to the log only

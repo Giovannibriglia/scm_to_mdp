@@ -36,7 +36,7 @@ bash experiments/run_chain.sh exp1                     # all of experiment 1
 bash experiments/run_chain.sh exp2                     # all of experiment 2
 bash experiments/run_chain.sh exp1 sysadmin taxi       # only these domains
 RESUME=1 bash experiments/run_chain.sh exp1            # continue a stopped chain
-SHOW=1 bash experiments/run_chain.sh exp1              # also show each script's progress here (else: tail -f its log)
+SHOW=0 bash experiments/run_chain.sh exp1              # log only (default: progress also shown here)
 ```
 
 **A quick check first** (minutes): `exp1_smoke` and `exp2_smoke` run the same scripts on a tiny grid
