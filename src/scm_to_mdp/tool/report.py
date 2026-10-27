@@ -51,7 +51,7 @@ def report(out_dir, target: float = 0.95, delta: float | None = 0.05, show: bool
     """Tables and figures of the sweep in out_dir. target: the share of V*_obs (the best policy over
     the observed state) that counts as "optimal"; delta: the failure probability of the promises
     (the 1 - delta line of the validity panel).
-    Returns {"transitions_needed": table of n* (median and quartiles over seeds)}."""
+    Returns {"transitions_needed": table of n* (median over seeds and its 95% CI)}."""
     out = Path(out_dir)
     res = read_results(out, current=True)
     if res.empty:
@@ -179,8 +179,8 @@ def report(out_dir, target: float = 0.95, delta: float | None = 0.05, show: bool
         def cell(r):
             if not np.isfinite(r["median_t"]):
                 return f"> {figures.samples_label(figures.sample_grid(res)[-1])}"
-            hi = "inf" if not np.isfinite(r["q75_t"]) else figures.samples_label(r["q75_t"])
-            return f"{figures.samples_label(r['median_t'])} [{figures.samples_label(r['q25_t'])}, {hi}]"
+            hi = "inf" if not np.isfinite(r["ci_hi_t"]) else figures.samples_label(r["ci_hi_t"])
+            return f"{figures.samples_label(r['median_t'])} [{figures.samples_label(r['ci_lo_t'])}, {hi}]"
 
         table = summary.assign(cell=summary.apply(cell, axis=1)).pivot(
             index="size", columns="method", values="cell"
@@ -190,7 +190,7 @@ def report(out_dir, target: float = 0.95, delta: float | None = 0.05, show: bool
         )
         table.index = pd.Index([labels[s] for s in table.index], name=size_name)
         caption = (
-            f"Transitions for a {target:.0%}-optimal policy: median over seeds [quartiles]; '>' = not reached"
+            f"Transitions for a {target:.0%}-optimal policy: median over seeds [95% CI]; '>' = not reached"
         )
         lines += [f"## {caption}", "", "```", table.to_string(), "```", ""]
         shown += [caption + ":", table.to_string(), ""]

@@ -19,8 +19,8 @@ Every table is built from lower levels only, and every level is saved in <out_di
                            never), and t*, the transitions (samples) of that dataset
   level 2  cells.csv       per (knob, policy, size, n_transitions, method) and metric: mean, standard
                            error, min, max and number of seeds (long format)
-           transitions_needed.csv          median and quartiles of n* and of t* (median_t, q25_t,
-                           q75_t) over seeds, share of seeds reached
+           transitions_needed.csv          median over seeds and its 95% CI of n* (median, ci_lo,
+                           ci_hi) and of t* (median_t, ci_lo_t, ci_hi_t), share of seeds reached
            promise_held.csv per (knob, policy, size, method): attempted runs (every status but
                            "skipped"), finished runs ("runs", status ok), runs whose promise holds in
                            every state, and the share among the finished runs
@@ -150,8 +150,9 @@ def needed_summary(by_seed: pd.DataFrame) -> pd.DataFrame:
     parts = [
         summarize_needed(g).assign(knob=k, policy=p) for (k, p), g in by_seed.groupby(SETTING, sort=False)
     ]
-    columns = SETTING + ["size", "n_states", "n_observed_states", "method", "median", "q25", "q75", "reached"]
-    columns += ["median_t", "q25_t", "q75_t"]
+    columns = SETTING + ["size", "n_states", "n_observed_states", "method"]
+    columns += ["median", "ci_lo", "ci_hi", "reached"]
+    columns += ["median_t", "ci_lo_t", "ci_hi_t"]
     return pd.concat(parts, ignore_index=True)[columns] if parts else pd.DataFrame(columns=columns)
 
 
@@ -317,11 +318,11 @@ def episodes(horizon: int) -> str:
 
 
 def _fmt_n(r) -> str:
-    """The transitions needed: median [quartiles] over seeds."""
+    """The transitions needed: median over seeds [95% CI]."""
     if not np.isfinite(r["median_t"]):
         return ">"
-    hi = "inf" if not np.isfinite(r["q75_t"]) else samples_label(r["q75_t"])
-    return f"{samples_label(r['median_t'])} [{samples_label(r['q25_t'])}, {hi}]"
+    hi = "inf" if not np.isfinite(r["ci_hi_t"]) else samples_label(r["ci_hi_t"])
+    return f"{samples_label(r['median_t'])} [{samples_label(r['ci_lo_t'])}, {hi}]"
 
 
 def report_grid(out_dir, target: float = 0.95, delta: float | None = 0.05, settings_too: bool = True) -> dict:
@@ -484,7 +485,7 @@ def report_grid(out_dir, target: float = 0.95, delta: float | None = 0.05, setti
         "of transitions and every larger one.",
         "",
     ]
-    lines += ["## Transitions needed (median [quartiles] over seeds; '>' = not reached)", ""]
+    lines += ["## Transitions needed (median over seeds [95% CI]; '>' = not reached)", ""]
     for policy in policies:
         for knob in knobs:
             cell = summary[(summary["policy"] == policy) & (summary["knob"] == knob)]

@@ -215,3 +215,16 @@ def test_iqm_and_its_bootstrap_interval():
     assert np.isnan(iqm_ci([np.nan])[0])
     _, lo_s, hi_s = iqm_ci(np.r_[x, x + 100], strata=[0] * 10 + [1] * 10)  # stratified by task
     assert lo_s < hi_s
+
+
+def test_median_and_its_order_statistic_interval():
+    """The transitions needed (censored at inf): the median with the [k-th smallest, k-th largest]
+    interval of coverage >= 95% (10 runs: 2nd and 9th; 100 runs: 40th and 61st)."""
+    from scm_to_mdp.plotting.stats import median_ci
+
+    assert median_ci(np.arange(1.0, 11.0)) == (5.0, 2.0, 9.0)
+    assert median_ci(np.arange(1.0, 101.0)) == (50.0, 40.0, 61.0)
+    assert median_ci([1, 1, 1, np.inf, np.inf]) == (1.0, 1.0, np.inf)  # 5 runs: [min, max] (below 95%)
+    assert median_ci([1.0] * 3 + [np.inf] * 7) == (np.inf, 1.0, np.inf)  # most seeds never get there
+    assert median_ci([4.0, np.nan]) == (4.0, 4.0, 4.0)
+    assert all(np.isnan(median_ci([])))

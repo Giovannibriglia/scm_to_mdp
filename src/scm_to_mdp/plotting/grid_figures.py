@@ -12,7 +12,7 @@ Each function takes the tables it draws (built in report_grid) and returns nothi
 saves those tables next to the figure (figure_data/<name>.csv). "Transitions" are the samples of a
 dataset (the transition budget); `grid` is the transitions of every
 number of transitions of the grid (figures.sample_grid), and the tables give the transitions needed in
-median_t, q25_t, q75_t (t_star per seed).
+median_t, ci_lo_t, ci_hi_t (the median over seeds and its 95% CI; t_star per seed).
 """
 
 import matplotlib.pyplot as plt
@@ -95,7 +95,7 @@ def _size_axis(summary, sizes):
 def sample_efficiency_grid(
     summary, sizes, size_name, knobs, knob_name, policies, methods, styles, grid, target, title, stem
 ):
-    """summary: rows (knob, policy, size, n_observed_states, method, median_t, q25_t, q75_t); x = the
+    """summary: rows (knob, policy, size, n_observed_states, method, median_t, ci_lo_t, ci_hi_t); x = the
     observed states, y = the transitions needed."""
     setup()
     top = grid[-1] * 3
@@ -122,8 +122,8 @@ def sample_efficiency_grid(
                 st = styles[m]
                 x = sub["size"].map(position).to_numpy(float) + (k - (len(methods) - 1) / 2) * 0.04
                 med = sub["median_t"].to_numpy(float)
-                lo = np.where(np.isfinite(sub["q25_t"]), sub["q25_t"], top)
-                hi = np.where(np.isfinite(sub["q75_t"]), sub["q75_t"], top)
+                lo = np.where(np.isfinite(sub["ci_lo_t"]), sub["ci_lo_t"], top)
+                hi = np.where(np.isfinite(sub["ci_hi_t"]), sub["ci_hi_t"], top)
                 y = np.where(np.isfinite(med), med, top)
                 ax.plot(x, y, ls=st["ls"], color=st["color"], lw=1.1)
                 ax.fill_between(x, lo, hi, color=st["color"], alpha=0.08, lw=0)
@@ -149,7 +149,7 @@ def sample_efficiency_grid(
                 ax.set_ylabel(f"{policy}\ntransitions", fontsize=7)
             if r == len(policies) - 1:
                 ax.set_xlabel(axis_name or f"observed states ({size_name})")
-    band = plt.Rectangle((0, 0), 1, 1, color="grey", alpha=0.25, lw=0, label="first to third quartile")
+    band = plt.Rectangle((0, 0), 1, 1, color="grey", alpha=0.25, lw=0, label="95% CI of the median")
     hollow = Line2D(
         [], [], ls="none", marker="o", color="k", markerfacecolor="white", label="median not reached"
     )

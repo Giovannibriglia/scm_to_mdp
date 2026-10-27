@@ -20,7 +20,7 @@
                 (scm_to_mdp/reward_family.py: does the promise hold for every reward at once?)
     report      tool.report_grid: values as the IQM over seeds with a 95% bootstrap interval
                 (plotting/stats.py); the transitions needed for a 95%-optimal policy as the median and
-                quartiles (they can be "never")
+                its exact 95% interval (some seeds may never get there)
 
 A script (experiments/exp<k>/<domain>_<kind>.py) builds its grid with grid(...) and calls main(...).
 """

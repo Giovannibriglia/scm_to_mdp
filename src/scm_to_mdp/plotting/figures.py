@@ -23,7 +23,7 @@ import pandas as pd
 from matplotlib.lines import Line2D
 from matplotlib.ticker import FuncFormatter
 
-from scm_to_mdp.plotting.stats import iqm_ci
+from scm_to_mdp.plotting.stats import iqm_ci, median_ci
 from scm_to_mdp.plotting.style import FULL_WIDTH, save, setup
 
 RATES = {"safe", "safe_rate", "coverage", "cert_holds"}  # shares of runs: plain means, no band
@@ -723,11 +723,9 @@ def transitions_needed(res: pd.DataFrame, target: float = 0.95) -> pd.DataFrame:
 
 
 def summarize_needed(needed: pd.DataFrame) -> pd.DataFrame:
-    """Median and quartiles over seeds of n* (median, q25, q75: values of the grid of budgets) and of
-    the transitions t* (median_t, q25_t, q75_t); inf = not reached."""
-
-    def q(x, p):
-        return float(np.quantile(np.sort(x.to_numpy()), p, method="inverted_cdf"))
+    """Median over seeds and its 95% confidence interval (plotting/stats.median_ci) of n* (median,
+    ci_lo, ci_hi: values of the grid of budgets) and of the transitions t* (median_t, ci_lo_t,
+    ci_hi_t); inf = not reached."""
 
     if "t_star" not in needed:  # an older table: budgets only
         needed = needed.assign(t_star=np.nan)
@@ -736,11 +734,13 @@ def summarize_needed(needed: pd.DataFrame) -> pd.DataFrame:
     needed = needed.assign(n_observed_states=needed["n_observed_states"].fillna(needed["n_states"]))
     keys = ["size", "n_states", "n_observed_states", "method"]
     g = needed.groupby(keys)
-    out = g["n_star"].agg(median=lambda x: q(x, 0.5), q25=lambda x: q(x, 0.25), q75=lambda x: q(x, 0.75))
+
+    def summary(column, names):
+        return g[column].apply(lambda x: pd.Series(median_ci(x.fillna(np.inf)), index=names)).unstack()
+
+    out = summary("n_star", ["median", "ci_lo", "ci_hi"])
     out["reached"] = g["n_star"].agg(lambda x: float(np.isfinite(x).mean()))
-    for name, p in (("median_t", 0.5), ("q25_t", 0.25), ("q75_t", 0.75)):
-        out[name] = g["t_star"].agg(lambda x, p=p: q(x.fillna(np.inf), p))
-    return out.reset_index()
+    return out.join(summary("t_star", ["median_t", "ci_lo_t", "ci_hi_t"])).reset_index()
 
 
 def sample_grid(res: pd.DataFrame) -> list[float]:
@@ -764,10 +764,10 @@ def sample_efficiency(
     res, sizes, labels, xlabel, methods, styles, target: float, title: str, stem
 ) -> pd.DataFrame:
     """x: observed states (Axis), y: transitions (samples) needed for a policy at least `target`
-    optimal: the median over seeds, with a band from the first to the third quartile (not a standard
-    deviation: a seed that never reaches the target has t* = inf). Not reached within the grid: an
-    open marker on the line above the largest dataset. Returns the table of medians and quartiles
-    (of the budget n* and of the transitions t*)."""
+    optimal: the median over seeds, with its 95% confidence interval as the band (plotting/stats.median_ci;
+    a seed that never reaches the target has t* = inf). Not reached within the grid: an open marker on
+    the line above the largest dataset. Returns the table of medians and intervals (of the budget n*
+    and of the transitions t*)."""
     setup()
     summary = summarize_needed(transitions_needed(res, target))
     if summary.empty:  # no run finished (or no size has V*_obs > 0): nothing to draw
@@ -785,11 +785,11 @@ def sample_efficiency(
             continue
         st = styles[m]
         x = sub["size"].map(position).to_numpy(float) + 1.5 * _dodge(methods, m)
-        med, lo, hi = (sub[c].to_numpy(float) for c in ("median_t", "q25_t", "q75_t"))
+        med, lo, hi = (sub[c].to_numpy(float) for c in ("median_t", "ci_lo_t", "ci_hi_t"))
         reached = np.isfinite(med)
         y = np.where(reached, med, top)
         ax.plot(x, y, ls=st["ls"], color=st["color"], lw=1.4)
-        # band: first to third quartile over seeds (a seed that never reaches the target is at the top)
+        # band: 95% CI of the median over seeds (an end at inf is drawn at the "not reached" line)
         lower = np.where(np.isfinite(lo), lo, top)
         upper = np.where(np.isfinite(hi), hi, top)
         ax.fill_between(x, lower, upper, color=st["color"], alpha=0.15, lw=0)
@@ -818,7 +818,7 @@ def sample_efficiency(
         [], [], ls="none", marker="o", color="k", markerfacecolor="white", label="not reached (median)"
     )
     band = plt.Rectangle(
-        (0, 0), 1, 1, color="grey", alpha=0.25, lw=0, label="first to third quartile over seeds"
+        (0, 0), 1, 1, color="grey", alpha=0.25, lw=0, label="95% CI of the median over seeds"
     )
     _legend(fig, shown, styles, extra=[hollow, band])
     fig.tight_layout(rect=(0, 0.17, 1, 1))

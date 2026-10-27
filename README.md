@@ -98,7 +98,8 @@ Coffee robot, Taxi; sizes calibrated so that the oracle solves each within 8 GB)
   optimal one over the observed state (100%);
 - **summary over seeds:** the interquartile mean (IQM) with a 95% bootstrap interval (Agarwal et al.,
   NeurIPS 2021; `plotting/stats.py`); rates (how often a promise held) as plain shares; the
-  transitions needed for a 95%-optimal policy as the median and quartiles (they can be "never");
+  transitions needed for a 95%-optimal policy as the median with its exact 95% interval from order
+  statistics (some seeds may never get there; with 10 seeds the 2nd and 9th smallest values);
 - **budget:** 8 GB per step; solving limited to 3x the oracle's work (the oracle is the true observed
   MDP, solved first on every dataset);
 - **robustness of a promise** (`src/scm_to_mdp/robustness.py`): every check rests on one event, "the
@@ -251,11 +252,11 @@ datasets: smaller budgets use the first rollouts of one table). Each step runs i
 with a memory limit and, for discovery, selection, parameter learning, solving and training, a time limit. Rows are written to `results.csv` as each (size, seed) finishes, and
 a second run resumes. `report(out_dir)` writes:
 
-- `figures/rollouts=<n>/{performance,validity,structure,time,memory}` over the problem size, one
-  folder per number of rollouts;
-- `figures/sample_efficiency`: x = number of states, y = rollouts needed for a policy that is at
-  least 95% optimal ($V^\pi \ge 0.95\,V^\star_{obs}$ at the start, at that number of rollouts and every
-  larger one; median over seeds, quartile bars); $V^\star_{obs}$ is the best policy over the observed
+- `figures/transitions=<n>/{performance,validity,structure,time,memory}` over the problem size, one
+  folder per transition budget;
+- `figures/sample_efficiency`: x = number of states, y = transitions needed for a policy that is at
+  least 95% optimal ($V^\pi \ge 0.95\,V^\star_{obs}$ at the start, at that budget and every larger
+  one; median over seeds, band = its 95% CI); $V^\star_{obs}$ is the best policy over the observed
   state (= $V^\star$ when nothing is hidden);
 - `tables.md` with every table.
 
