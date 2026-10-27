@@ -149,7 +149,6 @@ def sample_efficiency_grid(
                 ax.set_ylabel(f"{policy}\ntransitions", fontsize=7)
             if r == len(policies) - 1:
                 ax.set_xlabel(axis_name or f"observed states ({size_name})")
-    fig.suptitle(f"{title}: transitions for a {target:.0%}-optimal policy (median over seeds, quartile band)")
     band = plt.Rectangle((0, 0), 1, 1, color="grey", alpha=0.25, lw=0, label="first to third quartile")
     hollow = Line2D(
         [], [], ls="none", marker="o", color="k", markerfacecolor="white", label="median not reached"
@@ -192,7 +191,6 @@ def rollouts_vs_model_size(points, policies, methods, styles, grid, title, stem)
         ax.set_title(policy)
     fig.supxlabel("parent rows of the true factored model (log scale)", fontsize=8, y=0.17)
     axes[0, 0].set_ylabel("transitions for 95% (median)")
-    fig.suptitle(f"{title}: data needed against the size of the true causal model (all knobs and sizes)")
     _legend(fig, _method_handles(methods, styles))
     fig.tight_layout(rect=(0, 0.18, 1, 0.95))
     save(fig, stem)
@@ -223,7 +221,7 @@ def promise_heatmap(held: pd.DataFrame, title, stem):
 
 
 def discovery_errors(curves, knobs, knob_name, policies, methods, styles, column, ylabel, title, stem):
-    """curves: rows (knob, policy, n_rollouts, transitions, method, <column>) averaged over sizes and
+    """curves: rows (knob, policy, n_rollouts, transitions, method, <column>), the IQM over sizes and
     seeds; x = the transitions (mean over sizes and seeds of that number of episodes)."""
     setup()
     fig, axes = plt.subplots(
@@ -256,14 +254,17 @@ def discovery_errors(curves, knobs, knob_name, policies, methods, styles, column
             ax.set_xscale("log")
             _log_ticks(ax.xaxis, curves["transitions"])
             ax.xaxis.set_major_formatter(FuncFormatter(lambda v, _: samples_label(v)))
-            ax.set_ylim(0, max(top, 1e-3))
+            if column in ("recall", "precision"):  # shares: 0-100%
+                ax.set_ylim(-0.02, 1.02)
+                ax.yaxis.set_major_formatter(FuncFormatter(lambda v, _: f"{v:.0%}"))
+            else:
+                ax.set_ylim(0, max(top, 1e-3))
             if r == 0:
                 ax.set_title(f"{knob_name} = {knob}")
             if c == 0:
                 ax.set_ylabel(f"{policy}\n{ylabel}", fontsize=7)
             if r == len(policies) - 1:
                 ax.set_xlabel("transitions")
-    fig.suptitle(f"{title}: {ylabel} (mean over sizes and seeds)")
     _legend(fig, _method_handles(methods, styles))
     fig.tight_layout(rect=(0, _bottom(fig, len(methods)), 1, 0.97))
     save(fig, stem)
@@ -298,7 +299,6 @@ def rollouts_vs_coverage(points, policies, methods, styles, grid, title, stem):
         Line2D([], [], ls="none", marker="o", color=POLICY_COLOURS[k % 6], label=p)
         for k, p in enumerate(policies)
     ]
-    fig.suptitle(f"{title}: transitions needed against coverage of the target policy (C* = inf: right edge)")
     _legend(fig, handles, ncol=3)
     fig.tight_layout(rect=(0, 0.06, 1, 0.96))
     save(fig, stem)
@@ -338,7 +338,38 @@ def confounding(points, policies, methods, styles, title, stem):
         Line2D([], [], ls="none", marker="o", color=POLICY_COLOURS[k % 6], label=p)
         for k, p in enumerate(policies)
     ]
-    fig.suptitle(f"{title}: does confounding break the promise? (largest number of rollouts)")
     _legend(fig, handles, ncol=3)
     fig.tight_layout(rect=(0.02, 0.12, 1, 0.94))
+    save(fig, stem)
+
+
+def check_rates(table, methods, styles, checks: dict, stem):
+    """One panel per check: the share of runs (over sizes, seeds and settings) where it held, against
+    the transitions (robustness.csv); a line at 100%. checks: {column: panel title}."""
+    setup()
+    n = len(checks)
+    cols = min(3, n)
+    rows = int(np.ceil(n / cols))
+    fig, axes = plt.subplots(rows, cols, figsize=(FULL_WIDTH, 2.1 * rows + 0.9), squeeze=False, sharex=True)
+    for ax, (column, title) in zip(axes.flat, checks.items(), strict=False):  # extra panels stay empty
+        for m in methods:
+            sub = table[table["method"] == m].groupby("transitions")[f"{column}_share"].mean().dropna()
+            if not sub.empty:
+                st = styles[m]
+                ax.plot(
+                    sub.index, sub.values, ls=st["ls"], marker=st["marker"], color=st["color"], markersize=3
+                )
+        ax.axhline(1.0, color="k", lw=0.8)
+        ax.set_xscale("log")
+        _log_ticks(ax.xaxis, table["transitions"])
+        ax.xaxis.set_major_formatter(FuncFormatter(lambda v, _: samples_label(v)))
+        ax.set_ylim(-0.02, 1.05)
+        ax.yaxis.set_major_formatter(FuncFormatter(lambda v, _: f"{v:.0%}"))
+        ax.set_title(title, fontsize=8)
+        ax.set_xlabel("transitions")
+    for ax in list(axes.flat)[n:]:
+        ax.set_visible(False)
+    axes[0, 0].set_ylabel("share of runs")
+    _legend(fig, _method_handles(methods, styles))
+    fig.tight_layout(rect=(0, _bottom(fig, len(methods)), 1, 1))
     save(fig, stem)

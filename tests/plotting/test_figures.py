@@ -3,6 +3,7 @@ rollouts needed, the parameter-learning and normalised-value figures, the validi
 
 import numpy as np
 import pandas as pd
+import pytest
 
 from scm_to_mdp.compilation import product_bounds
 from scm_to_mdp.core import IntervalMDP
@@ -194,3 +195,17 @@ def test_legend_without_handles():
     grid_figures._legend(fig, [])
     assert not fig.legends
     plt.close(fig)
+
+
+def test_iqm_and_its_bootstrap_interval():
+    from scm_to_mdp.plotting.stats import iqm, iqm_ci
+
+    x = np.arange(1.0, 11.0)  # 1..10: the IQM is the mean of the middle 50% (scipy trim_mean, 25%)
+    assert iqm(x) == pytest.approx(5.5)
+    assert iqm([1, 2, 3, 100]) == pytest.approx(2.5)  # the outlier does not move it
+    centre, lo, hi = iqm_ci(x)
+    assert lo <= centre <= hi and hi - lo > 0
+    assert iqm_ci([3.0]) == (3.0, 3.0, 3.0)
+    assert np.isnan(iqm_ci([np.nan])[0])
+    _, lo_s, hi_s = iqm_ci(np.r_[x, x + 100], strata=[0] * 10 + [1] * 10)  # stratified by task
+    assert lo_s < hi_s

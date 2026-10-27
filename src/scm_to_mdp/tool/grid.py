@@ -89,6 +89,7 @@ class Grid:
     save_models: str = "largest"  # first seed: save the models (tool/store.py): "largest" n, "all", "none"
     pictures_max_states: int = 16  # draw the MDPs (chain pictures) of problems with at most this many states
     reward_transfer: bool = False  # also evaluate under the environment's alternative rewards (sweep.py)
+    reward_family: Any = None  # random rewards on the same dynamics (reward_family.RewardFamily; sweep.py)
     # dynamics shift (sweep.py): (size, knob, seed) -> {name: Env} with other dynamics, same observed states
     shifts: Callable[[Any, Any, int], dict] | None = None
     # relative solve limit (tool/sweep.py): max(solve_floor_s, solve_factor x the oracle's work at rate gamma)
@@ -161,6 +162,7 @@ def experiments(grid: Grid) -> list[Experiment]:
             save_models=grid.save_models,
             pictures_max_states=grid.pictures_max_states,
             reward_transfer=grid.reward_transfer,
+            reward_family=grid.reward_family,
             shifts=None if grid.shifts is None else partial(env_at, grid.shifts, knob),
             solve_factor=grid.solve_factor,
             solve_floor_s=grid.solve_floor_s,

@@ -8,8 +8,8 @@ Three parts (each in its own module):
 
 and the sweep that runs them over problem sizes, numbers of rollouts and seeds (sweep.py), and grids
 of sweeps over a knob and behaviour policies (grid.py, report_grid.py); the saved models of one
-seed (store.py); one timestamped folder per run (runs.py). See experiments/coffee.py and
-experiments/taxi.py for single experiments, experiments/exp1/*_complete.py for grids.
+seed (store.py); one timestamped folder per run (runs.py). See experiments/exp1/ and
+experiments/exp2/ for grids (experiments/common.py, domains.py).
 """
 
 from scm_to_mdp.data import DataSpec

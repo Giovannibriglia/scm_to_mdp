@@ -16,3 +16,7 @@ __pycache__/
 # IDE / OS
 .idea/
 .DS_Store
+
+# Retired experiment designs (kept on disk only)
+experiments/exp1_wrong/
+experiments/trials_wrong/

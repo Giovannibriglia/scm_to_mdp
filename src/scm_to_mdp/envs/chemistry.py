@@ -18,8 +18,8 @@ Next colour of object j:
                          x_j w.p. 0.25, a uniform colour w.p. 0.05
     not pushed, no parent: x_j w.p. 0.95, a uniform colour w.p. 0.05
 Reward: the share of objects in their target colour (targets random per seed), at every step.
-Start: a uniform state. In experiments/exp1/chemistry_complete.py the size is the number of objects
-and the density is the grid's knob.
+Start: a uniform state. In experiments/domains.py the size is the number of objects and the
+density is the grid's knob.
 
 Catalyst (optional, ours; catalyst=p): a hidden variable drawn afresh at every step, catalyst ~
 Bernoulli(p), independent of everything else. It drives one reaction, that of the "exposed" object (the

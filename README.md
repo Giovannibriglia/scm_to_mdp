@@ -9,13 +9,37 @@ library (`nbn>=0.26`).
 ## Quick start
 
 ```bash
-uv sync --extra discovery                                   # environment (uv; Python 3.12, from uv.lock)
-.venv/bin/python experiments/exp1/exp_smoke.py              # is everything installed? (~15 minutes)
-.venv/bin/python -m pytest -q                               # the tests (6 minutes on a recent laptop, ~20 on an older server)
-.venv/bin/python experiments/exp1/sysadmin_complete.py      # experiment 1, SysAdmin grid (hours)
+uv sync --extra discovery          # environment (uv; Python 3.12, from uv.lock)
+.venv/bin/python -m pytest -q      # the tests (about 2 minutes)
 ```
 
 Tested on macOS (arm64) and Linux (Ubuntu 20.04, x86_64). Without `uv`: `pip install --user uv`.
+
+## Running the experiments
+
+From the repository root. A script is `<experiment> <domain> <kind>`: experiment `exp1` or `exp2`,
+domain one of `sysadmin chemistry aircraft drone frozenlake stock sepsis coffee taxi`, kind `imdp`
+(with a promise) or `mdp` (without).
+
+**One domain** (e.g. SysAdmin, IMDP arms of experiment 1):
+
+```bash
+.venv/bin/python experiments/run.py exp1 sysadmin imdp            # run
+.venv/bin/python experiments/run.py exp1 sysadmin imdp --resume   # continue a stopped run
+.venv/bin/python experiments/run.py exp1 sysadmin imdp --show     # print what it would run, without running
+```
+
+**A whole experiment** (every domain, both kinds, one after the other; logs in `results/<experiment>/logs/`):
+
+```bash
+bash experiments/run_chain.sh exp1                     # all of experiment 1
+bash experiments/run_chain.sh exp2                     # all of experiment 2
+bash experiments/run_chain.sh exp1 sysadmin taxi       # only these domains
+RESUME=1 bash experiments/run_chain.sh exp1            # continue a stopped chain
+```
+
+Results go to `results/<experiment>/<domain>_<kind>_<date>_<time>/` (tables and figures in `summary/`).
+`.venv/bin/python experiments/run.py --list` lists every script; `--workers N` sets the parallel jobs.
 
 ### How a run uses the machine
 
@@ -48,99 +72,80 @@ the choice and save it in each setting's `meta.json` (`"machine"`; `src/scm_to_m
 - Stopping a run (IDE stop button, Ctrl+C, kill) stops its workers and their steps too; continue it
   with `--resume`.
 
-## Experiment 1: complete grids
+## Experiments 1 and 2
 
-`experiments/exp1/` holds one script per domain (`*_complete.py`) and the protocol they share
-(`protocol.py`). The protocol states what the grids test and how:
+Both experiments share the data and the evaluation (`experiments/common.py`) and the nine domains
+(`experiments/domains.py`: SysAdmin, Chemistry, Aircraft, Drone, Frozen Lake, Stock trading, Sepsis,
+Coffee robot, Taxi; sizes calibrated so that the oracle solves each within 8 GB):
 
-- **A, sample efficiency:** an RMDP learned through causality (discovery + interval learning) reaches
-  a near-optimal policy with a promise that holds at fewer rollouts than flat RMDP and the baselines.
-  Measured by `rollouts_needed`, the validity-gated comparison and the certificate V_opt − V_rob.
-  Against the point models it is reported apart, in true value and in guaranteed value.
-- **B, transfer:**
-  - B1, new rewards on the same dynamics (`results_transfer.csv`), read against the data's coverage
-    of each task's rows: `cov_joint_k − cov_factor_k` are the rows only a factored model can estimate;
-  - B2, a dynamics shift (`results_shift.csv`): the hidden variable is more frequent at deployment.
-    This is robustness, not causal transfer; a single-mechanism change with new data is experiment 2.
-- **C, understanding:** the learned model against the true kernel under the logged visits, the best
-  policy's occupancy and uniform weights (`tv_*`, `kl_*`, `contain_*`, `width_*`), and the structure
-  (SHD, SID, action recall).
-- **Control:** the confounded logger. Every model-based promise is expected to fail there, so it is
-  not evidence for A–C.
+- **data:** a uniform-random logger; 1, 2, 5, 10, 20, 50, 100, 200, 500, 1k, 2k, 5k and 10k episodes
+  of 256 steps; 10 seeds;
+- **evaluation:** in the MDP the data come from, with the same reward, at the nominal start and from 20
+  random starts; the value of a policy is reported normalised between the random policy (0%) and the
+  optimal one over the observed state (100%);
+- **summary over seeds:** the interquartile mean (IQM) with a 95% bootstrap interval (Agarwal et al.,
+  NeurIPS 2021; `plotting/stats.py`); rates (how often a promise held) as plain shares; the
+  transitions needed for a 95%-optimal policy as the median and quartiles (they can be "never");
+- **budget:** 8 GB per step; solving limited to 3x the oracle's work (the oracle is the true observed
+  MDP, solved first on every dataset);
+- **robustness of a promise** (`src/scm_to_mdp/robustness.py`): every check rests on one event, "the
+  learned set contains the true kernel", which depends on the transitions only. So on that event the
+  promise is a lower bound for every reward and every policy at once, and each check below must hold:
+  the value bracket V_lo ≤ V^π ≤ V_up (the policy evaluated against an adversarial and a cooperative
+  nature), the optimistic bound V*_obs ≤ V_opt, a one-sweep check that the promise is below its
+  policy's robust value (`cert_residual` ≥ 0), and, in domains with failure states (Frozen Lake's holes,
+  Sepsis's death), an upper bound on the probability of failing within 256 steps. `summary/robustness.csv`
+  counts as `bugs` the runs whose set contains the truth while a check fails (0 expected);
+- **many rewards, experiment 1 on Sepsis only** (`src/scm_to_mdp/reward_family.py`): every learned
+  model is re-planned, not re-learned, under 20 random rewards (dense, sparse goals, white noise, and
+  "stress" rewards on the least-visited states) at 10, 100, 1k and 10k episodes, and under Sepsis's 3
+  alternative rewards (`results_transfer.csv`); `rf_safe_all` says whether the promise held for every
+  random reward. Sepsis is the domain where this test is cleanest: nothing is hidden (so the promise
+  for every reward is a theorem, not a hope), the vitals have treatment-specific parents (a missing
+  edge can matter for one objective and not another), and death is a failure state.
 
-Every grid runs every size × knob × logger × number of rollouts × 5 seeds with the standard methods
-(`standard_methods(..., deep=True)`):
+Every setting above is a named constant in `experiments/common.py` (data, budget, random rewards),
+`experiments/domains.py` (the domains) or the experiment's `protocol.py` (the methods).
 
-- **ours:** BIC / PCMCI+ / GES / DYNOTEARS (Pamfil et al., AISTATS 2020) → a robust MDP over the box
-  of the factor intervals. Also BIC → RMDP with widened families (S4,
-  `scm_learning/nbn_intervals.py`): each parent set plus the 2 inputs BIC ranks next, either as the
-  hull of the families' intervals ("hull") or as one padded family ("padded"). Finally, the same
-  discoveries → MDP: point estimates and value iteration.
-- **the references:**
-  - true graph → RMDP, the true graph with the box (what discovery costs);
-  - on 0/1 domains, also true graph → RMDP (per-(s,a) product), robust VI over the products of the
-    factor intervals (Schnitzer, Abate & Parker, AAAI 2026). It is exact per (s, a), but nature still
-    picks every (s, a) independently. The pair measures the cost of the box (`box_looseness.csv`);
-  - true graph → MDP.
-- **the controls** (`discovery/controls.py`), wrong graphs of a known kind, given like the true one:
-  - the logger-Markov graph: the smallest parent sets that fit the logger's distribution. It drops
-    the parents a near-deterministic logger makes redundant;
-  - a random graph matched in free parameters;
-  - the true graph + 1 parent (fragmentation only).
-- **baselines:**
-  - flat RMDP (one interval per transition) and flat MDP (the plug-in estimate);
-  - DiFaRL (Ehrlichman et al., CLeaR 2026);
-  - flat SPIBB (Laroche et al., ICML 2019) and SL-SPIBB (Simão & Spaan, IJCAI 2019);
-  - FOCUS (Zhu et al., 2025), in a discrete version;
-  - offline DQN and offline CQL (Kumar et al., NeurIPS 2020).
+Each experiment has two scripts per domain: `<domain>_mdp.py` (point estimates and value iteration, no
+guarantee) and `<domain>_imdp.py` (interval sets and robust value iteration: a promise that is a lower
+bound on the true value with probability at least 1 - δ).
 
-Every baseline's choices and fixed parameters (and how a pilot chose CQL's α and FOCUS's λ) are in the
-docstring of its module in `src/scm_to_mdp/baselines/`. `protocol.py` states the expectations common to
-every domain, and each script states its own (H1–H4). Both were written before any run, with their
-reasons from the literature.
+- **Experiment 1** (`experiments/exp1/`): is causal discovery better than assuming the full factored
+  graph? PCMCI+ and DYNOTEARS against full-fact (every state and action variable a parent of every
+  next-state variable, no same-step edge), the true graph and the flat model. The discovered graphs
+  are also scored against the true one: recall (true edges found), precision (found edges that are
+  true), SHD and SID.
+- **Experiment 2** (`experiments/exp2/`): ours (PCMCI+ and DYNOTEARS) against DiFaRL, FOCUS, SL-SPIBB
+  (Simão & Spaan) and offline DQN.
 
-| Script | Size | Knob | Hidden variable (never in the data; one child) |
-|---|---|---|---|
-| `sysadmin_complete.py` | N = 2–10 machines | ring / bidirectional / star / ring+crash | a storm on machine 0 |
-| `sepsis_complete.py` | vitals: 2 / 3 / 4 | diabetes: absent / observed / hidden | diabetes (persistent: the limit case) |
-| `chemistry_complete.py` | objects: 4–7 | graph density: 0 / 0.4 / 1 | a catalyst of one reaction |
-| `aircraft_complete.py` | 8x6, 12x8, 15x15 | proximity on / off | turbulence on the own altitude |
-| `drone_complete.py` | side 3–6, 1 or 2 drones | gust: calm / gust | a gust on drone 0's y |
-| `stock_complete.py` | 2x2 … 3x3 sectors x stocks | coupling 0.8 / 0.4 | news on stock s0_0 |
-| `frozenlake_complete.py` | 4x4 / 8x8, 1 or 2 agents | wind: calm / wind | wind on agent 0's row |
-| `coffee_complete.py` | coffee, coffee+snack | – | none (the readable graph; a 0/1 domain) |
-| `taxi_complete.py` | deterministic / noisy | – | none (the limit case: context-specific structure) |
-
-The loggers of every grid (`Env.behaviour`, exact tables over the full state):
-- **uniform:** every action equally likely;
-- **expert ε = 0.05:** the best policy over the observed state, with a uniform action w.p. 0.05;
-- **expert ε = 0:** the thinnest coverage;
-- **confounded:** the expert, but when the hidden variable is on it takes one action w.p. 0.95.
-
-A hidden variable fresh at every step is on w.p. 0.1 in the data and w.p. 0.3 / 0.6 at deployment
-(the shift). Every row also holds the logger's coverage (`C_star`, `C_all_bound`, `unvisited_pairs`)
-and confounding bias (`bias_max`, `bias_mean`), computed exactly in `scm_to_mdp/behaviour.py`, and
-the true value of the behaviour policy (`V_logger`, the reference for SPIBB).
+Every script runs on its own, by name, from any folder (`experiments/run.py`), or directly:
 
 ```bash
-.venv/bin/python experiments/exp1/sepsis_complete.py                 # a new run
-.venv/bin/python experiments/exp1/sepsis_complete.py --resume        # continue the latest run
-.venv/bin/python experiments/exp1/sepsis_complete.py --report-only   # tables and figures of the latest run
-.venv/bin/python experiments/exp1/calibration.py                     # 100 seeds on small settings: does 1 - delta hold?
-.venv/bin/python experiments/exp1/claims_report.py results/exp1/<run>  # claim-by-claim figures and tables (summary/claims/)
+.venv/bin/python experiments/run.py --list                         # every script
+.venv/bin/python experiments/run.py exp1 sepsis imdp --show        # what it would run, without running it
+.venv/bin/python experiments/run.py exp1 sepsis imdp               # a new run
+.venv/bin/python experiments/run.py exp1 sepsis imdp --resume      # continue the latest run
+.venv/bin/python experiments/run.py exp2 taxi mdp --report-only    # tables and figures of the latest run
+.venv/bin/python experiments/exp1/sysadmin_imdp.py --workers 6     # the same, calling the script itself
+bash experiments/run_chain.sh exp1                                 # every script of experiment 1, in sequence
+.venv/bin/python experiments/calibration.py                        # does 1 - δ hold? 60 seeds, smallest sizes
 ```
 
-Every run gets its own folder, `results/exp1/<name>_<date>_<time>/`, so no run overwrites another;
-`--resume FOLDER` and `--report-only FOLDER` pick an older one (`tool/runs.py`). A run writes
-`results.csv` row by row, so a stopped run resumes where it stopped (with `--resume`). The grid report
-(`summary/`) adds three tables:
-- `validity.csv`: the share of seeds whose promise held, with a Clopper–Pearson interval and a verdict
-  against 1 − δ;
-- `coverage.csv`: the coverage of the best policy's rows;
-- `box_looseness.csv`.
+Ten seeds cannot confirm δ = 0.05 (with no failure, the 95% upper bound on the failure rate is still
+0.26), so `experiments/calibration.py` runs the → IMDP arms of experiment 1 with 60 seeds on the two
+smallest sizes of every domain; `summary/validity.csv` gives the verdict against 1 − δ per cell.
+
+Every run gets its own folder, `results/<experiment>/<domain>_<kind>_<date>_<time>/`, so no run
+overwrites another; `--resume FOLDER` and `--report-only FOLDER` pick an older one (`tool/runs.py`). A
+run writes `results.csv` row by row, so a stopped run resumes where it stopped (with `--resume`).
+Figures are written as PDF (vector) and PNG (500 dpi), without titles, for the paper.
+
+The earlier designs (`experiments/exp1_wrong/`, `experiments/trials_wrong/`) are kept on disk only
+(git-ignored).
 
 For the first seed, every method's learned model is saved at every size and at the largest number of
-rollouts, in `<setting>/models/<size>/n=<n>/<method>/` (`tool/store.py`):
+episodes, in `<setting>/models/<size>/n=<n>/<method>/` (`tool/store.py`):
 - `model.npz`: the model the solver used, the policy and its promise (`load_model(folder)` reads it
   back);
 - `cbn.json`: the learned causal Bayesian network (graph, counts, estimates and intervals of every
@@ -152,8 +157,8 @@ rollouts, in `<setting>/models/<size>/n=<n>/<method>/` (`tool/store.py`):
   the true MDP is drawn next to it.
 
 The data determine a causal Bayesian network, not a structural causal model: many SCMs induce the same
-network, and the network is what the pipeline uses. To change a grid, edit the constants at the top of
-its script (`SIZES`, `N_ROLLOUTS`, `LIMITS`) or of `protocol.py`. If you change anything other than
+network, and the network is what the pipeline uses. To change a grid, edit `experiments/domains.py` (a domain),
+`experiments/common.py` (data, budget) or the experiment's `protocol.py` (methods). If you change anything other than
 adding sizes, seeds or budgets, use a new output folder: otherwise the old rows are kept and mixed with
 the new ones.
 
@@ -262,16 +267,17 @@ Baselines are dashed, ours solid, the references (true graph) dotted; methods wi
 | `src/scm_to_mdp/data.py` | `DataSpec`: table of transitions → `Dataset`, with checks |
 | `src/scm_to_mdp/ground_truth.py` | `MDPGroundTruth`, `from_factored`, the size check |
 | `src/scm_to_mdp/envs/` | `SysAdmin(n, seed, topology, repair_cost)`, `Sepsis(size, hide_diabetes=...)`, `Coffee(size)`, `Chemistry(density, seed)`, `Taxi(size)`, with `spec()`, `ground_truth()`, `sample(rollouts, horizon, policy)`, `hide(df)` |
-| `src/scm_to_mdp/discovery/` | S2: `bic_search`, `pcmci_plus`, `ges`, `dynotears`, `oracle` → `Candidates`; `controls` (the control graphs of the evaluation) |
+| `src/scm_to_mdp/discovery/` | S2: `bic_search`, `pcmci_plus`, `ges`, `dynotears`, `oracle`, `full_factored` → `Candidates`; `controls` (the control graphs of the evaluation) |
 | `src/scm_to_mdp/selection/` | S3: `bic_best` (best BIC in the class; ties: transition BIC, then a fixed order), `given` |
 | `src/scm_to_mdp/scm_learning/` | S4: `nbn_intervals`, a Clopper–Pearson interval per factor row with a union bound |
 | `src/scm_to_mdp/compilation/` | S7: `product_bounds`, factor intervals → their box, an interval MDP (the relaxation the box solvers use in S8) |
 | `src/scm_to_mdp/solving/` | S8: `value_iteration`, `robust_vi`, `vertex_robust_vi` (`tol` = distance to the fixed point, `stopping.py`) |
 | `src/scm_to_mdp/baselines/` | `flat_mdp`, `flat_rmdp`, `difarl`, `offline_q` (offline DQN / CQL), `spibb` (flat and SL-SPIBB), `focus` |
-| `src/scm_to_mdp/evaluation.py` | S9: V*, the true value of a policy, promise, safety, SHD and SID, the data's coverage of a task's rows, the learned model against the true kernel |
+| `src/scm_to_mdp/evaluation.py` | S9: V*, the true value of a policy, promise, safety, SHD, SID, recall and precision, the data's coverage of a task's rows, the learned model against the true kernel |
+| `src/scm_to_mdp/robustness.py`, `src/scm_to_mdp/reward_family.py` | S9: the robustness checks of a promise; random rewards on the same dynamics |
 | `src/scm_to_mdp/plotting/` | result figures (from `results.csv`) and pictures of MDPs |
-| `experiments/exp1/` | experiment 1: the protocol (`protocol.py`), one complete grid per domain (table above), `calibration.py` (100 seeds), `claims_report.py` (the figures and tables per claim: A, A3, discovery, B1, B2, C) and `exp_smoke.py` (a check of the installation) |
-| `tests/` | one folder per part (`envs/`, `data/`, `discovery/`, `learning/`, `solving/`, `baselines/`, `evaluation/`, `plotting/`, `tool/`); `tests/tool/test_experiment_scripts.py` checks every grid against the protocol |
+| `experiments/` | `domains.py` (the nine domains), `common.py` (data, budget, evaluation), `exp1/` and `exp2/` (a `protocol.py` with the methods and two scripts per domain), `calibration.py` (60 seeds: does 1 − δ hold?), `run_chain.sh` (run an experiment's scripts in sequence) |
+| `tests/` | one folder per part (`envs/`, `data/`, `discovery/`, `learning/`, `solving/`, `baselines/`, `evaluation/`, `plotting/`, `tool/`); `tests/tool/test_experiment_scripts.py` checks every script against the protocol |
 | `results/` | outputs (git-ignored) |
 
 ## Adding things
@@ -282,5 +288,5 @@ Baselines are dashed, ours solid, the references (true graph) dotted; methods wi
   and `start_distribution`.
 - **A method for a step:** a module in the folder of its step with the same signature as its
   neighbours, plus its name in `tool/methods.py`.
-- **An experiment:** a folder `experiments/expK/` with one config script per environment, like
-  `exp1/sysadmin_complete.py`; results go to `results/expK/<name>/`.
+- **An experiment:** a folder `experiments/expK/` with a `protocol.py` (its methods) and one script
+  per domain and kind, like `exp1/sysadmin_imdp.py`; results go to `results/expK/<name>/`.

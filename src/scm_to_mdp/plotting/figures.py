@@ -21,8 +21,12 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 from matplotlib.lines import Line2D
+from matplotlib.ticker import FuncFormatter
 
+from scm_to_mdp.plotting.stats import iqm_ci
 from scm_to_mdp.plotting.style import FULL_WIDTH, save, setup
+
+RATES = {"safe", "safe_rate", "coverage", "cert_holds"}  # shares of runs: plain means, no band
 
 STEP_TITLES = {"discovery": "Causal discovery", "learning": "Parameter learning", "solve": "Solving"}
 STOPPED = ("timeout", "memout")
@@ -61,16 +65,25 @@ class Axis:
         self.n_seeds = res.groupby("size")["seed"].nunique().reindex(self.order).values
 
     def mean_sem(self, res: pd.DataFrame, method: str, column: str):
-        """Mean and standard error over seeds of one method; NaN where some seed has no value."""
+        """The centre over seeds of one method and its band, per size: the IQM and the distances to the
+        ends of its 95% bootstrap interval ([2, n]: below, above; plotting/stats.py), or for a rate
+        (RATES) the mean and no band. NaN where some seed has no value."""
         sub = res[res["method"] == method]
         if column not in sub or sub[column].isna().all():
             return None, None
-        g = pd.to_numeric(sub[column], errors="coerce").groupby(sub["size"])
-        mean, sem, count = (
-            g.agg(f).reindex(self.order).values.astype(float) for f in ("mean", "sem", "count")
-        )
-        mean[count < self.n_seeds] = np.nan
-        return mean, np.nan_to_num(sem)
+        values = pd.to_numeric(sub[column], errors="coerce")
+        centre = np.full(len(self.order), np.nan)
+        band = np.zeros((2, len(self.order)))
+        for j, size in enumerate(self.order):
+            x = values[sub["size"] == size].to_numpy(float)
+            if len(x) == 0 or np.isfinite(x).sum() < self.n_seeds[j]:
+                continue
+            if column in RATES:
+                centre[j] = x.mean()
+            else:
+                centre[j], lo, hi = iqm_ci(x)
+                band[:, j] = centre[j] - lo, hi - centre[j]
+        return centre, band
 
     def any_true(self, res: pd.DataFrame, method: str, mask: pd.Series) -> np.ndarray:
         rows = res["method"] == method
@@ -97,10 +110,12 @@ def _dodge(methods: list[str], method: str) -> float:
 
 
 def _line(ax, axis: Axis, methods, styles, method, mean, sem, hollow=None):
+    """sem: the band, [2, n] (distances below and above the centre) or [n] (symmetric)."""
     st = styles[method]
     x = axis.x + _dodge(methods, method)
+    below, above = (sem[0], sem[1]) if np.ndim(sem) == 2 else (sem, sem)
     ax.plot(x, mean, ls=st["ls"], marker=st["marker"], color=st["color"], label=st["label"])
-    ax.fill_between(x, mean - sem, mean + sem, color=st["color"], alpha=0.15, lw=0)
+    ax.fill_between(x, mean - below, mean + above, color=st["color"], alpha=0.15, lw=0)
     if hollow is not None and hollow.any():
         ax.plot(
             x[hollow],
@@ -189,7 +204,6 @@ def performance(res, axis: Axis, methods, styles, k: int, title: str, stem):
         label="promise > true value in some state",
     )
     _legend(fig, shown, styles, extra=[hollow])
-    fig.suptitle(title)
     fig.tight_layout(rect=(0, 0.1, 1, 1))
     save(fig, stem)
 
@@ -280,7 +294,6 @@ def performance_normalized(res, axis: Axis, methods, styles, target: float, k: i
     for ax in axes[0]:
         ax.set_xlabel("")  # the x axis is shared: named on the bottom row only
     _legend(fig, shown, styles)
-    fig.suptitle(title)
     fig.tight_layout(rect=(0, 0.08, 1, 1))
     save(fig, stem)
 
@@ -355,7 +368,6 @@ def gated_comparison(res, axis: Axis, methods, styles, delta: float, title: str,
     failed = "promise failed (not gated in)"
     extra = [Line2D([], [], ls="none", marker="x", color="grey", alpha=0.5, label=failed)]
     _legend(fig, shown, styles, extra)
-    fig.suptitle(title)
     fig.tight_layout(rect=(0, 0.1, 1, 1))
     save(fig, stem)
 
@@ -383,7 +395,6 @@ def decision_edges(res, axis: Axis, methods, styles, title: str, stem):
         ax.set_title(panel)
         axis.finish(ax, ylabel)
     _legend(fig, methods, styles)
-    fig.suptitle(title)
     fig.tight_layout(rect=(0, 0.22, 1, 1))
     save(fig, stem)
 
@@ -416,7 +427,6 @@ def transfer_gap(
         ax.set_title(panel)
         axis.finish(ax, ylabel)
     _legend(fig, shown, styles)
-    fig.suptitle(title)
     fig.tight_layout(rect=(0, 0.3, 1, 1))  # room for the legend below the x labels
     save(fig, stem)
 
@@ -453,33 +463,47 @@ def validity(res, axis: Axis, methods, styles, delta: float | None, title: str, 
     for ax in axes[:2]:
         ax.yaxis.set_major_formatter(plt.FuncFormatter(lambda v, _: f"{v:.0%}"))
     _legend(fig, shown, styles)
-    fig.suptitle(title)
     fig.tight_layout(rect=(0, 0.14, 1, 1))
     save(fig, stem)
 
 
 def structure(res, axis: Axis, methods, styles, title: str, stem):
-    """1 x 2: SHD and SID of the selected graph against the true one (methods that learn a graph)."""
+    """2 x 2: recall and precision of the selected graph against the true one (0-100%), then SHD and
+    SID (methods that learn or are given a graph)."""
     setup()
+    res = res.copy()
+    if "recall" not in res and {"missing", "extra", "n_true_edges"} <= set(res):  # runs written before
+        hits = pd.to_numeric(res["n_true_edges"], errors="coerce") - pd.to_numeric(
+            res["missing"], errors="coerce"
+        )
+        found = hits + pd.to_numeric(res["extra"], errors="coerce")
+        res["recall"] = hits / pd.to_numeric(res["n_true_edges"], errors="coerce")
+        res["precision"] = (hits / found).where(found > 0)
     methods = [m for m in methods if axis.mean_sem(res, m, "shd")[0] is not None]
     if not methods:
         return
-    fig, axes = plt.subplots(1, 2, figsize=(FULL_WIDTH, 3.0), sharex=True)
-    for ax, (metric, panel) in zip(
-        axes,
-        [("shd", "Structural Hamming distance (SHD)"), ("sid", "Structural intervention distance (SID)")],
-        strict=True,
-    ):
+    fig, axes = plt.subplots(2, 2, figsize=(FULL_WIDTH, 5.2), sharex=True)
+    panels = [
+        ("recall", "Recall (true edges found)", "recall"),
+        ("precision", "Precision (found edges that are true)", "precision"),
+        ("shd", "Structural Hamming distance (SHD)", "SHD (0 = true graph)"),
+        ("sid", "Structural intervention distance (SID)", "SID (0 = true graph)"),
+    ]
+    for ax, (metric, panel, ylabel) in zip(axes.flat, panels, strict=True):
         for m in methods:
-            mean, sem = axis.mean_sem(res, m, metric)
+            mean, sem = axis.mean_sem(res, m, metric) if metric in res else (None, None)
             if mean is not None:
                 _line(ax, axis, methods, styles, m, mean, sem)
         ax.set_title(panel)
-        ax.set_ylim(bottom=0)
-        axis.finish(ax, metric.upper() + " (0 = true graph)")
+        if metric in ("recall", "precision"):
+            ax.set_ylim(-0.02, 1.02)
+            ax.set_yticks([0, 0.25, 0.5, 0.75, 1.0])
+            ax.yaxis.set_major_formatter(FuncFormatter(lambda v, _: f"{v:.0%}"))
+        else:
+            ax.set_ylim(bottom=0)
+        axis.finish(ax, ylabel)
     _legend(fig, methods, styles)
-    fig.suptitle(title)
-    fig.tight_layout(rect=(0, 0.12, 1, 1))
+    fig.tight_layout(rect=(0, 0.08, 1, 1))
     save(fig, stem)
 
 
@@ -522,7 +546,6 @@ def parameter_learning(res, axis: Axis, methods, styles, delta: float | None, ti
     for ax in axes[0]:
         ax.set_xlabel("")  # the x axis is shared: named on the bottom row only
     _legend(fig, methods, styles)
-    fig.suptitle(title)
     fig.tight_layout(rect=(0, 0.08, 1, 1))
     save(fig, stem)
 
@@ -647,7 +670,6 @@ def resources(res, axis: Axis, methods, styles, unit: str, limits: dict, title: 
                    label=f"stopped by the {'memory' if unit == 's' else 'time'} limit (measured value)")
         )  # fmt: skip
     _legend(fig, shown, styles, extra=extra)
-    fig.suptitle(title)
     fig.tight_layout(rect=(0, 0.16, 1, 1))
     save(fig, stem)
 
@@ -748,6 +770,8 @@ def sample_efficiency(
     (of the rollouts n* and of the transitions t*)."""
     setup()
     summary = summarize_rollouts(rollouts_needed(res, target))
+    if summary.empty:  # no run finished (or no size has V*_obs > 0): nothing to draw
+        return summary
     grid = sample_grid(res)
     top = grid[-1] * 1.8
     axis = Axis(res[res["size"].isin(set(summary["size"]))], sizes, labels, xlabel)

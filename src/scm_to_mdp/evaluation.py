@@ -30,6 +30,9 @@ x_j' -> x_i') against the truth:
           adjustment set: SID counts only the harm of MISSING parents (SID = 0 iff every learned
           parent set contains the true one, the structural condition for the factor intervals to bound
           the true mechanisms).
+    recall      true edges found / true edges (1 - missing / true): no false negatives = recall 1
+    precision   true edges found / edges found (1 - extra / found): no false positives = precision 1;
+                NaN for an empty graph
     action_edges, action_missing, action_recall   the true edges from an action column to a state
           variable, how many the learned graph lacks, and the share it keeps: the edges a planner
           needs to tell actions apart (an SHD of 1 can be the only action edge of a family).
@@ -141,10 +144,13 @@ def structure_distances(graph: Graph, true_parents: dict[str, tuple[str, ...]], 
     truth, guess = adjacency(true_parents, dataset), adjacency(graph.parents, dataset)
     actions = {e for e in true if isinstance(e, tuple) and e[0] in set(dataset.action_vars)}
     kept = len(actions & found)
+    hits = len(found & true)
     return {
         "shd": len(found ^ true),
         "missing": len(true - found),
         "extra": len(found - true),
+        "recall": hits / len(true) if true else float("nan"),
+        "precision": hits / len(found) if found else float("nan"),
         "sid": int(gadjid.sid(truth, guess, edge_direction="from row to column")[1]),
         "action_edges": len(actions),
         "action_missing": len(actions) - kept,
@@ -171,11 +177,13 @@ def optimistic_values(model, gamma: float, tol: float = CERTIFICATE_TOL) -> np.n
 
 
 def certificate(model, truth: MDPGroundTruth, solution: Solution, V_true: np.ndarray, V_star: np.ndarray,
-                gamma: float, starts: np.ndarray) -> dict:  # fmt: skip
+                gamma: float, starts: np.ndarray, V_opt_obs: np.ndarray | None = None) -> dict:  # fmt: skip
     """V_opt and the certificate V_opt - V_rob (see the module docstring); cert_holds over the observed
-    states, with the true values averaged over the hidden part (as safe, in evaluate)."""
+    states, with the true values averaged over the hidden part (as safe, in evaluate). V_opt_obs: the
+    optimistic values if already computed (optimistic_values)."""
     observed = truth.observed_index()
-    V_opt_obs = optimistic_values(model, gamma)
+    if V_opt_obs is None:
+        V_opt_obs = optimistic_values(model, gamma)
     V_opt = V_opt_obs[observed]
     promised = solution.V[observed]
     cert = V_opt - promised
@@ -248,6 +256,8 @@ def interval_metrics(model, dataset: Dataset, truth: MDPGroundTruth, gamma: floa
                  the best policy over the observed state (where the width matters for the value)
     s4_coverage  share of the true probabilities P(x_i' = v | s, a) inside their intervals, over
                  every state, action vector, factor and value (validity of S4 on its own)
+    s4_coverage_seen   the same over the (s, a) the data visit (an unseen row is [0, 1] and covers
+                 trivially, which inflates s4_coverage)
     s4_unseen    share of parent rows with no data (their interval is [0, 1])
     s4_rows      number of parent rows (every factor's family; the whole (s, a) grid for flat IMDP)
     The last two come from the learner when it reports them (FactorBounds.info)."""
@@ -258,9 +268,14 @@ def interval_metrics(model, dataset: Dataset, truth: MDPGroundTruth, gamma: floa
     inside = (lo <= P + 1e-9) & (P <= hi + 1e-9)
     width = ((hi - lo) * valid).sum((-2, -1)) / valid.sum()  # [S, K]
     w = optimal_occupancy(truth, dataset, gamma)
+    s_logged = dataset.state_index(dataset.df[dataset.state_vars].to_numpy())
+    K = lo.shape[1]
+    visits = np.bincount(s_logged * K + dataset.action_index(), minlength=lo.shape[0] * K).reshape(-1, K)
+    seen = inside[visits > 0]  # [rows seen, n, C]
     out = {
         "s4_width": float((w * width).sum() / w.sum()) if w.sum() > 0 else float("nan"),
         "s4_coverage": float(inside[..., valid].mean()),
+        "s4_coverage_seen": float(seen[:, valid].mean()) if len(seen) else float("nan"),
     }
     info = getattr(model, "info", {}) or {}
     if "s4_rows" in info:
@@ -377,7 +392,8 @@ def model_errors(model, truth: MDPGroundTruth, dataset: Dataset, gamma: float) -
         kl_<w>     KL(P || P_hat) in nats (the point models are smoothed; inf where P_hat = 0 < P)
     Interval models:
         contain_<w>   share of rows with L <= P <= U entry-wise (the event a robust promise relies on)
-        contain_all   every row contains the true one
+        contain_all   every row contains the true one (the event E every promise relies on)
+        contain_all_seen   every row with data contains the true one
         width_seen, width_unseen   mean total width sum_s' (U - L) over rows with / without data
     A FactorBounds enters as its box (tightened factor intervals, products over the factors); one with
     same-step parents only when small enough to compile. Action vectors absent from the data are not in
@@ -440,6 +456,7 @@ def model_errors(model, truth: MDPGroundTruth, dataset: Dataset, gamma: float) -
         on = live[:, None] & np.ones((S, K), dtype=bool)
         out["contain_all"] = bool(inside[on].all())
         seen = on & (visits > 0)
+        out["contain_all_seen"] = bool(inside[seen].all()) if seen.any() else True
         out["width_seen"] = float(width[seen].mean()) if seen.any() else float("nan")
         out["width_unseen"] = float(width[on & ~seen].mean()) if (on & ~seen).any() else float("nan")
     return out

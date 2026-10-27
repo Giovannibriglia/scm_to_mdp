@@ -30,6 +30,7 @@ ARM_STYLE = {
     "BIC -> IMDP (hull)": {"color": "#332288", "marker": "o"},
     "BIC -> IMDP (padded)": {"color": "#332288", "marker": "s"},
     "oracle -> IMDP": {"color": "#404040", "marker": "D"},  # the true observed MDP (baselines/true_model.py)
+    "full-fact -> IMDP": {"color": "#0072B2", "marker": "^"},  # no discovery: every input a parent
 }
 ARM_LABEL = {
     "BIC -> IMDP": "BIC → IMDP",
@@ -41,12 +42,15 @@ ARM_LABEL = {
     "true graph -> IMDP": "true graph → IMDP",
     "Schnitzer exact": "Schnitzer et al., exact (true graph)",
     "flat IMDP": "flat IMDP",
-    "flat MDP": "flat MDP (no guarantee)",
-    "DiFaRL": "DiFaRL (no guarantee)",
+    "flat MDP": "flat MDP",
+    "DiFaRL": "DiFaRL",
+    "full-fact -> IMDP": "full-fact → IMDP",
+    "full-fact -> MDP": "full-fact → MDP",
     "oracle -> IMDP": "oracle → IMDP (true MDP ± tol)",
     "oracle -> MDP": "oracle → MDP (true MDP)",
 }
 FULL_WIDTH = 7.0  # inches, a two-column paper's text width
+DPI = 500  # PNG resolution (the PDF is vector)
 ROLE_LINE = {
     "ours": "-",
     "oracle": ":",
@@ -73,7 +77,7 @@ def method_styles(methods: dict[str, tuple[str, bool]]) -> dict[str, dict]:
             colour = EXTRA_COLOURS[extra % len(EXTRA_COLOURS)]
             marker = EXTRA_MARKERS[extra % len(EXTRA_MARKERS)]
             extra += 1
-        label = ARM_LABEL.get(name, (name if guarantee else f"{name} (no guarantee)").replace("->", "→"))
+        label = ARM_LABEL.get(name, name.replace("->", "→"))  # the line style tells the guarantee
         no_guarantee = role in ("ours", "reference", "oracle") and not guarantee  # X -> MDP
         ls = NO_GUARANTEE_LINE if no_guarantee else ROLE_LINE.get(role, "-")
         styles[name] = {"color": colour, "marker": marker, "ls": ls, "label": label, "role": role}
@@ -106,5 +110,5 @@ def save(fig, stem: Path):
     """Write stem.pdf and stem.png."""
     stem.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(stem.with_suffix(".pdf"))
-    fig.savefig(stem.with_suffix(".png"), dpi=300)
+    fig.savefig(stem.with_suffix(".png"), dpi=DPI)
     plt.close(fig)

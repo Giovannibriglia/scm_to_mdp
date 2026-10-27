@@ -25,13 +25,15 @@ With a ground truth (MDPGroundTruth), every value is exact:
                      (evaluation.model_errors; every model-based method)
     lcov_factor_1, lcov_alt   coverage of the best policy's rows with the method's LEARNED parents
                      (evaluation.coverage; the method-independent cov_* use the true parents)
+    bracket_holds, bracket_width, opt_holds, cert_residual, pfail_up, pfail_true, pfail_holds
+                     the robustness checks of a promise (robustness.py; methods with a guarantee)
 Without a ground truth only the promise is known, at the empirical start (the first state of every
 rollout in the data).
 """
 
 import numpy as np
 
-from scm_to_mdp import evaluation
+from scm_to_mdp import evaluation, robustness
 from scm_to_mdp.core import Dataset, FactorBounds, IntervalMDP
 from scm_to_mdp.ground_truth import MDPGroundTruth
 from scm_to_mdp.tool.methods import ROBUST_SOLVERS, Result
@@ -53,9 +55,11 @@ def evaluate(
     truth: MDPGroundTruth | None = None,
     gamma: float = 0.9,
     starts: np.ndarray | None = None,
+    horizon: int | None = None,
 ) -> dict:
     """The metrics of a solved result (an empty dict if the method stopped before a solution).
-    starts: the k start states (indices) of regret_K and gap_K; default every non-terminal state."""
+    starts: the k start states (indices) of regret_K and gap_K; default every non-terminal state.
+    horizon: the episode length of the failure probabilities (robustness.py; None: not computed)."""
     if result.solution is None:
         return {}
     solution = result.solution
@@ -81,7 +85,14 @@ def evaluate(
         metrics.update({k: learned[k] for k in ("lcov_factor_1", "lcov_alt")})
     if result.method.solver in ROBUST_SOLVERS and isinstance(result.model, (FactorBounds, IntervalMDP)):
         V_true = evaluation.true_values(truth, data, solution, gamma)
-        metrics.update(evaluation.certificate(result.model, truth, solution, V_true, V_target, gamma, starts))
+        V_opt_obs = evaluation.optimistic_values(result.model, gamma)
+        metrics.update(
+            evaluation.certificate(result.model, truth, solution, V_true, V_target, gamma, starts, V_opt_obs)
+        )
+        if result.method.guarantee:  # the promise's robustness checks (robustness.py)
+            metrics.update(
+                robustness.checks(result.model, solution, truth, data, gamma, V_true, V_opt_obs, horizon)
+            )
     return metrics
 
 

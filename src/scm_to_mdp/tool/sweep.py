@@ -70,9 +70,13 @@ import pandas as pd
 import psutil
 from tqdm import tqdm
 
+from scm_to_mdp import evaluation as exact
+from scm_to_mdp import reward_family as rf
+from scm_to_mdp.core import Reward
 from scm_to_mdp.data import first_rollouts
 from scm_to_mdp.evaluation import COVERAGE_COUNTS, actions_absent, coverage, random_starts
 from scm_to_mdp.ground_truth import ModelTooLarge
+from scm_to_mdp.reward_family import RewardFamily
 from scm_to_mdp.solving.stopping import iterations_bound, reward_scale
 from scm_to_mdp.tool import store
 from scm_to_mdp.tool.evaluate import evaluate, reference_values
@@ -90,22 +94,38 @@ VALUES += ["regret_oracle", "optimal_share", "optimal_share_oracle", "gap"]
 VALUES += ["regret_K", "gap_K", "safe", "worst_gap", "violation_rate", "worst_violation"]
 BEHAVIOUR = ["V_logger", "C_star", "C_all_bound", "unvisited_pairs", "bias_max", "bias_mean"]
 TRUE_MODEL = ["n_observed_states", "true_rows", "true_params", "n_true_edges", "true_parents"]
-STRUCTURE = ["shd", "missing", "extra", "sid", "candidates", "dags", "tied", "intra_next", "groups"]
+STRUCTURE = [
+    "shd",
+    "missing",
+    "extra",
+    "recall",
+    "precision",
+    "sid",
+    "candidates",
+    "dags",
+    "tied",
+    "intra_next",
+    "groups",
+]
 STRUCTURE += ["parents", "action_edges", "action_missing", "action_recall"]
 CERTIFICATE = ["V_opt", "cert_gap", "cert_gap_K", "cert_holds"]  # robust methods (evaluation.certificate)
-SETS = CERTIFICATE + ["s4_width", "s4_coverage", "s4_unseen", "s4_rows", "widen", "added_parents"]  # S4
+SETS = CERTIFICATE + ["s4_width", "s4_coverage", "s4_coverage_seen", "s4_unseen", "s4_rows", "widen"]
+SETS += ["added_parents"]  # S4
+# the promise's robustness checks (robustness.py; methods with a guarantee)
+ROBUSTNESS = ["bracket_holds", "bracket_width", "opt_holds", "cert_residual", "pfail_up", "pfail_true"]
+ROBUSTNESS += ["pfail_holds"]
 # the data's coverage of the best policy's rows (true parents; evaluation.coverage) and of the actions
 COVERAGE = [f"cov_{kind}_{k}" for k in COVERAGE_COUNTS for kind in ("joint", "factor")]
 COVERAGE += ["cov_alt", "actions_absent", "lcov_factor_1", "lcov_alt"]
 # the learned model against the true kernel (evaluation.model_errors)
 ERRORS = [f"{m}_{w}" for m in ("tv", "kl", "contain") for w in ("data", "task", "uniform")]
-ERRORS += ["contain_all", "width_seen", "width_unseen"]
+ERRORS += ["contain_all", "contain_all_seen", "width_seen", "width_unseen"]
 # Every value a row may hold must be listed here: _write keeps exactly these columns.
 COLUMNS = KEYS + METHOD + STATUS + STEP_COLUMNS + VALUES + BEHAVIOUR + TRUE_MODEL + STRUCTURE + SETS
-COLUMNS += COVERAGE + ERRORS
+COLUMNS += COVERAGE + ERRORS + ROBUSTNESS + rf.COLUMNS  # rf_*: random rewards (reward_family.py)
 # results_transfer.csv (reward transfer): the same, one row per task too
 TRANSFER_COLUMNS = KEYS + ["task"] + METHOD + STATUS + STEP_COLUMNS + VALUES + STRUCTURE + SETS
-TRANSFER_COLUMNS += COVERAGE + ERRORS
+TRANSFER_COLUMNS += COVERAGE + ERRORS + ROBUSTNESS
 SHIFT = "same reward"  # the reward of a dynamics-shift task (run_point): no re-planning
 NO_PROMISE = ["promise", "gap", "gap_K", "safe", "worst_gap", "violation_rate", "worst_violation"]
 
@@ -135,6 +155,9 @@ class Experiment:
     # dynamics (e.g. a hidden disturbance more frequent at deployment); every learned policy is
     # evaluated there as it is (no re-learning, no re-planning), rows in results_shift.csv
     shifts: Callable[[Any, int], dict] | None = None
+    # random rewards on the same dynamics (reward_family.py): every model re-planned under each, the
+    # summary in the rf_* columns of results.csv
+    reward_family: RewardFamily | None = None
     knob: str = ""  # label of the setting (e.g. "topology=ring"), written in every row
     policy: str = ""  # label of the behaviour policy, written in every row
     behaviour: Callable[[Any], np.ndarray] | None = None  # env -> logger table [S, A] (coverage, bias)
@@ -227,6 +250,9 @@ def run_point(exp: Experiment, size, seed: int, stopped_from: dict) -> list[dict
                 raise ValueError(f"shift {shift}: the observed states differ from the original's")
             shift_ref = {"n_states": truth.n_states, **reference_values(shift_truth, exp.gamma, starts)}
             tasks[shift] = (shift_truth, SHIFT, shift_ref)
+        family = exp.reward_family
+        covered = family is not None and family.covers(truth.learner_spec.n_states)
+        random_tasks = _random_tasks(exp, truth, table, starts, seed) if covered else []
     except (ModelTooLarge, MemoryError) as err:  # the true model does not fit: nothing can be evaluated
         return _rows_without_runs(exp, size, seed, "too_large", "setup", str(err) or "MemoryError")
     except Exception as err:  # noqa: BLE001 - reported in the rows, the sweep goes on
@@ -263,9 +289,11 @@ def run_point(exp: Experiment, size, seed: int, stopped_from: dict) -> list[dict
                 result.info["solve_limit_s"] = limits.timeout_s.get("solve")
             graph = {"parents": json.dumps(result.graph.parents)} if result.graph is not None else {}
             try:
-                metrics = evaluate(result, data, truth, exp.gamma, starts)
+                metrics = evaluate(result, data, truth, exp.gamma, starts, exp.horizon)
             except Exception as err:  # noqa: BLE001 - reported in the row, the sweep goes on
                 metrics = {"status": "error", "failed_step": "evaluate", "error": repr(err)}
+            if random_tasks and exp.reward_family.evaluated_at(n):
+                metrics |= _random_reward_metrics(exp, result, data, random_tasks, limits, starts, seed)
             rows.append({**point, "method": name, **result.row(), **metrics, **graph})
             for task, (task_truth, task_reward, task_ref) in tasks.items():
                 context = (exp, base, task_ref, n, len(df), task, name, result, data)
@@ -359,6 +387,50 @@ def _transfer_row(exp, base, task_ref, n, transitions, task, name, result, data,
     return {**point, **replanned.row(), **metrics, **graph}
 
 
+def _random_tasks(exp: Experiment, truth, table: pd.DataFrame, starts, seed: int) -> list:
+    """The random rewards of one (size, seed) (reward_family.draw), each with its ground truth and the
+    reference values at the start: [(task, ground truth, V*_obs, V_rand)]."""
+    full = truth.learner_spec.read(table)  # the whole data table: the original terminals and the visits
+    visits = np.bincount(full.state_index(full.df[full.state_vars].to_numpy()), minlength=len(full.B))
+    terminal = np.asarray(full.reward.terminal, dtype=bool)
+    tasks = rf.draw(exp.reward_family, full.B, full.state_cards, terminal, truth.P.shape[1], visits, seed)
+    observed = truth.observed_index()
+    out = []
+    for task in tasks:
+        on_truth = task.for_truth(observed)  # over the full states
+        on_observed = Reward(task.R, task.r_next, task.terminal)  # over the observed states
+        task_truth = truth.with_reward(lambda B, a, r=on_truth: r, lambda B, a, r=on_observed: r)
+        ref = reference_values(task_truth, exp.gamma, starts)
+        out.append((task, task_truth, ref["V_star_obs"], ref["V_random"]))
+    return out
+
+
+def _random_reward_metrics(
+    exp: Experiment, result, data, random_tasks: list, limits, starts, seed: int
+) -> dict:
+    """The rf_* columns of one run: result re-planned (not re-learned) under every random reward
+    (methods.replan), its promise checked and its true value normalised (reward_family.metrics)."""
+    if not result.ok or result.solution is None:
+        return {}
+    true_actions = random_tasks[0][1].actions_of(data)  # the learner's action vectors, as true actions
+    outcomes = []
+    for task, task_truth, V_best, V_rand in random_tasks:
+        task_data = rf.with_task(data, task, true_actions)
+        replanned = replan(result, task_data, exp.gamma, limits, seed=seed)
+        if not replanned.ok or replanned.solution is None:
+            continue
+        _, V_target = task_truth.observed_optimal(exp.gamma)
+        m = exact.evaluate(task_truth, task_data, replanned.solution, exp.gamma, V_target, starts)
+        no_promise = np.isnan(replanned.solution.V).all()  # a model-free method keeps its policy
+        span = V_best - V_rand
+        outcomes.append({
+            "family": task.family,
+            "safe": float("nan") if no_promise else m["safe"],
+            "value": (m["true"] - V_rand) / span if span > 0 else float("nan"),
+        })  # fmt: skip
+    return rf.metrics(outcomes)
+
+
 def _guarded(where, fn, *args):
     """Saving a model or a picture must never stop a sweep."""
     try:
@@ -394,6 +466,7 @@ def _config(exp: Experiment) -> dict:
             },
         }
         | ({"reward_transfer": True} if exp.reward_transfer else {})
+        | ({"reward_family": asdict(exp.reward_family)} if exp.reward_family else {})
         | (  # only when on: older runs resume
             {"shifts": True} if exp.shifts is not None else {}
         )

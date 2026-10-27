@@ -38,6 +38,12 @@ Every table is built from lower levels only, and every level is saved in <out_di
                            promise) due to the box; mean over the seeds
            coverage.csv    per (knob, policy, size, n_rollouts): the data's coverage of the best
                            policy's rows (cov_*, evaluation.coverage), mean over the seeds
+           robustness.csv  per (knob, policy, n_rollouts, method with a promise), over sizes and
+                           seeds: the share of runs where each check held (ROBUSTNESS_CHECKS:
+                           robustness.py, reward_family.py), the IQM of bracket_width and of the
+                           normalised value over random rewards, the smallest cert_residual, and
+                           `bugs`: runs whose learned set contains the truth (contain_all) and yet a
+                           check failed (0 expected: see robustness.py)
   level 3  best_method.csv per (knob, policy, size): the method with the fewest rollouts among those
                            whose promise held in >= 95% of the cell's runs
            method_rank.csv mean rank of every method's n* over the cells, and how often it is best
@@ -56,13 +62,15 @@ import pandas as pd
 
 from scm_to_mdp.plotting import grid_figures
 from scm_to_mdp.plotting.figures import rollouts_needed, sample_grid, samples_label, summarize_rollouts
+from scm_to_mdp.plotting.stats import iqm
 from scm_to_mdp.plotting.style import method_styles
 from scm_to_mdp.tool.report import ROLE_ORDER, report
 from scm_to_mdp.tool.sweep import read_results
 
 SETTING = ["knob", "policy"]
 METRICS = ["optimal_share", "regret", "norm_regret", "gap", "safe", "violation_rate", "worst_violation"]
-METRICS += ["missing_share", "extra_per_variable", "shd", "sid", "discovery_s", "learning_s", "solve_s"]
+METRICS += ["recall", "precision", "missing_share", "extra_per_variable", "shd", "sid"]
+METRICS += ["discovery_s", "learning_s", "solve_s"]
 METRICS += [f"{m}_{w}" for m in ("tv", "kl", "contain") for w in ("data", "task", "uniform")]
 METRICS += ["width_seen", "width_unseen", "lcov_factor_1", "lcov_alt", "cert_gap"]
 BOX, PRODUCT = "true graph -> IMDP", "true graph -> factored IMDP (per-(s,a) product)"
@@ -83,6 +91,9 @@ def load_runs(out_dir: Path) -> tuple[dict, pd.DataFrame]:
     n_vars = runs["true_parents"].map(lambda j: len(json.loads(j)) if isinstance(j, str) else np.nan)
     runs["missing_share"] = runs["missing"] / runs["n_true_edges"]
     runs["extra_per_variable"] = runs["extra"] / n_vars
+    hits = runs["n_true_edges"] - runs["missing"]  # recall and precision of the learned graph
+    runs["recall"] = hits / runs["n_true_edges"]
+    runs["precision"] = (hits / (hits + runs["extra"])).where(hits + runs["extra"] > 0)
     return grid, runs
 
 
@@ -201,6 +212,41 @@ def validity_table(runs: pd.DataFrame, delta: float) -> pd.DataFrame:
         "conditional",
     ]
     return pd.DataFrame(rows, columns=columns)
+
+
+ROBUSTNESS_CHECKS = {  # column -> what it says (shares of runs in robustness.csv and its figure)
+    "safe": "promise held",
+    "contain_all": "set contains the truth",
+    "bracket_holds": "value bracket held",
+    "opt_holds": "optimistic bound held",
+    "rf_safe_all": "promise held for every random reward",
+    "pfail_holds": "failure bound held",
+}
+IMPLIED_BY_CONTAINMENT = ("safe", "bracket_holds", "opt_holds", "rf_safe_all", "pfail_holds")
+
+
+def robustness_table(runs: pd.DataFrame) -> pd.DataFrame:
+    keys = SETTING + ["n_rollouts", "method"]
+    done = runs[(runs["status"] == "ok") & runs["guarantee"].astype(bool)].copy()
+    checks = [c for c in ROBUSTNESS_CHECKS if c in done]
+    for c in checks:
+        done[c] = pd.to_numeric(
+            done[c].map({True: 1.0, False: 0.0, "True": 1.0, "False": 0.0}), errors="coerce"
+        )
+    rows = []
+    for key, g in done.groupby(keys, sort=False):
+        row = dict(zip(keys, key, strict=True)) | {"runs": len(g)}
+        row |= {f"{c}_share": g[c].mean() for c in checks}
+        inside = g["contain_all"] == 1 if "contain_all" in g else pd.Series(False, index=g.index)
+        failed = pd.concat([g[c] == 0 for c in IMPLIED_BY_CONTAINMENT if c in g], axis=1).any(axis=1)
+        row["bugs"] = int((inside & failed).sum())
+        for c in ("bracket_width", "rf_value_mean"):
+            if c in g:
+                row[f"{c}_iqm"] = iqm(pd.to_numeric(g[c], errors="coerce"))
+        if "cert_residual" in g:
+            row["cert_residual_min"] = pd.to_numeric(g["cert_residual"], errors="coerce").min()
+        rows.append(row)
+    return pd.DataFrame(rows)
 
 
 def box_looseness(runs: pd.DataFrame) -> pd.DataFrame:
@@ -323,6 +369,7 @@ def report_grid(out_dir, target: float = 0.95, delta: float | None = 0.05, setti
         "validity": validity_table(runs, delta if delta is not None else 0.05),
         "box_looseness": box_looseness(runs),
         "coverage": coverage_table(runs),
+        "robustness": robustness_table(runs),
         "best_method": best,
         "method_rank": rank,
     }
@@ -371,11 +418,13 @@ def report_grid(out_dir, target: float = 0.95, delta: float | None = 0.05, setti
     figure("promise_heatmap", heat.reset_index(), lambda stem: grid_figures.promise_heatmap(heat, name, stem))
     if learned_graph:
         done = runs[(runs["status"] == "ok") & runs["method"].isin(learned_graph)]
-        curves = done.groupby(SETTING + ["n_rollouts", "method"])[["missing_share", "extra_per_variable"]]
-        curves = curves.mean().reset_index()
+        columns = ["recall", "precision", "missing_share", "extra_per_variable"]
+        curves = done.groupby(SETTING + ["n_rollouts", "method"])[columns].agg(iqm).reset_index()
         samples = pd.to_numeric(runs["transitions"], errors="coerce").groupby(runs["n_rollouts"]).mean()
         curves["transitions"] = curves["n_rollouts"].map(samples)
         for column, ylabel in [
+            ("recall", "recall (true edges found)"),
+            ("precision", "precision (found edges true)"),
             ("missing_share", "share of true edges missed"),
             ("extra_per_variable", "extra edges per variable"),
         ]:
@@ -386,6 +435,20 @@ def report_grid(out_dir, target: float = 0.95, delta: float | None = 0.05, setti
                     curves, knobs, grid["knob_name"], policies, learned_graph, styles, c, y, name, stem
                 ),
             )
+    robust = tables["robustness"]
+    if len(robust) and guaranteed:
+        samples = pd.to_numeric(runs["transitions"], errors="coerce").groupby(runs["n_rollouts"]).mean()
+        robust = robust.assign(transitions=robust["n_rollouts"].map(samples))
+        shown = {  # the checks with at least one value (e.g. no failure bound without failure states)
+            c: label
+            for c, label in ROBUSTNESS_CHECKS.items()
+            if f"{c}_share" in robust and robust[f"{c}_share"].notna().any()
+        }
+        figure(
+            "robustness",
+            robust,
+            lambda stem: grid_figures.check_rates(robust, guaranteed, styles, shown, stem),
+        )
     if "C_star" in behaviour:
         cov = by_seed.merge(behaviour[SETTING + ["size", "seed", "C_star"]], on=SETTING + ["size", "seed"])
         figure(
