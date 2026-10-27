@@ -20,7 +20,7 @@ import sys
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
-EXPERIMENTS = ("exp1", "exp2")
+EXPERIMENTS = ("exp1", "exp2", "exp1_smoke", "exp2_smoke")
 KINDS = ("mdp", "imdp")
 
 
@@ -37,15 +37,16 @@ def show(experiment: str, stem: str) -> None:
     for knob, values in sizes.items():
         print(f"  {grid.knob_name} = {knob}: {grid.size_name} in {list(values)}")
     print(
-        f"  episodes {grid.n_rollouts} of {grid.horizon} steps, {len(grid.seeds)} seeds, gamma {grid.gamma}"
+        f"  transitions {grid.n_transitions} (episodes of at most {grid.horizon} steps), "
+        f"{len(grid.seeds)} seeds, gamma {grid.gamma}"
     )
     logger = [p.label for p in grid.policies]
     print(f"  logger {logger}, evaluation at the start and from {grid.n_starts} random starts")
     print(f"  methods: {', '.join(grid.methods)}")
     if grid.reward_family is not None:
         f = grid.reward_family
-        at = list(f.n_rollouts) if f.n_rollouts else "every number of"
-        print(f"  random rewards: {f.per_family} per family {list(f.families)}, at {at} episodes")
+        at = list(f.n_transitions) if f.n_transitions else "every budget of"
+        print(f"  random rewards: {f.per_family} per family {list(f.families)}, at {at} transitions")
     print(f"  alternative rewards: {'yes' if grid.reward_transfer else 'no'}")
     print(
         f"  limits: {grid.limits}; solve <= {grid.solve_factor} x the oracle (floor {grid.solve_floor_s:g} s)"

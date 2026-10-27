@@ -1,8 +1,10 @@
 """What experiments 1 and 2 share (S1, S9): the data, the budget, the evaluation and how a script runs.
 
     logger      the uniform-random behaviour policy only (every action tried in every visited state)
-    data        N_EPISODES episodes of HORIZON steps per dataset (the figures count transitions:
-                episodes x HORIZON, less where an episode ends early), SEEDS seeds
+    data        a budget of N_TRANSITIONS logged transitions per dataset (the first n transitions of one
+                table, so the datasets are nested); the logger plays whole episodes of at most HORIZON
+                steps (a domain may set its own, domains.Domain.horizon), and an episode that ends
+                early is simply shorter; the episode where the budget ends is cut. SEEDS seeds
     evaluation  in the MDP the data come from, with the same reward: at the nominal start and from
                 N_STARTS random starts (no reward transfer, no dynamics shift)
     budget      LIMITS per step of a method (memory 8 GB); solving is limited relative to the oracle:
@@ -12,7 +14,7 @@
                 the stopping rule may need at the rate gamma) (tool/sweep.py)
     robustness  for the methods with a promise (scm_to_mdp/robustness.py): the value bracket, the
                 optimistic bound, a one-sweep check of the promise and, where a domain has failure
-                states, the probability of failing within HORIZON steps
+                states, the probability of failing within one episode (HORIZON steps)
     rewards     where an experiment asks for it (experiment 1, Sepsis): every method re-planned under
                 REWARD_FAMILY's random rewards and the domain's own alternative rewards
                 (scm_to_mdp/reward_family.py: does the promise hold for every reward at once?)
@@ -44,8 +46,8 @@ from scm_to_mdp.tool import (
 warnings.filterwarnings("ignore", category=FutureWarning)
 
 ROOT = Path(__file__).resolve().parents[1]
-HORIZON = 256  # steps per episode
-N_EPISODES = [1, 2, 5, 10, 20, 50, 100, 200, 500, 1000, 2000, 5000, 10000]
+N_TRANSITIONS = [10, 20, 50, 100, 200, 500, 1000, 2000, 5000, 10000]  # the data budgets
+HORIZON = 256  # the longest episode the logger plays (when the domain sets none)
 SEEDS = list(range(10))
 N_STARTS = 20  # random starts of the evaluation (besides the nominal start)
 DELTA = 0.05  # confidence of the interval sets (S4)
@@ -57,14 +59,14 @@ LIMITS = Limits(  # per step of a method, every domain; "solve": the fallback wh
 )  # fmt: skip
 SOLVE_FACTOR = 3.0
 SOLVE_FLOOR_S = 300.0
-SAVE_MODELS = "all"  # the models (and pictures) of the first seed at every number of episodes
+SAVE_MODELS = "all"  # the models (and pictures) of the first seed at every budget
 POLICIES = [Policy("uniform")]
 # random rewards on the same dynamics, for the grids that ask for them (grid(..., rewards=True)):
 # per_family rewards of each family (dense, sparse, noise, stress), every learned model re-planned
-# under each (one solve per reward: about 55 s per IMDP solve at 2,048 states). n_rollouts: the
-# numbers of episodes evaluated (None: every one of N_EPISODES); max_states: skip larger problems
+# under each (one solve per reward: about 55 s per IMDP solve at 2,048 states). n_transitions: the
+# budgets evaluated (None: every one of N_TRANSITIONS); max_states: skip larger problems
 # (None: every size)
-REWARD_FAMILY = RewardFamily(per_family=5, n_rollouts=None, max_states=None)
+REWARD_FAMILY = RewardFamily(per_family=5, n_transitions=None, max_states=None)
 KINDS = ("mdp", "imdp")  # the scripts' two families: no guarantee (-> MDP) and with a promise (-> IMDP)
 DEEP = ("offline DQN", "offline CQL")
 
@@ -101,9 +103,9 @@ def grid(experiment: str, domain: str, kind: str, names, rewards: bool = False) 
         knob_name=d.knob_name,
         constants=d.constants,
         policies=POLICIES,
-        n_rollouts=N_EPISODES,  # one rollout = one episode of HORIZON steps
+        n_transitions=N_TRANSITIONS,
         seeds=SEEDS,
-        horizon=HORIZON,
+        horizon=d.horizon or HORIZON,
         gamma=d.gamma,
         n_starts=N_STARTS,
         methods=methods(names, d.sl_spibb_parents),

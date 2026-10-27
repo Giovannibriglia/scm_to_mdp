@@ -1,7 +1,7 @@
 """Experiment 1: is causal discovery better than assuming the full factored graph? (S2-S9)
 
-Per domain, two scripts on the same data (experiments/common.py: uniform logger, 1 ... 10k episodes of
-256 steps, 10 seeds, evaluation at the nominal start and from 20 random starts):
+Per domain, two scripts on the same data (experiments/common.py: uniform logger, 10 ... 10k
+transitions, 10 seeds, evaluation at the nominal start and from 20 random starts):
 
     <domain>_mdp.py    point estimates and value iteration, no guarantee:
                        PCMCI+ -> MDP, DYNOTEARS -> MDP (causal discovery), full-fact -> MDP (every slice-t

@@ -70,7 +70,7 @@ def test_dynamics_shift_rows_evaluate_the_same_policy_on_other_dynamics(tmp_path
     from scm_to_mdp.tool import Experiment, run_experiment
 
     exp = Experiment(
-        name="shift", make_env=stormy_sysadmin, collect=random_rollouts, sizes=[3], n_rollouts=[60],
+        name="shift", make_env=stormy_sysadmin, collect=random_rollouts, sizes=[3], n_transitions=[60],
         seeds=[0],
         methods={"BIC -> IMDP": Method("causal", "box_robust_vi", discovery="bic", selection="bic_best"),
                  "BIC -> MDP": Method("causal", "vi", discovery="bic", selection="bic_best")},
@@ -85,5 +85,5 @@ def test_dynamics_shift_rows_evaluate_the_same_policy_on_other_dynamics(tmp_path
     from scm_to_mdp.tool.report import report
 
     report(tmp_path, show=False)
-    assert (tmp_path / "figures" / "shift" / "average" / "episodes=60" / "transfer_gap.png").exists()
+    assert (tmp_path / "figures" / "shift" / "average" / "transitions=60" / "transfer_gap.png").exists()
     assert "# Dynamics shift" in (tmp_path / "tables.md").read_text()

@@ -24,7 +24,7 @@ quick = {{"steps": 300, "hidden": 32}}  # offline DQN: only that it trains insid
 methods = dict(m.GRID.methods)
 if "offline DQN" in methods:
     methods["offline DQN"] = Method("offline_dqn", "greedy_q", solver_options=quick)
-grid = dataclasses.replace(m.GRID, sizes=[{size!r}], knobs=[{knob!r}], n_rollouts=[2, 5], seeds=[1],
+grid = dataclasses.replace(m.GRID, sizes=[{size!r}], knobs=[{knob!r}], n_transitions=[100, 300], seeds=[1],
                            workers=1, out_dir=__import__("pathlib").Path("{out}"), methods=methods)
 run_grid(grid)
 report_grid(grid.out_dir, target=TARGET)
@@ -52,13 +52,13 @@ def load(experiment: str, module: str):
 
 @pytest.mark.parametrize("experiment, module", SCRIPTS)
 def test_every_script_follows_the_protocol(experiment, module):
-    """Uniform logger only, 10 seeds, 1 ... 10k episodes of 256 steps, 20 random starts, the same MDP
-    and reward (no transfer, no shift), the methods of its experiment and kind, and an oracle."""
+    """Uniform logger only, 10 seeds, budgets of 10 ... 10k transitions (episodes of at most 256
+    steps), 20 random starts, the same MDP, the methods of its experiment and kind, and an oracle."""
     m, protocol, common = load(experiment, module)
     grid, kind = m.GRID, module.rsplit("_", 1)[1]
     assert [p.label for p in grid.policies] == ["uniform"]
     assert grid.seeds == list(range(10)) and grid.horizon == 256 and grid.n_starts == 20
-    assert grid.n_rollouts == [1, 2, 5, 10, 20, 50, 100, 200, 500, 1000, 2000, 5000, 10000]
+    assert grid.n_transitions == [10, 20, 50, 100, 200, 500, 1000, 2000, 5000, 10000]
     assert grid.shifts is None
     rewards = experiment == "exp1" and module.startswith("sepsis")  # many rewards: exp1, Sepsis only
     assert grid.reward_transfer == rewards and (grid.reward_family is not None) == rewards
@@ -113,3 +113,22 @@ def test_every_script_runs_by_name_from_the_launcher(tmp_path):
         [*launcher, "exp1", "nowhere", "mdp"], cwd=tmp_path, capture_output=True, text=True
     )
     assert wrong.returncode != 0 and "no script" in wrong.stderr
+
+
+@pytest.mark.parametrize("experiment", ["exp1", "exp2"])
+def test_every_script_has_a_smoke_version(experiment):
+    """experiments/<exp>_smoke: one script per domain and kind, the real methods on the tiny grid of
+    experiments/smoke.py, results under results/<exp>_smoke/."""
+    for domain in DOMAINS:
+        for kind in ("mdp", "imdp"):
+            module = f"{domain}_{kind}"
+            real, _, _ = load(experiment, module)
+            smoke, _, common = load(f"{experiment}_smoke", module)
+            sys.path.insert(0, str(ROOT / "experiments"))
+            import smoke as settings  # noqa: PLC0415
+
+            sys.path.pop(0)
+            assert tuple(smoke.GRID.methods) == tuple(real.GRID.methods)
+            assert smoke.GRID.seeds == settings.SEEDS and smoke.GRID.n_transitions == settings.N_TRANSITIONS
+            assert (smoke.GRID.reward_family is None) == (real.GRID.reward_family is None)
+            assert smoke.GRID.out_dir == common.ROOT / "results" / f"{experiment}_smoke" / module

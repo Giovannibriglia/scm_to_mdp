@@ -5,11 +5,11 @@ environment's alternative rewards (Env.alternative_rewards; methods.replan: mode
 re-solve their learned model, model-free ones keep their policy and have no promise) and evaluated
 exactly on the same true transitions with that reward. For one setting this writes
 
-    figures/transfer/<task>/episodes=<n>/   performance, performance_normalized, validity
-    figures/transfer/average/episodes=<n>/  performance_normalized and validity averaged over the
+    figures/transfer/<task>/transitions=<n>/   performance, performance_normalized, validity
+    figures/transfer/average/transitions=<n>/  performance_normalized and validity averaged over the
                                             tasks (normalised per task first), and transfer_gap: the
                                             average over the tasks minus the original reward
-and a "Reward transfer" section of tables.md (per task and averaged, at every number of episodes).
+and a "Reward transfer" section of tables.md (per task and averaged, at every number of transitions).
 """
 
 from pathlib import Path
@@ -18,7 +18,7 @@ import pandas as pd
 
 from scm_to_mdp.plotting import figures
 
-KEYS = ["size", "seed", "n_rollouts", "method"]
+KEYS = ["size", "seed", "n_transitions", "method"]
 AVERAGED = ["norm_value", "norm_value_K", "oracle_share", "oracle_share_K", "safe", "violation_rate"]
 AVERAGED += ["worst_violation"]
 
@@ -67,14 +67,15 @@ def report_transfer(
         if shift else ("Reward transfer", "models re-planned, not re-learned")
     )  # fmt: skip
     lines = [f"# {heading}", "", f"tasks: {', '.join(tasks)} ({note})", ""]
-    for n in meta["n_rollouts"]:
-        at_n, main_n = transfer[transfer["n_rollouts"] == n], main[main["n_rollouts"] == n]
+    for n in meta["n_transitions"]:
+        at_n, main_n = transfer[transfer["n_transitions"] == n], main[main["n_transitions"] == n]
         if at_n.empty:
             continue
         axis = figures.Axis(at_n, sizes, [labels[s] for s in sizes], size_name)
+        budget = f"{figures.samples_label(n)} transitions"  # e.g. "1k transitions"
         for task in tasks:
             rows = at_n[at_n["task"] == task]
-            folder, title = fig_dir / task / f"episodes={n}", f"{name}, {word} {task}, {n} episodes"
+            folder, title = fig_dir / task / f"transitions={n}", f"{name}, {word} {task}, {budget}"
             figures.performance(rows, axis, methods, styles, k, title, folder / "performance")
             figures.performance_normalized(
                 rows, axis, methods, styles, target, k, title, folder / "performance_normalized"
@@ -83,7 +84,7 @@ def report_transfer(
             text = table(figures.normalised(rows), "norm_value", lambda x: f"{x:.2f}")
             if text:
                 lines += [
-                    f"## {task}, {n} episodes: normalised value (0 random, 1 optimal), nominal start",
+                    f"## {task}, {budget}: normalised value (0 random, 1 optimal), nominal start",
                     "```",
                     text,
                     "```",
@@ -91,8 +92,8 @@ def report_transfer(
                 ]
         averaged = average(at_n)
         folder, title = (
-            fig_dir / "average" / f"episodes={n}",
-            f"{name}, mean over {len(tasks)} {what}, {n} episodes",
+            fig_dir / "average" / f"transitions={n}",
+            f"{name}, mean over {len(tasks)} {what}, {budget}",
         )
         figures.performance_normalized(
             averaged, axis, methods, styles, target, k, title, folder / "performance_normalized"
@@ -107,11 +108,11 @@ def report_transfer(
         ]:
             text = table(averaged, column, fmt)
             if text:
-                lines += [f"## average, {n} episodes: {caption}", "```", text, "```", ""]
+                lines += [f"## average, {budget}: {caption}", "```", text, "```", ""]
         text = table(gap, "gap_value", lambda x: f"{x:+.2f}")
         if text:
             lines += [
-                f"## average, {n} rollouts: transfer gap (mean over the {what} - original)",
+                f"## average, {budget}: transfer gap (mean over the {what} - original)",
                 "```",
                 text,
                 "```",

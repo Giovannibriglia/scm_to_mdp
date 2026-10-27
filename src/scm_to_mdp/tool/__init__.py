@@ -6,7 +6,7 @@ Three parts (each in its own module):
     2. evaluate        a solved result against a ground truth (MDPGroundTruth), or alone (evaluate.py)
     3. report          tables and figures from results.csv                              (report.py)
 
-and the sweep that runs them over problem sizes, numbers of rollouts and seeds (sweep.py), and grids
+and the sweep that runs them over problem sizes, numbers of transitions and seeds (sweep.py), and grids
 of sweeps over a knob and behaviour policies (grid.py, report_grid.py); the saved models of one
 seed (store.py); one timestamped folder per run (runs.py). See experiments/exp1/ and
 experiments/exp2/ for grids (experiments/common.py, domains.py).

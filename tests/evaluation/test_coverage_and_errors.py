@@ -51,13 +51,13 @@ def test_validity_verdicts_and_box_looseness():
     rows = []
     for method, held in (("A", 100), ("B", 85), ("C", 97)):
         for seed in range(100):
-            rows.append({"knob": "k", "policy": "p", "size": "3", "n_rollouts": 10, "method": method,
+            rows.append({"knob": "k", "policy": "p", "size": "3", "n_transitions": 10, "method": method,
                          "seed": seed, "status": "ok", "guarantee": True, "role": "ours",
                          "safe": seed < held, "contain_all": True})  # fmt: skip
     verdicts = rg.validity_table(pd.DataFrame(rows), 0.05).set_index("method")["verdict"]
     assert verdicts.to_dict() == {"A": "confirmed", "B": "refuted", "C": "undecided"}
     pair = [
-        {"knob": "k", "policy": "p", "size": "3", "n_rollouts": 10, "seed": 0, "status": "ok",
+        {"knob": "k", "policy": "p", "size": "3", "n_transitions": 10, "seed": 0, "status": "ok",
          "method": m, "promise": promise, "true": 2.0}
         for m, promise in ((rg.BOX, 1.0), (rg.PRODUCT, 1.5))
     ]  # fmt: skip

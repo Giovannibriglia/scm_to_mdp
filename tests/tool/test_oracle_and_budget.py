@@ -19,13 +19,13 @@ def make_env(size, seed):
     return SysAdmin(int(size), seed, storm=0.1, storm_effect=0.8)  # a hidden storm: V*_obs < V*
 
 
-def collect(env, n_rollouts):
-    return env.hide(env.sample(n_rollouts, 16, "random"))
+def collect(env, n_transitions):
+    return env.hide(env.sample(n_transitions, 16, "random"))
 
 
 def experiment(methods, factor=None, **kw) -> Experiment:
     return Experiment(
-        name="oracle", make_env=make_env, collect=collect, sizes=[3], n_rollouts=[2, 4], seeds=[0],
+        name="oracle", make_env=make_env, collect=collect, sizes=[3], n_transitions=[200, 400], seeds=[0],
         methods=methods, limits=Limits(mem_gb=2, timeout_s={"solve": 999.0}), save_models="none",
         solve_factor=factor, **kw,
     )  # fmt: skip
@@ -96,11 +96,11 @@ def test_transitions_needed():
     rows = []
     for n, t, true in [(1, 256, 0.5), (2, 512, 0.99), (4, 1000, 0.99)]:
         rows.append(
-            {"size": "3", "seed": 0, "method": "m", "n_rollouts": n, "transitions": t, "true": true,
+            {"size": "3", "seed": 0, "method": "m", "n_transitions": n, "transitions": t, "true": true,
              "status": "ok", "V_star_obs": 1.0, "V_star": 1.0, "n_states": 16, "n_observed_states": 8}
         )  # fmt: skip
-    needed = figures.rollouts_needed(pd.DataFrame(rows))
+    needed = figures.transitions_needed(pd.DataFrame(rows))
     assert needed["n_star"].item() == 2 and needed["t_star"].item() == 512
-    summary = figures.summarize_rollouts(needed)
+    summary = figures.summarize_needed(needed)
     assert summary["median_t"].item() == 512 and summary["n_observed_states"].item() == 8
     assert figures.samples_label(12_000) == "12k" and figures.samples_label(1_500_000) == "1.5M"

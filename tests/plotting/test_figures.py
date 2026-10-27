@@ -34,7 +34,13 @@ def fake_results(rng) -> pd.DataFrame:
             for n in [50, 100]:
                 for method, role in [("BIC -> IMDP", "ours"), ("flat MDP", "baseline")]:
                     stopped = method == "BIC -> IMDP" and size == "5" and n == 100
-                    row = {"size": size, "n_states": states, "seed": seed, "n_rollouts": n, "method": method}
+                    row = {
+                        "size": size,
+                        "n_states": states,
+                        "seed": seed,
+                        "n_transitions": n,
+                        "method": method,
+                    }
                     row |= {"role": role, "guarantee": role == "ours", "V_star": 10.0, "V_random": 5.0}
                     row |= {
                         "status": "timeout" if stopped else "ok",
@@ -58,7 +64,7 @@ def test_result_figures(tmp_path):
     methods = ["BIC -> IMDP", "flat MDP"]
     styles = method_styles({"BIC -> IMDP": ("ours", True), "flat MDP": ("baseline", False)})
     assert styles["flat MDP"]["ls"] == "--" and styles["BIC -> IMDP"]["ls"] == "-"
-    at = res[res["n_rollouts"] == 100]
+    at = res[res["n_transitions"] == 100]
     axis = figures.Axis(at, ["3", "4", "5"], ["N=3", "N=4", "N=5"], "N")
     figures.performance(at, axis, methods, styles, 20, "t", tmp_path / "performance")
     figures.structure(at, axis, methods, styles, "t", tmp_path / "structure")
@@ -76,7 +82,7 @@ def test_result_figures(tmp_path):
     assert (flat["median"] == 100).all()  # true = 8 < 8.5 at 50 rollouts, >= 9 at 100
 
 
-def test_rollouts_needed_counts_only_lasting_success():
+def test_transitions_needed_counts_only_lasting_success():
     """n* is the first n from which the policy stays 95% optimal; a stopped run is not optimal."""
     rows = []
     for n, true, status in [(10, 9.6, "ok"), (20, 9.0, "ok"), (40, 9.7, "ok"), (80, 9.8, "ok")]:
@@ -86,7 +92,7 @@ def test_rollouts_needed_counts_only_lasting_success():
                 "n_states": 4,
                 "seed": 0,
                 "method": "m",
-                "n_rollouts": n,
+                "n_transitions": n,
                 "V_star": 10.0,
                 "true": true,
                 "status": status,
@@ -99,13 +105,13 @@ def test_rollouts_needed_counts_only_lasting_success():
                 "n_states": 4,
                 "seed": 1,
                 "method": "m",
-                "n_rollouts": n,
+                "n_transitions": n,
                 "V_star": 10.0,
                 "true": 9.9,
                 "status": status,
             }
         )
-    needed = figures.rollouts_needed(pd.DataFrame(rows), 0.95).set_index("seed")["n_star"]
+    needed = figures.transitions_needed(pd.DataFrame(rows), 0.95).set_index("seed")["n_star"]
     assert needed[0] == 40  # 10 was good, but 20 was not: success from 40 on
     assert np.isinf(needed[1])  # never good up to the largest n
 

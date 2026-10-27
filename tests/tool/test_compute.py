@@ -120,7 +120,7 @@ def make_env(n, topology, seed):
 
 grid = Grid(
     name="g", make_env=make_env, sizes=[2, 3], knobs=["ring", "star"],
-    policies=[Policy("uniform"), Policy("expert")], n_rollouts=[10, 30], seeds=[0, 1], horizon=8,
+    policies=[Policy("uniform"), Policy("expert")], n_transitions=[10, 30], seeds=[0, 1], horizon=8,
     methods={"BIC -> IMDP": Method("causal", "box_robust_vi", discovery="bic", selection="bic_best"),
              "flat MDP": Method("flat_mdp", "vi")},
     limits=Limits(mem_gb=1), workers=sys.argv[2], out_dir=Path(sys.argv[1]), save_models="none",
@@ -148,7 +148,7 @@ def test_a_parallel_grid_gives_the_rows_of_a_serial_one(tmp_path):
         assert len(files) == 4  # 2 knobs x 2 policies, each in its own folder
         rows = pd.concat([pd.read_csv(f) for f in files])
         timing = [c for c in rows.columns if c.endswith(("_s", "_gb"))]
-        keys = ["knob", "policy", "size", "seed", "n_rollouts", "method"]
+        keys = ["knob", "policy", "size", "seed", "n_transitions", "method"]
         tables[workers] = rows.drop(columns=timing).sort_values(keys).reset_index(drop=True)
     assert len(tables["1"]) == 4 * 2 * 2 * 2 * 2 and set(tables["1"]["status"]) == {"ok"}
     pd.testing.assert_frame_equal(tables["1"], tables["3"])

@@ -52,6 +52,7 @@ class Domain:
     gamma: float
     constants: dict = field(default_factory=dict)  # the settings make_env uses (written to grid.json)
     sl_spibb_parents: int = 3  # SL-SPIBB: the size of its candidate parent sets
+    horizon: int | None = None  # the longest episode the logger plays (None: common.HORIZON)
 
 
 # ---- environments ----------------------------------------------------------------------------------

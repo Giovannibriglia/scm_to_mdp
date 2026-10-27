@@ -36,13 +36,13 @@ def make_env(size, seed):
     return SysAdmin(size, seed)
 
 
-def collect(env, n_rollouts):
-    return env.sample(n_rollouts, 10, "random")
+def collect(env, n_transitions):
+    return env.sample(n_transitions, 10, "random")
 
 
 def test_a_failed_setup_becomes_error_rows(tmp_path):
     exp = Experiment(
-        name="failing", make_env=make_env, collect=collect, sizes=[2, 3], n_rollouts=[20, 40], seeds=[0],
+        name="failing", make_env=make_env, collect=collect, sizes=[2, 3], n_transitions=[20, 40], seeds=[0],
         methods={"flat MDP": Method("flat_mdp", "vi")}, limits=Limits(mem_gb=2), out_dir=tmp_path,
         save_models="none",
     )  # fmt: skip
@@ -56,7 +56,7 @@ def test_a_failed_setup_becomes_error_rows(tmp_path):
 
 def test_a_changed_configuration_is_refused(tmp_path):
     exp = Experiment(
-        name="tiny", make_env=make_env, collect=collect, sizes=[2], n_rollouts=[20], seeds=[0],
+        name="tiny", make_env=make_env, collect=collect, sizes=[2], n_transitions=[20], seeds=[0],
         methods={"flat MDP": Method("flat_mdp", "vi")}, limits=Limits(mem_gb=2), out_dir=tmp_path,
         settings={"horizon": 10}, save_models="none",
     )  # fmt: skip
@@ -66,14 +66,14 @@ def test_a_changed_configuration_is_refused(tmp_path):
     with pytest.raises(ValueError, match="different configuration"):
         run_experiment(dataclasses.replace(exp, settings={"horizon": 30}))
     with pytest.raises(ValueError, match="different configuration"):
-        run_experiment(dataclasses.replace(exp, n_rollouts=[20, 40]))  # a new largest table
+        run_experiment(dataclasses.replace(exp, n_transitions=[20, 40]))  # a new largest table
     run_experiment(dataclasses.replace(exp, seeds=[0, 1]))  # more seeds: fine
 
 
 # ---- results.csv ------------------------------------------------------------------------------------
 def test_labels_are_read_back_as_written_and_a_cut_line_is_dropped(tmp_path):
     rows = pd.DataFrame(
-        [{"size": "0.0", "knob": "None", "policy": "NA", "seed": 0, "n_rollouts": 10, "method": "m",
+        [{"size": "0.0", "knob": "None", "policy": "NA", "seed": 0, "n_transitions": 10, "method": "m",
           "status": "ok", "promise": 1.5}] * 2
     ).reindex(columns=COLUMNS)  # fmt: skip
     text = rows.to_csv(index=False)

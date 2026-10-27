@@ -119,11 +119,11 @@ from scm_to_mdp.tool import Experiment, Limits, Method, run_experiment, report
 def make_env(size, seed):
     return SysAdmin(size, seed)
 
-def collect(env, n_rollouts):
-    return env.sample(n_rollouts, 10, "random")
+def collect(env, n_transitions):
+    return env.sample(n_transitions, 10, "random")
 
 exp = Experiment(
-    name="tiny", make_env=make_env, collect=collect, sizes=[2, 3], n_rollouts=[20, 60], seeds=[0, 1],
+    name="tiny", make_env=make_env, collect=collect, sizes=[2, 3], n_transitions=[20, 60], seeds=[0, 1],
     methods={
         "BIC -> IMDP": Method("causal", "box_robust_vi", discovery="bic", selection="bic_best"),
         "flat MDP": Method("flat_mdp", "vi"),
@@ -160,13 +160,14 @@ def test_sweep_resume_and_report(tmp_path):
     out = tmp_path / "out"
     res = pd.read_csv(out / "results.csv")
     assert set(res["status"]) == {"ok"} and set(res["role"]) == {"ours", "baseline"}
-    assert (res.groupby(["size", "seed", "n_rollouts"])["transitions"].nunique() == 1).all()
-    assert (res[res["n_rollouts"] == 20]["transitions"] == 200).all()  # 20 rollouts of 10 steps
+    assert (res.groupby(["size", "seed", "n_transitions"])["transitions"].nunique() == 1).all()
+    assert (res[res["n_transitions"] == 20]["transitions"] == 20).all()  # the budget, exactly
+    assert (res[res["n_transitions"] == 20]["episodes"] == 2).all()  # from 2 episodes of 10 steps
     meta = json.loads((out / "meta.json").read_text())
-    assert meta["n_rollouts"] == [20, 60] and meta["size_labels"] == ["N=2", "N=3"]
+    assert meta["n_transitions"] == [20, 60] and meta["size_labels"] == ["N=2", "N=3"]
     for n in [20, 60]:
         for name in ["performance", "validity", "structure", "time", "memory"]:
-            assert (out / "figures" / f"episodes={n}" / f"{name}.png").exists()
+            assert (out / "figures" / f"transitions={n}" / f"{name}.png").exists()
     assert (out / "figures" / "sample_efficiency.pdf").exists() and (out / "tables.md").exists()
     assert (out / "models" / "N=2" / "ground_truth.png").exists()
     # the models of the first seed, at the largest number of rollouts, read back

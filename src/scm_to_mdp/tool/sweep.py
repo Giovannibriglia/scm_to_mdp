@@ -1,26 +1,26 @@
-"""Sweeps: every method on every (problem size, number of rollouts, seed), into results.csv.
+"""Sweeps: every method on every (problem size, number of transitions, seed), into results.csv.
 
 An Experiment says how to build the problem and its data, and what to sweep:
 
     Experiment(
         name="sysadmin",
         make_env=make_env,      # (size, seed) -> an object with .ground_truth() -> MDPGroundTruth
-        collect=collect,        # (env, n_rollouts) -> DataFrame of transitions, index (episode, t)
-        sizes=[3, 4, 5], n_rollouts=[50, 100, 200], seeds=[0, 1, 2],
+        collect=collect,        # (env, n_transitions) -> DataFrame of transitions, index (episode, t)
+        sizes=[3, 4, 5], n_transitions=[50, 100, 200], seeds=[0, 1, 2],
         methods={"BIC -> IMDP": Method(...), ...},
     )
 
-For one (size, seed) the data are collected once, with the largest number of rollouts, and every
-smaller budget uses the first rollouts of that table: the datasets are nested, so the curves over
-the number of rollouts differ only by the amount of data.
+For one (size, seed) the data are collected once, with the largest number of transitions, and every
+smaller budget uses the first transitions of that table: the datasets are nested, so the curves over
+the number of transitions differ only by the amount of data.
 
 Rules:
 - A method stopped by a limit (time or memory) at (size, n) is not run at any larger size with at
-  least n rollouts, nor at larger n of the same size (row status "skipped").
+  least n transitions, nor at larger n of the same size (row status "skipped").
 - Rows are written to results.csv as soon as a (size, seed) finishes; run again and the finished
   (size, seed) are kept (resume). meta.json holds the configuration of the sweep; a resume with a
-  different configuration (methods, gamma, limits, the largest number of rollouts, `settings`) is
-  refused. Adding sizes, seeds or numbers of rollouts below the largest one is allowed.
+  different configuration (methods, gamma, limits, the largest number of transitions, `settings`) is
+  refused. Adding sizes, seeds or numbers of transitions below the largest one is allowed.
 - Nothing stops the sweep: a (size, seed) whose setup fails gets rows with status "error" (or
   "too_large" when the true model does not fit in memory), a failed evaluation gets status "error"
   for that method, and a (size, seed) whose worker process died twice gets status "crashed". These
@@ -37,7 +37,7 @@ Rules:
 - Settings (optional): knob and policy label the rows (e.g. a topology and a behaviour policy; see
   tool/grid.py, which makes one Experiment per knob and policy). behaviour(env) -> [S, A], the
   logger as an exact table, adds its coverage and confounding bias to every row (behaviour.py),
-  computed for rollouts of `horizon` steps.
+  computed for episodes of at most `horizon` steps.
 - For the first seed, every method's model is saved in out_dir/models/ (tool/store.py: the model,
   the policy and promise, the learned causal Bayesian network, pictures of small problems).
 - Every row also holds the selected graph (parents, as JSON) and the true parents over the observed
@@ -73,7 +73,7 @@ from tqdm import tqdm
 from scm_to_mdp import evaluation as exact
 from scm_to_mdp import reward_family as rf
 from scm_to_mdp.core import Reward
-from scm_to_mdp.data import first_rollouts
+from scm_to_mdp.data import first_transitions
 from scm_to_mdp.evaluation import COVERAGE_COUNTS, actions_absent, coverage, random_starts
 from scm_to_mdp.ground_truth import ModelTooLarge
 from scm_to_mdp.reward_family import RewardFamily
@@ -82,9 +82,9 @@ from scm_to_mdp.tool import store
 from scm_to_mdp.tool.evaluate import evaluate, reference_values
 from scm_to_mdp.tool.methods import RENAMED, STEPS, STOPPED, Limits, Method, learn, replan, solve
 
-# the columns of results.csv, in order (one row per size, seed, number of rollouts and method)
-KEYS = ["experiment", "knob", "policy", "size", "size_label", "n_states", "seed", "n_rollouts", "transitions"]
-KEYS += ["method"]
+# the columns of results.csv, in order (one row per size, seed, number of transitions and method)
+KEYS = ["experiment", "knob", "policy", "size", "size_label", "n_states", "seed", "n_transitions"]
+KEYS += ["transitions", "episodes", "method"]  # the dataset: its transitions and the episodes they come from
 METHOD = ["role", "guarantee", "learner", "discovery", "selection", "solver"]
 STATUS = ["status", "failed_step", "error", "solve_limit_s", "solve_iterations", "solve_iteration_s"]
 STEP_COLUMNS = [f"{step}_{x}" for step in STEPS for x in ("status", "s", "gb")]
@@ -136,7 +136,7 @@ class Experiment:
     make_env: Callable[[Any, int], Any]
     collect: Callable[[Any, int], pd.DataFrame]
     sizes: list
-    n_rollouts: list[int]
+    n_transitions: list[int]
     seeds: list[int]
     methods: dict[str, Method]
     gamma: float = 0.9
@@ -161,7 +161,7 @@ class Experiment:
     knob: str = ""  # label of the setting (e.g. "topology=ring"), written in every row
     policy: str = ""  # label of the behaviour policy, written in every row
     behaviour: Callable[[Any], np.ndarray] | None = None  # env -> logger table [S, A] (coverage, bias)
-    horizon: int | None = None  # rollout length, for the coverage and bias of `behaviour`
+    horizon: int | None = None  # the longest episode, for the coverage and bias of `behaviour`
     settings: dict = field(default_factory=dict)  # constants of make_env / collect, checked on resume
     # relative solve limit (module docstring): None = the absolute Limits.timeout_s["solve"]
     solve_factor: float | None = None
@@ -186,7 +186,7 @@ def true_model_size(truth) -> dict:
 
 
 # ==========================================================================================
-# One (size, seed): every number of rollouts and every method
+# One (size, seed): every number of transitions and every method
 # ==========================================================================================
 def _base(exp: Experiment, size, seed: int) -> dict:
     return {
@@ -200,25 +200,25 @@ def _base(exp: Experiment, size, seed: int) -> dict:
 
 
 def _rows_without_runs(exp: Experiment, size, seed: int, status: str, step: str, error: str) -> list[dict]:
-    """One row per (number of rollouts, method) when nothing could be run for this (size, seed)."""
+    """One row per (number of transitions, method) when nothing could be run for this (size, seed)."""
     base = _base(exp, size, seed)
     return [
         {
             **base,
-            "n_rollouts": n,
+            "n_transitions": n,
             "method": name,
             **m.describe(),
             "status": status,
             "failed_step": step,
             "error": error,
         }  # fmt: skip
-        for n in sorted(exp.n_rollouts)
+        for n in sorted(exp.n_transitions)
         for name, m in exp.methods.items()
     ]
 
 
 def run_point(exp: Experiment, size, seed: int, stopped_from: dict) -> list[dict]:
-    """The rows of one (size, seed). stopped_from: {method: n} methods not to run from n rollouts on.
+    """The rows of one (size, seed). stopped_from: {method: n} methods not to run from n transitions on.
     Never raises: a failure becomes rows with status "too_large" or "error" (see the module docstring)."""
     import torch
 
@@ -227,7 +227,7 @@ def run_point(exp: Experiment, size, seed: int, stopped_from: dict) -> list[dict
     try:
         env = exp.make_env(size, seed)
         truth = env.ground_truth()
-        table = exp.collect(env, max(exp.n_rollouts))
+        table = exp.collect(env, max(exp.n_transitions))
         truth.check_data(table)
         starts = random_starts(truth, exp.n_starts, seed)
         reference = {"n_states": truth.n_states, **reference_values(truth, exp.gamma, starts)}
@@ -258,10 +258,12 @@ def run_point(exp: Experiment, size, seed: int, stopped_from: dict) -> list[dict
     except Exception as err:  # noqa: BLE001 - reported in the rows, the sweep goes on
         return _rows_without_runs(exp, size, seed, "error", "setup", repr(err))
     stopped, rows, graphs = dict(stopped_from), [], {}
-    for n in sorted(exp.n_rollouts):
-        df = first_rollouts(table, n)
+    for n in sorted(exp.n_transitions):
+        df = first_transitions(table, n)
         data = truth.learner_spec.read(df)
-        point = {**base, **reference, "n_rollouts": n, "transitions": len(df)}
+        episodes = df.index.get_level_values("episode").nunique()  # the last one may be cut
+        sample = {"n_transitions": n, "transitions": len(df), "episodes": episodes}
+        point = {**base, **reference, **sample}
         if truth.true_parents is not None:  # what the data cover of the best policy's rows
             point |= coverage(truth, data, exp.gamma, truth.parents_in(data))
         point["actions_absent"] = actions_absent(truth, data)
@@ -272,7 +274,7 @@ def run_point(exp: Experiment, size, seed: int, stopped_from: dict) -> list[dict
             if n >= stopped.get(name, math.inf):
                 rows.append({**point, "method": name, **method.describe(), "status": "skipped"})
                 for task, (_, task_reward, task_ref) in tasks.items():
-                    task_point = {**base, **task_ref, "n_rollouts": n, "transitions": len(df), "task": task}
+                    task_point = {**base, **task_ref, **sample, "task": task}
                     task_point |= {"_file": "shift"} if task_reward is SHIFT else {}
                     rows.append({**task_point, "method": name, **method.describe(), "status": "skipped"})
                 continue
@@ -296,9 +298,9 @@ def run_point(exp: Experiment, size, seed: int, stopped_from: dict) -> list[dict
                 metrics |= _random_reward_metrics(exp, result, data, random_tasks, limits, starts, seed)
             rows.append({**point, "method": name, **result.row(), **metrics, **graph})
             for task, (task_truth, task_reward, task_ref) in tasks.items():
-                context = (exp, base, task_ref, n, len(df), task, name, result, data)
+                context = (exp, base, task_ref, sample, task, name, result, data)
                 rows.append(_transfer_row(*context, task_truth, task_reward, graph, starts, seed))
-            keep = exp.save_models == "all" or (exp.save_models == "largest" and n == max(exp.n_rollouts))
+            keep = exp.save_models == "all" or (exp.save_models == "largest" and n == max(exp.n_transitions))
             if seed == exp.seeds[0] and keep:
                 _save_model(exp, base, n, name, result, data, truth, rows[-1])
             if result.status in STOPPED:
@@ -309,7 +311,7 @@ def run_point(exp: Experiment, size, seed: int, stopped_from: dict) -> list[dict
                     f"   [{exp.name}] {base['size_label']} seed={seed} n={n} {name}: "
                     f"{result.failed_step} -> {result.status}{detail}"
                 )
-        first = seed == exp.seeds[0] and n == max(exp.n_rollouts) and exp.save_models != "none"
+        first = seed == exp.seeds[0] and n == max(exp.n_transitions) and exp.save_models != "none"
         folder = exp.out_dir / "models" / base["size_label"]
         title = f"{exp.name} {base['size_label']}: true MDP"
         if first and len(data.B) <= exp.pictures_max_states:
@@ -361,12 +363,12 @@ def given_graph(discovery, truth, env, exp: Experiment, seed: int, cache: dict) 
     return cache[discovery]
 
 
-def _transfer_row(exp, base, task_ref, n, transitions, task, name, result, data, truth, reward, graph,
+def _transfer_row(exp, base, task_ref, sample, task, name, result, data, truth, reward, graph,
                   starts, seed) -> dict:  # fmt: skip
     """One row of results_transfer.csv: result re-planned under the task's reward (methods.replan:
     model-based methods re-solve their learned model, model-free ones keep their policy and have no
     promise), evaluated exactly on the same true transitions with that reward."""
-    point = {**base, **task_ref, "n_rollouts": n, "transitions": transitions, "task": task, "method": name}
+    point = {**base, **task_ref, **sample, "task": task, "method": name}
     task_data = data if reward is SHIFT else dataclasses.replace(data, reward=reward(data.B, data.actions))
     if truth.true_parents is not None:  # the task's best policy and what the data cover of its rows
         point |= coverage(truth, task_data, exp.gamma, truth.parents_in(task_data))
@@ -441,7 +443,7 @@ def _guarded(where, fn, *args):
 
 def _save_model(exp: Experiment, base: dict, n: int, name: str, result, data, truth, row: dict):
     folder = exp.out_dir / "models" / base["size_label"] / f"n={n}" / store.method_folder(name)
-    info = {**base, "n_rollouts": n, "method": name, "status": row.get("status"),
+    info = {**base, "n_transitions": n, "method": name, "status": row.get("status"),
             "promise": row.get("promise"), "true": row.get("true"), "gamma": exp.gamma}  # fmt: skip
     _guarded(folder, store.save, folder, result, data, truth, info, exp.pictures_max_states)
 
@@ -457,7 +459,7 @@ def _config(exp: Experiment) -> dict:
             "gamma": exp.gamma,
             "n_starts": exp.n_starts,
             "limits": None if exp.limits is None else asdict(exp.limits),
-            "max_rollouts": max(exp.n_rollouts),  # the data table: smaller budgets are its first rollouts
+            "max_transitions": max(exp.n_transitions),  # the data table: a smaller budget is its prefix
             "horizon": exp.horizon,
             "settings": exp.settings,
             "methods": {
@@ -505,7 +507,7 @@ LABELS = ("size", "knob", "policy")  # read back as text, exactly as written ("0
 
 def read_results(out_dir: Path, current: bool = False, name: str = "results.csv") -> pd.DataFrame:
     """The rows of results.csv (or results_transfer.csv: name). current: only the sizes, seeds and
-    numbers of rollouts of the last run's configuration (meta.json), e.g. after a seed was removed."""
+    numbers of transitions of the last run's configuration (meta.json), e.g. after a seed was removed."""
     path = Path(out_dir) / name
     if not path.exists():
         return pd.DataFrame(columns=COLUMNS if name == "results.csv" else TRANSFER_COLUMNS)
@@ -526,7 +528,7 @@ def read_results(out_dir: Path, current: bool = False, name: str = "results.csv"
         keep = (
             res["size"].isin(m["sizes"])
             & res["seed"].isin(m["seeds"])
-            & res["n_rollouts"].isin(m["n_rollouts"])
+            & res["n_transitions"].isin(m["n_transitions"])
         )
         res = res[keep].reset_index(drop=True)
     return res
@@ -567,12 +569,12 @@ class _Sweep:
                 raise ValueError(
                     f"{out} holds results of a different configuration: use another out_dir or resume=False"
                 )
-        # a (size, seed) is finished when it has a row for every number of rollouts and method
-        need = {(n, m) for n in exp.n_rollouts for m in exp.methods}
+        # a (size, seed) is finished when it has a row for every number of transitions and method
+        need = {(n, m) for n in exp.n_transitions for m in exp.methods}
         self.finished = {
             key
             for key, g in old.groupby(["size", "seed"])
-            if need <= set(zip(g["n_rollouts"], g["method"], strict=True))
+            if need <= set(zip(g["n_transitions"], g["method"], strict=True))
         }
         old = old[[(s, d) in self.finished for s, d in zip(old["size"], old["seed"], strict=True)]]
         _write(self.csv, old.to_dict("records"), append=False)
@@ -599,7 +601,7 @@ class _Sweep:
             "knob": exp.knob,
             "policy": exp.policy,
             "size_labels": [f"{exp.size_name}={s}" for s in exp.sizes],
-            "n_rollouts": sorted(exp.n_rollouts),
+            "n_transitions": sorted(exp.n_transitions),
             "seeds": list(exp.seeds),
             "git_commit": _git_commit(),
             "started": datetime.now().isoformat(timespec="seconds"),
@@ -623,7 +625,7 @@ class _Sweep:
         for r in rows:
             if r.get("status") in STOPPED:
                 at = self.stops.setdefault(str(r["size"]), {})
-                at[r["method"]] = min(at.get(r["method"], math.inf), r["n_rollouts"])
+                at[r["method"]] = min(at.get(r["method"], math.inf), r["n_transitions"])
 
     def stops_before(self, size) -> dict:
         out: dict[str, float] = {}

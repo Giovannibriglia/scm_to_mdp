@@ -8,7 +8,7 @@ some rewards and not others points at the learned structure (a missing parent ma
 and not for another), not at the confidence level.
 
 Four families, `per_family` rewards each, drawn once per (size, seed) with their own random stream
-(RewardFamily.seed): the same rewards for every method and number of episodes.
+(RewardFamily.seed): the same rewards for every method and number of transitions.
 
     dense    r_next(s') = the mean over the state variables of w_i[x_i'], w ~ U[0, 1] per variable
              and value, minus an action cost c * u_a (c ~ U[0, 0.2], u_a ~ U[0, 1] per action vector)
@@ -46,7 +46,7 @@ class RewardFamily:
 
     per_family: int = 5  # rewards per family
     families: tuple[str, ...] = FAMILIES
-    n_rollouts: tuple[int, ...] | None = None  # the numbers of episodes evaluated (None: every one)
+    n_transitions: tuple[int, ...] | None = None  # the numbers of transitions evaluated (None: every one)
     max_states: int | None = None  # only problems with at most this many observed states (None: all);
     # re-planning costs one solve per reward, which dominates on large problems
     seed: int = 2026  # the random stream of the rewards (independent of the data's)
@@ -57,7 +57,7 @@ class RewardFamily:
             raise ValueError(f"unknown reward families {sorted(unknown)}; choose among {FAMILIES}")
 
     def evaluated_at(self, n: int) -> bool:
-        return self.n_rollouts is None or n in self.n_rollouts
+        return self.n_transitions is None or n in self.n_transitions
 
     def covers(self, n_observed_states: int) -> bool:
         return self.max_states is None or n_observed_states <= self.max_states

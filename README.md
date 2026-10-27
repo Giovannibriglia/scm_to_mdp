@@ -39,6 +39,15 @@ RESUME=1 bash experiments/run_chain.sh exp1            # continue a stopped chai
 SHOW=1 bash experiments/run_chain.sh exp1              # also show each script's progress here (else: tail -f its log)
 ```
 
+**A quick check first** (minutes): `exp1_smoke` and `exp2_smoke` run the same scripts on a tiny grid
+(2 smallest sizes, 100 / 500 / 2,000 transitions, 3 seeds; `experiments/smoke.py`) to check that everything
+runs and to see the final tables and figures. Their numbers are not results.
+
+```bash
+.venv/bin/python experiments/run.py exp1_smoke sysadmin imdp      # one domain
+bash experiments/run_chain.sh exp1_smoke                          # every domain
+```
+
 Results go to `results/<experiment>/<domain>_<kind>_<date>_<time>/` (tables and figures in `summary/`).
 `.venv/bin/python experiments/run.py --list` lists every script; `--workers N` sets the parallel jobs.
 
@@ -79,8 +88,10 @@ Both experiments share the data and the evaluation (`experiments/common.py`) and
 (`experiments/domains.py`: SysAdmin, Chemistry, Aircraft, Drone, Frozen Lake, Stock trading, Sepsis,
 Coffee robot, Taxi; sizes calibrated so that the oracle solves each within 8 GB):
 
-- **data:** a uniform-random logger; 1, 2, 5, 10, 20, 50, 100, 200, 500, 1k, 2k, 5k and 10k episodes
-  of 256 steps; 10 seeds;
+- **data:** a uniform-random logger; a budget of 10, 20, 50, 100, 200, 500, 1k, 2k, 5k and 10k
+  transitions per dataset (the first n logged transitions of one table, so the datasets are
+  nested); the logger plays whole episodes of at most 256 steps, an episode that ends early is
+  shorter, and the episode where the budget ends is cut; 10 seeds;
 - **evaluation:** in the MDP the data come from, with the same reward, at the nominal start and from 20
   random starts; the value of a policy is reported normalised between the random policy (0%) and the
   optimal one over the observed state (100%);
@@ -99,7 +110,7 @@ Coffee robot, Taxi; sizes calibrated so that the oracle solves each within 8 GB)
   counts as `bugs` the runs whose set contains the truth while a check fails (0 expected);
 - **many rewards, experiment 1 on Sepsis only** (`src/scm_to_mdp/reward_family.py`): every learned
   model is re-planned, not re-learned, under 20 random rewards (dense, sparse goals, white noise, and
-  "stress" rewards on the least-visited states) at every number of episodes, and under Sepsis's 3
+  "stress" rewards on the least-visited states) at every data budget, and under Sepsis's 3
   alternative rewards (`results_transfer.csv`); `rf_safe_all` says whether the promise held for every
   random reward. Sepsis is the domain where this test is cleanest: nothing is hidden (so the promise
   for every reward is a theorem, not a hope), the vitals have treatment-specific parents (a missing
@@ -145,8 +156,7 @@ Figures are written as PDF (vector) and PNG (500 dpi), without titles, for the p
 The earlier designs (`experiments/exp1_wrong/`, `experiments/trials_wrong/`) are kept on disk only
 (git-ignored).
 
-For the first seed, every method's learned model is saved at every size and at the largest number of
-episodes, in `<setting>/models/<size>/n=<n>/<method>/` (`tool/store.py`):
+For the first seed, every method's learned model is saved at every size and every data budget, in `<setting>/models/<size>/n=<n>/<method>/` (`tool/store.py`):
 - `model.npz`: the model the solver used, the policy and its promise (`load_model(folder)` reads it
   back);
 - `cbn.json`: the learned causal Bayesian network (graph, counts, estimates and intervals of every

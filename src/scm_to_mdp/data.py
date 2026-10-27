@@ -93,13 +93,12 @@ def slice_inputs(dataset: Dataset) -> np.ndarray:
     return np.stack([columns[c] for c in dataset.inputs], axis=-1)  # [S, K, n_inputs]
 
 
-def first_rollouts(df: pd.DataFrame, n: int) -> pd.DataFrame:
-    """The transitions of the first n rollouts (the n smallest episode ids) of a table indexed by
-    (episode, t). Taking prefixes of one table makes the datasets of a sample sweep nested."""
+def first_transitions(df: pd.DataFrame, n: int) -> pd.DataFrame:
+    """The first n transitions of a table indexed by (episode, t), in the order they were logged: whole
+    episodes, and the first steps of the episode where the budget ends (its later steps are cut).
+    Taking prefixes of one table makes the datasets of a sample sweep nested."""
     if "episode" not in (df.index.names or []):
-        raise DataError("the table needs an index level 'episode' to take its first rollouts")
-    episode = df.index.get_level_values("episode")
-    keep = np.sort(episode.unique())[:n]
-    if len(keep) < n:
-        raise DataError(f"the table has {len(keep)} rollouts, fewer than {n}")
-    return df[episode.isin(keep)]
+        raise DataError("the table needs an index level 'episode' to take its first transitions")
+    if len(df) < n:
+        raise DataError(f"the table has {len(df)} transitions, fewer than {n}")
+    return df.sort_index(level=["episode", "t"]).iloc[:n]

@@ -1,9 +1,9 @@
 """Saving the learned models of one seed, to look at them and to reuse them without a new run.
 
-For the first seed of a sweep, at every size and at the largest number of rollouts (or at every
+For the first seed of a sweep, at every size and at the largest number of transitions (or at every
 number: Experiment(save_models="all")), every method's model goes to
 
-    <out_dir>/models/<size_label>/n=<n_rollouts>/<method>/
+    <out_dir>/models/<size_label>/n=<n_transitions>/<method>/
         model.npz      the model the solver used, the policy and its promise: the factor intervals
                        (lo, hi [S, K, n, C], FactorBounds) for a causal method, the transition
                        intervals (L, U [S, K, S], IntervalMDP) for flat IMDP and flat MDP, the
@@ -21,7 +21,7 @@ number: Experiment(save_models="all")), every method's model goes to
                        true observed kernel, so every picture of one problem shows the same edges.
                        States with only a column and a row (one agent on a grid) are laid out on
                        their grid, the others on a circle.
-        info.json      method, size, seed, number of rollouts, status, promise at the start
+        info.json      method, size, seed, number of transitions, status, promise at the start
     <out_dir>/models/<size_label>/ground_truth.{pdf,png}   the true MDP over the observed states (the
                                                          observed kernel when a variable is hidden)
 
@@ -216,7 +216,7 @@ def save(folder: Path, result, data, truth, info: dict, pictures_max_states: int
                 true_parents,
                 data.inputs,
                 data.state_vars,
-                f"{info['method']}, {info['size_label']}, n={info['n_rollouts']}",
+                f"{info['method']}, {info['size_label']}, n={info['n_transitions']}",
                 folder / "cbn",
             )
     elif isinstance(model, IntervalMDP):
@@ -232,7 +232,7 @@ def save(folder: Path, result, data, truth, info: dict, pictures_max_states: int
         arrays |= {"kind": "none"}
     np.savez_compressed(folder / "model.npz", **arrays)
     (folder / "info.json").write_text(json.dumps(info | {"observed": observed}, indent=1, default=str))
-    title = f"{info['method']}, {info['size_label']}, n={info['n_rollouts']}"
+    title = f"{info['method']}, {info['size_label']}, n={info['n_transitions']}"
     if data.B.shape[0] <= pictures_max_states and isinstance(model, (FactorBounds, IntervalMDP)):
         _draw_mdp(model, data, truth, title, folder / "mdp")
 

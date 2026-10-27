@@ -1,4 +1,4 @@
-"""Grids of experiments: every combination of problem size x knob x behaviour policy x rollouts.
+"""Grids of experiments: every combination of problem size x knob x behaviour policy x transitions.
 
 A Grid names one problem and what to vary:
 
@@ -8,7 +8,7 @@ A Grid names one problem and what to vary:
         sizes=[2, 3, 4], size_name="N",
         knobs=["ring", "star"], knob_name="topology",
         policies=[Policy("uniform"), Policy("expert", epsilon=0.05), Policy("confounded")],
-        n_rollouts=[10, 50, 200], seeds=[0, 1, 2], horizon=20,
+        n_transitions=[10, 50, 200], seeds=[0, 1, 2], horizon=20,
         methods=standard_methods(...),
     )
 
@@ -30,6 +30,8 @@ from dataclasses import asdict, dataclass, field
 from functools import partial
 from pathlib import Path
 from typing import Any
+
+import pandas as pd
 
 from scm_to_mdp.tool.methods import Limits, Method
 from scm_to_mdp.tool.sweep import Experiment, run_sweeps
@@ -73,7 +75,7 @@ class Grid:
     sizes: list | dict  # a list, or {knob: list} when each knob has its own sizes
     knobs: list
     policies: list[Policy]
-    n_rollouts: list[int]
+    n_transitions: list[int]
     seeds: list[int]
     methods: dict[str, Method]
     horizon: int
@@ -107,9 +109,20 @@ def logger_table(policy: Policy, gamma: float, env):
     return env.behaviour(policy.name, gamma, policy.epsilon, policy.strength)
 
 
-def collect_with(policy: Policy, gamma: float, horizon: int, env, n_rollouts: int):
-    """n_rollouts rollouts of the setting's behaviour policy, without the hidden columns."""
-    return env.hide(env.sample(n_rollouts, horizon, logger_table(policy, gamma, env)))
+def collect_with(policy: Policy, gamma: float, horizon: int, env, n_transitions: int):
+    """At least n_transitions transitions of the setting's behaviour policy, without the hidden columns:
+    whole episodes of at most `horizon` steps (fewer where an episode ends early), drawn in batches
+    until there are enough; the episode ids run on across batches."""
+    behaviour = logger_table(policy, gamma, env)
+    batches, total, start = [], 0, 0
+    while total < n_transitions:
+        n_episodes = max(1, -(-(n_transitions - total) // horizon))  # enough if every episode is full
+        df = env.sample(n_episodes, horizon, behaviour).reset_index()
+        df["episode"] += start  # number the episodes on from the previous batch
+        batches.append(df.set_index(["episode", "t"]))
+        total += len(df)
+        start = int(df["episode"].max()) + 1
+    return env.hide(pd.concat(batches))
 
 
 def sizes_of(grid: Grid, knob) -> list:
@@ -145,7 +158,7 @@ def experiments(grid: Grid) -> list[Experiment]:
             make_env=partial(env_at, grid.make_env, knob),
             collect=partial(collect_with, policy, grid.gamma, grid.horizon),
             sizes=sizes_of(grid, knob),
-            n_rollouts=list(grid.n_rollouts),
+            n_transitions=list(grid.n_transitions),
             seeds=list(grid.seeds),
             methods=grid.methods,
             gamma=grid.gamma,
@@ -183,7 +196,7 @@ def write_grid_file(grid: Grid) -> None:
         "knob_name": grid.knob_name,
         "knobs": [str(k) for k in grid.knobs],
         "policies": [p.label for p in grid.policies],
-        "n_rollouts": sorted(grid.n_rollouts),
+        "n_transitions": sorted(grid.n_transitions),
         "seeds": list(grid.seeds),
         "horizon": grid.horizon,
         "gamma": grid.gamma,

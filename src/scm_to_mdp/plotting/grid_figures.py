@@ -2,16 +2,16 @@
 
     sample_efficiency_grid   rows = policies, columns = knobs; x = observed states, y = transitions
                              needed
-    rollouts_vs_model_size   x = parent rows of the true factored model, y = transitions needed
+    needed_vs_model_size   x = parent rows of the true factored model, y = transitions needed
     promise_heatmap          share of finished runs whose promise holds, method x setting
     discovery_errors         missing / extra edges of the learned graph against the transitions
-    rollouts_vs_coverage     x = C* of the logger, y = transitions needed, one panel per method
+    needed_vs_coverage     x = C* of the logger, y = transitions needed, one panel per method
     confounding              x = confounding bias of the logger, y = promise - true value
 
 Each function takes the tables it draws (built in report_grid) and returns nothing; report_grid
 saves those tables next to the figure (figure_data/<name>.csv). "Transitions" are the samples of a
-dataset (episodes x horizon, less where episodes end early); `grid` is the transitions of every
-number of episodes of the grid (figures.sample_grid), and the tables give the transitions needed in
+dataset (the transition budget); `grid` is the transitions of every
+number of transitions of the grid (figures.sample_grid), and the tables give the transitions needed in
 median_t, q25_t, q75_t (t_star per seed).
 """
 
@@ -70,7 +70,7 @@ def _log_ticks(axis, values, most: int = 7):
     axis.set_major_formatter(FuncFormatter(lambda v, _: f"{v:g}"))
 
 
-def _rollout_axis(ax, grid, top):
+def _budget_axis(ax, grid, top):
     """Log y axis of transitions needed, ticks at the grid's datasets and "not reached" on top."""
     ax.set_yscale("log")
     ax.yaxis.set_minor_locator(NullLocator())
@@ -138,7 +138,7 @@ def sample_efficiency_grid(
                     markersize=3.5,
                     markerfacecolor="white",
                 )
-            _rollout_axis(ax, grid, top)
+            _budget_axis(ax, grid, top)
             many = len(position) > 10 or any("\n" in t for t in tick_labels) and len(position) > 5
             ax.set_xticks(list(position.values()), tick_labels, rotation=45 if many else 0,
                           ha="right" if many else "center")  # fmt: skip
@@ -159,7 +159,7 @@ def sample_efficiency_grid(
     save(fig, stem)
 
 
-def rollouts_vs_model_size(points, policies, methods, styles, grid, title, stem):
+def needed_vs_model_size(points, policies, methods, styles, grid, title, stem):
     """points: rows (policy, knob, size, method, true_rows, median_t). One panel per policy."""
     setup()
     top = grid[-1] * 3
@@ -187,7 +187,7 @@ def rollouts_vs_model_size(points, policies, methods, styles, grid, title, stem)
             )
         ax.set_xscale("log")
         _log_ticks(ax.xaxis, points["true_rows"])
-        _rollout_axis(ax, grid, top)
+        _budget_axis(ax, grid, top)
         ax.set_title(policy)
     fig.supxlabel("parent rows of the true factored model (log scale)", fontsize=8, y=0.17)
     axes[0, 0].set_ylabel("transitions for 95% (median)")
@@ -215,14 +215,14 @@ def promise_heatmap(held: pd.DataFrame, title, stem):
     fig.colorbar(
         image, ax=ax, fraction=0.025, label="share of finished runs: promise <= true value in every state"
     )
-    ax.set_title(f"{title}: where the promise holds (over every size and number of rollouts)")
+    ax.set_title(f"{title}: where the promise holds (over every size and number of transitions)")
     fig.tight_layout()
     save(fig, stem)
 
 
 def discovery_errors(curves, knobs, knob_name, policies, methods, styles, column, ylabel, title, stem):
-    """curves: rows (knob, policy, n_rollouts, transitions, method, <column>), the IQM over sizes and
-    seeds; x = the transitions (mean over sizes and seeds of that number of episodes)."""
+    """curves: rows (knob, policy, n_transitions, transitions, method, <column>), the IQM over sizes and
+    seeds; x = the transitions (mean over sizes and seeds of that number of transitions)."""
     setup()
     fig, axes = plt.subplots(
         len(policies),
@@ -240,7 +240,7 @@ def discovery_errors(curves, knobs, knob_name, policies, methods, styles, column
             ax = axes[r, c]
             cell = curves[(curves["policy"] == policy) & (curves["knob"] == knob)]
             for m in methods:
-                sub = cell[cell["method"] == m].sort_values("n_rollouts")
+                sub = cell[cell["method"] == m].sort_values("n_transitions")
                 if not sub.empty:
                     st = styles[m]
                     ax.plot(
@@ -270,7 +270,7 @@ def discovery_errors(curves, knobs, knob_name, policies, methods, styles, column
     save(fig, stem)
 
 
-def rollouts_vs_coverage(points, policies, methods, styles, grid, title, stem):
+def needed_vs_coverage(points, policies, methods, styles, grid, title, stem):
     """points: rows (policy, method, C_star, t_star), one per (knob, size, seed). One panel per method."""
     setup()
     top = grid[-1] * 3
@@ -289,7 +289,7 @@ def rollouts_vs_coverage(points, policies, methods, styles, grid, title, stem):
             y = np.where(np.isfinite(p["t_star"]), p["t_star"], top)
             ax.plot(x, y, ls="none", marker="o", markersize=2.5, alpha=0.6, color=POLICY_COLOURS[k % 6])
         ax.set_xscale("log")
-        _rollout_axis(ax, grid, top)
+        _budget_axis(ax, grid, top)
         ax.set_title(styles[m]["label"], fontsize=7)
     for ax in axes.flat[len(methods) :]:
         ax.axis("off")
@@ -306,7 +306,7 @@ def rollouts_vs_coverage(points, policies, methods, styles, grid, title, stem):
 
 def confounding(points, policies, methods, styles, title, stem):
     """points: rows (policy, method, bias_mean, gap), one per (knob, size, seed) at the largest number
-    of rollouts. gap > 0: the promise is above the true value (violated)."""
+    of transitions. gap > 0: the promise is above the true value (violated)."""
     setup()
     cols = min(3, len(methods))
     rows = int(np.ceil(len(methods) / cols))

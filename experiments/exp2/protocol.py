@@ -1,7 +1,7 @@
 """Experiment 2: our method against the state of the art (S2-S9).
 
 Per domain, two scripts on the same data as experiment 1 (experiments/common.py: uniform logger,
-1 ... 10k episodes of 256 steps, 10 seeds, evaluation at the nominal start and from 20 random starts).
+10 ... 10k transitions, 10 seeds, evaluation at the nominal start and from 20 random starts).
 Ours with both discovery methods of experiment 1 (PCMCI+ and DYNOTEARS), against
 
     DiFaRL        Ehrlichman, Tang, Dykstra, Makar (CLeaR 2026): action groups from causal discovery,

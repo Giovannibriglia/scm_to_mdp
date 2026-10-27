@@ -81,7 +81,7 @@ def test_the_store_keeps_the_conditional_factors(lake, tmp_path):
 
     method = Method("causal", "box_robust_vi", discovery="oracle", selection="given")
     result = solve(learn(data, method, None, truth.true_parents), data, 0.9)
-    info = {"method": "true graph -> IMDP", "size_label": "4x4-1", "n_rollouts": 400}
+    info = {"method": "true graph -> IMDP", "size_label": "4x4-1", "n_transitions": 400}
     store.save(tmp_path, result, data, truth, info, pictures_max_states=16)
     back = store.load(tmp_path)["model"]
     assert list(back.conditional) == [0]

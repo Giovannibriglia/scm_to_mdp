@@ -1,6 +1,6 @@
-"""Result figures, drawn from results.csv (one row per size, seed, number of rollouts and method).
+"""Result figures, drawn from results.csv (one row per size, seed, number of transitions and method).
 
-Figures over the problem size, at one number of rollouts:
+Figures over the problem size, at one number of transitions:
     performance   regret and promise - true value (nominal start, K random starts)
     performance_normalized   the normalised value of the policy, (V^pi - V_random) / (V*_obs - V_random)
                   (0 = random, 1 = optimal; D4RL's normalised score), nominal start and K random starts
@@ -12,8 +12,8 @@ A point is the mean over seeds, with a band of one standard error, drawn only wh
 that size finished; in the time / memory figures, a method stopped by that limit (or skipped
 after such a stop) has its marker on the limit line, at every size concerned.
 
-Figure over the problem size and the number of rollouts:
-    sample_efficiency   transitions (samples: rollouts x horizon) needed for a policy that is at
+Figure over the problem size and the number of transitions:
+    sample_efficiency   transitions (samples) needed for a policy that is at
                         least 95% optimal
 """
 
@@ -160,7 +160,7 @@ def _as_float(series: pd.Series) -> pd.Series:
 
 
 # ==========================================================================================
-# Over the problem size, at one number of rollouts
+# Over the problem size, at one number of transitions
 # ==========================================================================================
 def performance(res, axis: Axis, methods, styles, k: int, title: str, stem):
     """2 x 2: regret and promise - true value, at the nominal start and over k random starts."""
@@ -553,7 +553,7 @@ def parameter_learning(res, axis: Axis, methods, styles, delta: float | None, ti
 def _limit_marks(data, history, axis, method, step, kind) -> list[int]:
     """Sizes (their positions on the axis) where `method` was stopped by `kind` ("timeout" / "memout") in
     `step`, or skipped because of such a stop (the sweep's rule, tool/sweep.py: a stop at (size, n)
-    skips every larger size with at least n rollouts, and larger n of the same size and seed)."""
+    skips every larger size with at least n transitions, and larger n of the same size and seed)."""
     rank = {s: i for i, s in enumerate(axis.order)}
     hist = history[history["method"] == method]
     if "failed_step" not in hist:  # rows written before steps were named: no stop to place
@@ -570,8 +570,8 @@ def _limit_marks(data, history, axis, method, step, kind) -> list[int]:
     mine = stops[(stops["status"] == kind) & (stops["step"] == step)]
     for r in rows[rows["status"] == "skipped"].itertuples():
         at = rank[r.size]
-        earlier = (mine["rank"] < at) & (mine["n_rollouts"] <= r.n_rollouts)
-        same = (mine["rank"] == at) & (mine["seed"] == r.seed) & (mine["n_rollouts"] < r.n_rollouts)
+        earlier = (mine["rank"] < at) & (mine["n_transitions"] <= r.n_transitions)
+        same = (mine["rank"] == at) & (mine["seed"] == r.seed) & (mine["n_transitions"] < r.n_transitions)
         if (earlier | same).any():
             marks.add(at)
     return [float(axis.x[i]) for i in sorted(marks)]  # positions on the axis
@@ -584,8 +584,8 @@ def resources(res, axis: Axis, methods, styles, unit: str, limits: dict, title: 
     includes the relaxation step.
     At every size where a method was stopped by this figure's limit (timeouts in the time figure,
     memouts in the memory figure), or skipped because of such a stop at a smaller size or number of
-    rollouts, its marker sits on the dashed line. A step stopped by the other limit is an X at its
-    measured value. history: the rows of every number of rollouts (to find why a row was skipped);
+    transitions, its marker sits on the dashed line. A step stopped by the other limit is an X at its
+    measured value. history: the rows of every number of transitions (to find why a row was skipped);
     default res."""
     setup()
     history = res if history is None else history
@@ -685,11 +685,11 @@ def target_value(res: pd.DataFrame) -> pd.Series:
     return pd.to_numeric(res["V_star"], errors="coerce")
 
 
-def rollouts_needed(res: pd.DataFrame, target: float = 0.95) -> pd.DataFrame:
-    """For every (size, seed, method): n* = the smallest number of rollouts (episodes) n of the grid
+def transitions_needed(res: pd.DataFrame, target: float = 0.95) -> pd.DataFrame:
+    """For every (size, seed, method): n* = the smallest number of transitions n of the grid
     such that the policy is at least `target` optimal (true >= target * V_star_obs at the nominal start)
     at n and at every larger n of the grid; inf if never; t_star = the transitions (samples) of that
-    dataset: n* x the horizon, less where episodes end early. A run that stopped counts as not optimal.
+    dataset (= n*). A run that stopped counts as not optimal.
     Sizes with V_star_obs <= 0 have no such ratio and are left out. n_observed_states: what the
     learners see (n_states counts the hidden variables too)."""
     rows = []
@@ -697,13 +697,13 @@ def rollouts_needed(res: pd.DataFrame, target: float = 0.95) -> pd.DataFrame:
     if "transitions" not in res:
         res = res.assign(transitions=np.nan)
     for (size, seed, method), g in res.groupby(["size", "seed", "method"]):
-        g = g.sort_values("n_rollouts")
+        g = g.sort_values("n_transitions")
         v_star = g["_target"].iloc[0]
         if not np.isfinite(v_star) or v_star <= 0:
             continue
         good = (g["status"] == "ok") & (pd.to_numeric(g["true"], errors="coerce") >= target * v_star)
         from_here = good[::-1].cummin()[::-1].to_numpy()  # good at n and at every larger n
-        grid = g["n_rollouts"].to_numpy()
+        grid = g["n_transitions"].to_numpy()
         samples = pd.to_numeric(g["transitions"], errors="coerce").to_numpy(float)
         n_star = float(grid[from_here.argmax()]) if from_here.any() else np.inf
         t_star = float(samples[from_here.argmax()]) if from_here.any() else np.inf
@@ -722,14 +722,14 @@ def rollouts_needed(res: pd.DataFrame, target: float = 0.95) -> pd.DataFrame:
     return pd.DataFrame(rows, columns=columns)
 
 
-def summarize_rollouts(needed: pd.DataFrame) -> pd.DataFrame:
-    """Median and quartiles over seeds of n* (median, q25, q75: values of the grid of rollouts) and of
+def summarize_needed(needed: pd.DataFrame) -> pd.DataFrame:
+    """Median and quartiles over seeds of n* (median, q25, q75: values of the grid of budgets) and of
     the transitions t* (median_t, q25_t, q75_t); inf = not reached."""
 
     def q(x, p):
         return float(np.quantile(np.sort(x.to_numpy()), p, method="inverted_cdf"))
 
-    if "t_star" not in needed:  # an older table: rollouts only
+    if "t_star" not in needed:  # an older table: budgets only
         needed = needed.assign(t_star=np.nan)
     if "n_observed_states" not in needed:
         needed = needed.assign(n_observed_states=needed["n_states"])
@@ -744,11 +744,11 @@ def summarize_rollouts(needed: pd.DataFrame) -> pd.DataFrame:
 
 
 def sample_grid(res: pd.DataFrame) -> list[float]:
-    """The transitions of every number of rollouts of the grid (median over the runs): the y ticks of
+    """The transitions of every number of transitions of the grid (median over the runs): the y ticks of
     the figures of samples needed."""
     if "transitions" not in res or res["transitions"].isna().all():
-        return [float(n) for n in sorted(res["n_rollouts"].unique())]
-    t = pd.to_numeric(res["transitions"], errors="coerce").groupby(res["n_rollouts"]).median()
+        return [float(n) for n in sorted(res["n_transitions"].unique())]
+    t = pd.to_numeric(res["transitions"], errors="coerce").groupby(res["n_transitions"]).median()
     return [float(v) for v in t.sort_index().to_numpy()]
 
 
@@ -767,9 +767,9 @@ def sample_efficiency(
     optimal: the median over seeds, with a band from the first to the third quartile (not a standard
     deviation: a seed that never reaches the target has t* = inf). Not reached within the grid: an
     open marker on the line above the largest dataset. Returns the table of medians and quartiles
-    (of the rollouts n* and of the transitions t*)."""
+    (of the budget n* and of the transitions t*)."""
     setup()
-    summary = summarize_rollouts(rollouts_needed(res, target))
+    summary = summarize_needed(transitions_needed(res, target))
     if summary.empty:  # no run finished (or no size has V*_obs > 0): nothing to draw
         return summary
     grid = sample_grid(res)

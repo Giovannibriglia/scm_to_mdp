@@ -3,8 +3,8 @@
 Ten seeds cannot test delta = 0.05: with no failure in 10 runs the 95% Clopper-Pearson upper bound
 on the failure rate is still 0.26, and a bound below 0.05 needs at least 59 runs without a failure.
 This script runs the methods with a promise (experiment 1's -> IMDP arms) on the smallest sizes of
-every domain with SEEDS seeds, everything else as in experiments/common.py (uniform logger, 256-step
-episodes, the robustness checks; no random rewards). Its report (summary/validity.csv) gives, per
+every domain with SEEDS seeds, everything else as in experiments/common.py (uniform logger, transition
+budgets, the robustness checks; no random rewards). Its report (summary/validity.csv) gives, per
 cell, the share of runs whose promise held with a Clopper-Pearson interval and the verdict against
 1 - delta ("confirmed", "refuted", "undecided"); summary/robustness.csv adds the other checks.
 
@@ -27,7 +27,7 @@ from protocol import experiment_grid  # noqa: E402
 # >= 59 seeds: then no failure puts the 95% upper bound on the failure rate below 0.05
 SEEDS = list(range(60))
 SMALLEST = 2  # the smallest sizes of every domain (per knob)
-N_EPISODES = [10, 100, 1000]  # of 256 steps
+N_TRANSITIONS = [100, 1000, 10000]
 
 
 def calibration_grid(domain: str):
@@ -41,7 +41,7 @@ def calibration_grid(domain: str):
         base,
         sizes=sizes,
         seeds=SEEDS,
-        n_rollouts=N_EPISODES,
+        n_transitions=N_TRANSITIONS,
         save_models="none",
         reward_transfer=False,  # the calibration asks about 1 - delta only
         reward_family=None,

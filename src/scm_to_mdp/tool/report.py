@@ -3,14 +3,12 @@
     report(out_dir)
 
 writes into out_dir:
-    tables.md                                    every table, for every number of episodes
-    figures/episodes=<n>/{performance,validity,structure,time,memory}.{pdf,png}
+    tables.md                                    every table, for every number of transitions
+    figures/transitions=<n>/{performance,validity,structure,time,memory}.{pdf,png}
                                                  the figures over the problem size (x: observed
-                                                 states), one folder per number of episodes n; the
-                                                 title gives the dataset's transitions (n x horizon,
-                                                 less where episodes end early)
+                                                 states), one folder per transition budget n
     figures/sample_efficiency.{pdf,png}          transitions needed for a 95%-optimal policy
-A "rollout" in results.csv (n_rollouts) is one episode; "transitions" counts its samples.
+n_transitions in results.csv is the dataset's budget: its first n logged transitions.
 and prints the main tables. Baselines, oracle methods and ours are told apart by the role column
 (set by the Method: flat_rmdp, flat_mdp and difarl are the baselines).
 """
@@ -53,7 +51,7 @@ def report(out_dir, target: float = 0.95, delta: float | None = 0.05, show: bool
     """Tables and figures of the sweep in out_dir. target: the share of V*_obs (the best policy over
     the observed state) that counts as "optimal"; delta: the failure probability of the promises
     (the 1 - delta line of the validity panel).
-    Returns {"rollouts_needed": table of n* (median and quartiles over seeds)}."""
+    Returns {"transitions_needed": table of n* (median and quartiles over seeds)}."""
     out = Path(out_dir)
     res = read_results(out, current=True)
     if res.empty:
@@ -74,20 +72,17 @@ def report(out_dir, target: float = 0.95, delta: float | None = 0.05, show: bool
     name = meta["config"]["name"]
     fig_dir = out / "figures"
     lines = [f"# {name}: results", "", "methods: " + ", ".join(f"{m} ({roles[m]})" for m in methods), ""]
-    shown = []  # what is printed: the main tables at the largest number of rollouts, and n*
+    shown = []  # what is printed: the main tables at the largest number of transitions, and n*
 
-    # ---- figures and tables over the size, one set per number of rollouts --------------------
-    for n in meta["n_rollouts"]:
-        at_n = res[res["n_rollouts"] == n]
+    # ---- figures and tables over the size, one set per number of transitions --------------------
+    for n in meta["n_transitions"]:
+        at_n = res[res["n_transitions"] == n]
         if at_n.empty:
             continue
         axis = figures.Axis(at_n, sizes, [labels[s] for s in sizes], size_name)
-        samples = (
-            pd.to_numeric(at_n["transitions"], errors="coerce").median() if "transitions" in at_n else np.nan
-        )
-        shown_samples = f" ({figures.samples_label(samples)} transitions)" if np.isfinite(samples) else ""
-        title = f"{name}, {n} episodes{shown_samples}"
-        folder = fig_dir / f"episodes={n}"
+        budget = f"{figures.samples_label(n)} transitions"  # e.g. "1k transitions"
+        title = f"{name}, {budget}"
+        folder = fig_dir / f"transitions={n}"
         figures.performance(at_n, axis, methods, styles, k, title, folder / "performance")
         normalized = folder / "performance_normalized"
         figures.performance_normalized(at_n, axis, methods, styles, target, k, title, normalized)
@@ -112,7 +107,7 @@ def report(out_dir, target: float = 0.95, delta: float | None = 0.05, show: bool
         figures.resources(at_n, axis, methods, styles, "s", time_limits, title, folder / "time", history=res)
         mem = dict.fromkeys(figures.STEP_TITLES, limits["mem_gb"])
         figures.resources(at_n, axis, methods, styles, "gb", mem, title, folder / "memory", history=res)
-        lines += [f"## {n} episodes{shown_samples}", ""]
+        lines += [f"## {budget}", ""]
         for column, caption, fmt in [
             (
                 "optimal_share",
@@ -138,8 +133,8 @@ def report(out_dir, target: float = 0.95, delta: float | None = 0.05, show: bool
             text = _table(at_n, sizes, labels, size_name, methods, column, fmt)
             if text:
                 lines += [f"{caption} (mean over seeds):", "```", text, "```", ""]
-                if n == max(meta["n_rollouts"]) and column in ("optimal_share", "safe"):
-                    shown += [f"{caption}, {n} episodes (mean over seeds):", text, ""]
+                if n == max(meta["n_transitions"]) and column in ("optimal_share", "safe"):
+                    shown += [f"{caption}, {budget} (mean over seeds):", text, ""]
         if delta is not None and "safe" in at_n:
             gate = figures.normalised(at_n)
             valid = figures.validity_gate(gate, delta)
@@ -167,7 +162,7 @@ def report(out_dir, target: float = 0.95, delta: float | None = 0.05, show: bool
             counts = stopped.groupby(["size_label", "method", "failed_step", "status"], dropna=False).size()
             lines += ["Runs that did not finish (count over seeds):", "```", counts.to_string(), "```", ""]
 
-    # ---- rollouts needed for a policy at least `target` optimal ------------------------------
+    # ---- transitions needed for a policy at least `target` optimal ------------------------------
     summary = figures.sample_efficiency(
         res,
         sizes,
@@ -234,4 +229,4 @@ def report(out_dir, target: float = 0.95, delta: float | None = 0.05, show: bool
     if show:
         print("\n".join(shown))
         print(f"\ntables: {out / 'tables.md'}\nfigures: {fig_dir}/")
-    return {"rollouts_needed": summary}
+    return {"transitions_needed": summary}

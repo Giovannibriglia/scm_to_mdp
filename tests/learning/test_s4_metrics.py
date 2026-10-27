@@ -39,8 +39,9 @@ def test_every_metric_reaches_results_csv(tmp_path):
 
     exp = Experiment(
         name="cols", make_env=small_sysadmin, collect=random_rollouts, sizes=[2],
-        n_rollouts=[30], seeds=[0], methods={"BIC -> IMDP": Method("causal", "box_robust_vi", discovery="bic",
-        selection="bic_best", learning_options={"widen": "hull", "k": 1})}, limits=None, workers=1,
+        n_transitions=[30], seeds=[0],
+        methods={"BIC -> IMDP": Method("causal", "box_robust_vi", discovery="bic", selection="bic_best",
+                                       learning_options={"widen": "hull", "k": 1})}, limits=None, workers=1,
         out_dir=tmp_path, save_models="none",
     )  # fmt: skip
     res = run_experiment(exp)
