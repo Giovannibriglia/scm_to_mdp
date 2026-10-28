@@ -67,6 +67,9 @@ class Domain:
     sl_spibb_m: int = 10
     sl_spibb_eps: float = 0.2
     horizon: int = UNTIL_END  # the longest episode the logger plays before a reset
+    # the sparse graph's actions (discovery/sparse.py): "all" (one controller) or "by_index" (one action
+    # variable per agent, owning the state variables with its index: x0, y0 <- a0)
+    sparse_actions: str = "all"
 
 
 # ---- environments ----------------------------------------------------------------------------------
@@ -147,11 +150,12 @@ DOMAINS = {
                        "width x height", ["on"], "proximity", 0.95,
                        {"turbulence": HIDDEN, "turbulence_effect": TURBULENCE_EFFECT}),
     "drone": Domain("Drone", drone, ["3-1", "4-1", "5-1", "6-1", "7-1", "8-1", "9-1", "10-1", "11-1", "12-1"],
-                    "side-drones", ["gust"], "gust", 0.95, {"gust": HIDDEN, "gust_effect": GUST_EFFECT}),
+                    "side-drones", ["gust"], "gust", 0.95, {"gust": HIDDEN, "gust_effect": GUST_EFFECT},
+                    sparse_actions="by_index"),
     "frozenlake": Domain("Frozen Lake", frozenlake,
                          {"1": ["4x4", "8x8", "16x16", "32x32"], "2": ["4x4", "5x5", "6x6", "7x7"]},
                          "map", ["1", "2"], "agents", 0.95, {"wind": HIDDEN, "wind_effect": WIND_EFFECT},
-                         sl_spibb_parents=2),
+                         sl_spibb_parents=2, sparse_actions="by_index"),
     "stock": Domain("Stock trading", stock, ["1x2", "1x3", "1x4", "2x2", "1x6", "2x3", "3x2", "2x4", "4x2"],
                     "sectors x stocks", [0.8], "scale", 0.9, {"news": HIDDEN, "news_effect": NEWS_EFFECT},
                     horizon=64, sl_spibb_parents=6, spibb_m=10, sl_spibb_m=20, sl_spibb_eps=0.3),

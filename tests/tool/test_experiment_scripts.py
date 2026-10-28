@@ -118,7 +118,7 @@ def test_every_script_runs_by_name_from_the_launcher(tmp_path):
     assert wrong.returncode != 0 and "no script" in wrong.stderr
 
 
-@pytest.mark.parametrize("experiment", ["exp1", "exp2"])
+@pytest.mark.parametrize("experiment", ["exp1", "exp2", "exp1_sparse"])
 def test_every_script_has_a_smoke_version(experiment):
     """experiments/<exp>_smoke: one script per domain and kind, the real methods on the tiny grid of
     experiments/smoke.py, results under results/<exp>_smoke/."""
@@ -135,3 +135,22 @@ def test_every_script_has_a_smoke_version(experiment):
             assert smoke.GRID.seeds == settings.SEEDS and smoke.GRID.n_transitions == settings.N_TRANSITIONS
             assert (smoke.GRID.reward_family is None) == (real.GRID.reward_family is None)
             assert smoke.GRID.out_dir == common.ROOT / "results" / f"{experiment}_smoke" / module
+
+
+def test_the_sparse_run_is_experiment_1_on_other_methods():
+    """exp1_sparse runs the sparse-graph arms (and the oracle) on exactly experiment 1's grids, so its rows
+    can join experiment 1's (experiments/merge_runs.py): the same domains, sizes, data, seeds, horizon,
+    limits and random rewards; per-agent actions only in the multi-agent domains."""
+    import dataclasses
+
+    for domain in DOMAINS:
+        for kind in ("mdp", "imdp"):
+            module = f"{domain}_{kind}"
+            real, _, _ = load("exp1", module)
+            sparse, protocol, _ = load("exp1_sparse", module)
+            a, b = dataclasses.asdict(real.GRID), dataclasses.asdict(sparse.GRID)
+            differ = {k for k in a if a[k] != b[k]}
+            assert differ <= {"methods", "out_dir", "make_env"}, (module, differ - {"methods", "out_dir"})
+            assert set(sparse.GRID.methods) == set(protocol.METHODS[kind])
+            option = sparse.GRID.methods[f"sparse -> {kind.upper()}"].discovery_options["actions"]
+            assert option == ("by_index" if domain in ("frozenlake", "drone") else "all"), module

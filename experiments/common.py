@@ -75,7 +75,8 @@ DEEP = ("offline DQN", "offline CQL")
 
 def methods(names, domain) -> dict:
     """The named methods of tool.standard_methods and tool.oracle_methods, in the order given, with the
-    domain's SPIBB settings (domains.Domain) and the uniform logger as SPIBB's baseline policy."""
+    domain's SPIBB settings and sparse-graph actions (domains.Domain) and the uniform logger as SPIBB's
+    baseline policy."""
     every = (
         standard_methods(
             max_parents=None,
@@ -85,6 +86,7 @@ def methods(names, domain) -> dict:
             state_parents=domain.sl_spibb_parents,
             spibb_options={"m": domain.spibb_m, "behaviour": "uniform"},
             sl_spibb_options={"m": domain.sl_spibb_m, "eps": domain.sl_spibb_eps, "behaviour": "uniform"},
+            sparse_actions=domain.sparse_actions,
         )
         | oracle_methods()
     )
