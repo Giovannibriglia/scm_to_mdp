@@ -101,3 +101,38 @@ def test_the_new_baselines_are_standard_methods():
         assert methods[name].role == "baseline" and not methods[name].guarantee
     with pytest.raises(ValueError, match="unknown options"):
         Method("sl_spibb", "spibb", learning_options={"depth": 2})
+
+
+def test_factored_spibb_estimates_each_factor_on_the_given_parents(truth):
+    """Simao & Spaan, AAAI 2019, Alg. 2: per-factor counts on the given parents (Eqs. 2-3); (s, a) known
+    when every factor's component has >= m samples (Eq. 4). With every input as parents a factor's
+    component is (s, a) itself, so the bootstrapped pairs are flat SPIBB's."""
+    env = SysAdmin(3, seed=0)
+    data = env.ground_truth().learner_spec.read(env.sample(30, 20, "random"))
+    parents = truth.parents_in(data)
+    model = spibb.factored_model(data, parents, m=10, behaviour="uniform")
+    seen = model.P.sum(2) > 0
+    assert np.allclose(model.P.sum(2)[seen], 1.0)
+    every = {v: tuple(data.inputs) for v in data.state_vars}
+    flat = spibb.flat_model(data, m=10)
+    assert np.array_equal(spibb.factored_model(data, every, m=10).bootstrapped, flat.bootstrapped)
+    # the true graph needs fewer samples per row than the flat model: fewer pairs bootstrapped
+    assert model.bootstrapped.sum() < flat.bootstrapped.sum()
+    with pytest.raises(ValueError, match="slice-t"):
+        spibb.factored_model(data, {v: ("m0'",) for v in data.state_vars})
+
+
+def test_factored_spibb_is_a_reference_given_the_true_graph(truth):
+    method = standard_methods(factored_spibb_options={"m": 10})["Factored SPIBB (true graph)"]
+    assert method.role == "reference" and not method.guarantee
+    env = SysAdmin(3, seed=0)
+    data = env.ground_truth().learner_spec.read(env.sample(30, 20, "random"))
+    result = solve(learn(data, method, true_parents=truth.true_parents), data, GAMMA)
+    assert result.ok, result.error
+    assert result.graph.parents == truth.parents_in(data)
+    out = evaluate(result, data, truth, GAMMA)
+    assert out["shd"] == 0 and np.isfinite(out["true"])
+    with pytest.raises(ValueError, match="true graph"):
+        Method("factored_spibb", "spibb")
+    with pytest.raises(ValueError, match="true_parents"):
+        learn(data, method)

@@ -130,8 +130,9 @@ bound on the true value with probability at least 1 - δ).
   next-state variable, no same-step edge), the true graph and the flat model. The discovered graphs
   are also scored against the true one: recall (true edges found), precision (found edges that are
   true), SHD and SID.
-- **Experiment 2** (`experiments/exp2/`): ours (PCMCI+ and DYNOTEARS) against DiFaRL, FOCUS, SL-SPIBB
-  (Simão & Spaan) and offline DQN.
+- **Experiment 2** (`experiments/exp2/`): ours (PCMCI+ and DYNOTEARS) against DiFaRL, FOCUS, flat
+  Π_b-SPIBB (Laroche et al., ICML 2019), SL-SPIBB (Simão & Spaan, IJCAI 2019) and offline DQN, with Factored SPIBB (Simão & Spaan, AAAI 2019) on the
+  true graph as a reference.
 
 Every script runs on its own, by name, from any folder (`experiments/run.py`), or directly:
 
@@ -285,7 +286,7 @@ Baselines are dashed, ours solid, the references (true graph) dotted; methods wi
 | `src/scm_to_mdp/scm_learning/` | S4: `nbn_intervals`, a Clopper–Pearson interval per factor row with a union bound |
 | `src/scm_to_mdp/compilation/` | S7: `product_bounds`, factor intervals → their box, an interval MDP (the relaxation the box solvers use in S8) |
 | `src/scm_to_mdp/solving/` | S8: `value_iteration`, `robust_vi`, `vertex_robust_vi` (`tol` = distance to the fixed point, `stopping.py`) |
-| `src/scm_to_mdp/baselines/` | `flat_mdp`, `flat_rmdp`, `difarl`, `offline_q` (offline DQN / CQL), `spibb` (flat and SL-SPIBB), `focus` |
+| `src/scm_to_mdp/baselines/` | `flat_mdp`, `flat_rmdp`, `difarl`, `offline_q` (offline DQN / CQL), `spibb` (flat, SL-SPIBB and Factored SPIBB), `focus` |
 | `src/scm_to_mdp/evaluation.py` | S9: V*, the true value of a policy, promise, safety, SHD, SID, recall and precision, the data's coverage of a task's rows, the learned model against the true kernel |
 | `src/scm_to_mdp/robustness.py`, `src/scm_to_mdp/reward_family.py` | S9: the robustness checks of a promise; random rewards on the same dynamics |
 | `src/scm_to_mdp/plotting/` | result figures (from `results.csv`) and pictures of MDPs |

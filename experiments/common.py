@@ -85,6 +85,9 @@ def methods(names, domain) -> dict:
             state_parents=domain.sl_spibb_parents,
             spibb_options={"m": domain.spibb_m, "behaviour": "uniform"},
             sl_spibb_options={"m": domain.sl_spibb_m, "eps": domain.sl_spibb_eps, "behaviour": "uniform"},
+            # Factored SPIBB: one count threshold for every factor, SL-SPIBB's m (Simao & Spaan's
+            # m_i: Taxi 20, SysAdmin 10, AAAI 2019)
+            factored_spibb_options={"m": domain.sl_spibb_m, "behaviour": "uniform"},
         )
         | oracle_methods()
     )

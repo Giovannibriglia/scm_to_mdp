@@ -18,6 +18,9 @@ A Method names one choice per step. The learner is one of:
     "spibb", "sl_spibb"
                  baselines: safe policy improvement over the (estimated) behaviour policy, flat
                  (Laroche et al.) or with structure learning (Simao & Spaan; baselines/spibb.py)
+    "factored_spibb"
+                 reference: Factored SPIBB (Simao & Spaan, AAAI 2019), the factored model on a GIVEN
+                 graph (discovery "oracle", selection "given": the true graph), solved like SPIBB
     "focus"      baseline: FOCUS's CI-test structure + a MOPO-penalised factored model (discrete
                  version, baselines/focus.py) -> an exact MDP with a penalised reward
     "oracle"     not a learner: the true observed MDP (baselines/true_model.py), exact (L == U, for
@@ -68,6 +71,7 @@ LEARNERS = (
     "spibb",
     "sl_spibb",
     "focus",
+    "factored_spibb",
     "oracle",
 )
 BASELINES = LEARNERS[1:-1]  # every learner but ours ("causal") and the oracle
@@ -88,6 +92,7 @@ SOLVERS_FOR = {
     "spibb": ("spibb",),
     "sl_spibb": ("spibb",),
     "focus": ("vi",),
+    "factored_spibb": ("spibb",),
     "oracle": ("vi", "robust_vi"),
 }
 ROBUST_SOLVERS = ("box_robust_vi", "vertex_robust_vi", "robust_vi")
@@ -187,6 +192,10 @@ class Method:
             if self.discovery not in GIVEN_GRAPHS:
                 _check_options(discovery_function(self.discovery), self.discovery_options, 1, "discovery")
             _check_options(causal_learner(self).learn, self.learning_options, 2, "learning")
+        elif self.learner == "factored_spibb":  # its graph is given (Simao & Spaan, AAAI 2019)
+            if (self.discovery, self.selection) != ("oracle", "given") or self.discovery_options:
+                raise ValueError("factored_spibb takes the true graph: discovery 'oracle', selection 'given'")
+            _check_options(spibb.factored_model, self.learning_options, 2, "learning (Factored SPIBB)")
         else:
             if self.discovery is not None or self.selection is not None:
                 raise ValueError(f"learner {self.learner!r} has no discovery or selection to choose")
@@ -240,6 +249,8 @@ class Method:
         discovery: full-fact -> IMDP / MDP) is a baseline."""
         if self.learner == "oracle":
             return "oracle"
+        if self.learner == "factored_spibb":  # a baseline method, but given the true graph
+            return "reference"
         if self.learner in BASELINES or self.discovery == "full":
             return "baseline"
         if self.discovery == "oracle":
@@ -380,6 +391,15 @@ def learning_steps(
         return [("learning", lambda d: spibb.flat_model(d, **m.learning_options))]
     if m.learner == "sl_spibb":
         return [("learning", lambda d: spibb.sl_model(d, **m.learning_options))]
+    if m.learner == "factored_spibb":
+        if true_parents is None:
+            raise ValueError("factored_spibb needs the true graph as true_parents (tool/sweep.py)")
+        discover = discovery_function("oracle")
+        return [
+            ("discovery", lambda d: discover(d, true_parents)),
+            ("selection", lambda candidates: given.select(candidates, data)),
+            ("learning", lambda graph: spibb.factored_model(data, graph.parents, **m.learning_options)),
+        ]
     if m.learner == "focus":
         options = {"seed": seed, **m.learning_options}
         return [
@@ -569,6 +589,7 @@ def standard_methods(
     state_parents: int = 3,
     spibb_options: dict | None = None,
     sl_spibb_options: dict | None = None,
+    factored_spibb_options: dict | None = None,
 ) -> dict[str, Method]:
     """Every named method (experiments/exp1 and exp2 pick theirs in their protocol.py):
     ours (BIC / PCMCI+ / GES / DYNOTEARS -> IMDP; BIC -> IMDP with hull or padded families; the same
@@ -581,7 +602,8 @@ def standard_methods(
     graph + 1, each -> IMDP with the box), the full factored graph (full-fact -> IMDP / MDP: every
     slice-t input a parent of every next-state variable, no discovery) and the baselines (flat IMDP,
     flat MDP, DiFaRL, flat SPIBB, SL-SPIBB with candidate parent sets of `state_parents` state
-    variables, FOCUS; with `deep`, also offline DQN and offline CQL). Every baseline uses the
+    variables, FOCUS; with `deep`, also offline DQN and offline CQL) and Factored SPIBB on the true
+    graph (a reference: its structure is given, Simao & Spaan, AAAI 2019). Every baseline uses the
     defaults of its module in baselines/."""
     causal = {"selection": "bic_best", "learning_options": {"delta": delta}}
     oracle = {"discovery": "oracle", "selection": "given", "learning_options": {"delta": delta}}
@@ -676,6 +698,10 @@ def standard_methods(
     }
     # SPIBB's count threshold m, SL-SPIBB's eps and the baseline policy (baselines/spibb.py)
     methods["flat SPIBB"] = Method("spibb", "spibb", learning_options=dict(spibb_options or {}))
+    methods["Factored SPIBB (true graph)"] = Method(
+        "factored_spibb", "spibb", discovery="oracle", selection="given",
+        learning_options=dict(factored_spibb_options or {}),
+    )  # fmt: skip
     methods["SL-SPIBB"] = Method(
         "sl_spibb", "spibb", learning_options={"d": state_parents, **(sl_spibb_options or {})}
     )

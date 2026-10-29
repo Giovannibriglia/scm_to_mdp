@@ -8,9 +8,13 @@ Ours with both discovery methods of experiment 1 (PCMCI+ and DYNOTEARS), against
                   fitted Q iteration (baselines/difarl.py)
     FOCUS         Zhu, Chen, Tian, Zhang, Yu: CI-test structure + a MOPO-penalised factored model
                   (baselines/focus.py)
-    SL-SPIBB      Simao & Spaan 2019: structure learning + safe policy improvement over the behaviour
-                  policy (baselines/spibb.py)
+    flat SPIBB    Pi_b-SPIBB of Laroche, Trichelair, Tachet des Combes (ICML 2019): safe policy
+                  improvement over the behaviour policy on the flat MLE model (baselines/spibb.py)
+    SL-SPIBB      Simao & Spaan (IJCAI 2019): the same with structure learning (baselines/spibb.py)
     offline DQN   offline deep Q-learning on the logged data (baselines/offline_q.py)
+
+and, as a reference that is given the structure, Factored SPIBB (Simao & Spaan, AAAI 2019): the same
+safe policy improvement on the true graph instead of a learned one (baselines/spibb.py).
 
     <domain>_mdp.py    ours as point estimates and value iteration (PCMCI+ / DYNOTEARS -> MDP)
     <domain>_imdp.py   ours as interval sets and robust VI (PCMCI+ / DYNOTEARS -> IMDP: a promise)
@@ -26,10 +30,11 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))  # experiments/: co
 from common import grid, main  # noqa: E402, F401
 
 EXPERIMENT = "exp2"
-BASELINES = ("DiFaRL", "FOCUS", "SL-SPIBB", "offline DQN")
+BASELINES = ("DiFaRL", "FOCUS", "flat SPIBB", "SL-SPIBB", "offline DQN")
+REFERENCES = ("Factored SPIBB (true graph)",)  # given the true graph
 METHODS = {
-    "mdp": ("PCMCI+ -> MDP", "DYNOTEARS -> MDP", *BASELINES, "oracle -> MDP"),
-    "imdp": ("PCMCI+ -> IMDP", "DYNOTEARS -> IMDP", *BASELINES, "oracle -> IMDP"),
+    "mdp": ("PCMCI+ -> MDP", "DYNOTEARS -> MDP", *BASELINES, *REFERENCES, "oracle -> MDP"),
+    "imdp": ("PCMCI+ -> IMDP", "DYNOTEARS -> IMDP", *BASELINES, *REFERENCES, "oracle -> IMDP"),
 }
 
 

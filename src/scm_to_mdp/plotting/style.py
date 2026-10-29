@@ -25,6 +25,7 @@ ARM_STYLE = {
     "offline CQL": {"color": "#000000", "marker": "*"},
     "flat SPIBB": {"color": "#9467BD", "marker": "<"},
     "SL-SPIBB": {"color": "#9467BD", "marker": ">"},
+    "Factored SPIBB (true graph)": {"color": "#9467BD", "marker": "d"},  # the SPIBB family, given the graph
     "FOCUS": {"color": "#17BECF", "marker": "h"},
     "DYNOTEARS -> IMDP": {"color": "#882255", "marker": "p"},
     "BIC -> IMDP (hull)": {"color": "#332288", "marker": "o"},

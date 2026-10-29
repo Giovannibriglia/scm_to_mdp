@@ -2,7 +2,11 @@
 
     flat SPIBB   Pi_b-SPIBB of Laroche, Trichelair, Tachet des Combes, "Safe Policy Improvement with
                  Baseline Bootstrapping", ICML 2019 (https://arxiv.org/abs/1712.06924): the MLE flat
-                 MDP; a pair (s, a) seen fewer than m times is "bootstrapped".
+                 MDP; a pair (s, a) seen fewer than m times is "bootstrapped" (the paper, Sec. 3: "the
+                 set of state-action pairs with counts smaller than N_wedge"; their code,
+                 github.com/RomainLaroche/SPIBB, spibb.py, bootstraps counts <= N_wedge: one count
+                 apart, we follow the paper). Unseen pairs get a zero row, as their modelTransitions
+                 (zero_unseen=True).
     SL-SPIBB     Structure Learning Pi_b-SPIBB of Simao & Spaan, "Structure Learning for Safe Policy
                  Improvement", IJCAI 2019 (https://doi.org/10.24963/ijcai.2019/479), Alg. 3, with the SL
                  subalgorithm of Strehl, Diuk, Littman (AAAI 2007) described there (Sec. 2.3, Eqs. 4-5):
@@ -12,12 +16,22 @@
                  P(X_i' | s[D_i u D_j]) of all j differ by at most eps in L1 (Eq. 5); it returns
                  P(X_i' | s[D_i u D_j]) for the first j. (s, a) is bootstrapped when some factor
                  finds no candidate; otherwise P(s' | s, a) = prod_i P_i(s'_i).
+    Factored     Factored Pi_b-SPIBB of Simao & Spaan, "Safe Policy Improvement with Baseline
+    SPIBB        Bootstrapping in Factored Environments", AAAI 2019, 33(01):4967-4974
+                 (https://doi.org/10.1609/aaai.v33i01.33014967), Alg. 2: the dependency function D
+                 (the parents of every state variable) is GIVEN ("the dependence between the factors
+                 is known a priori"); here, the true graph. Each factor is estimated from its counts,
+                 P(x_i' | j) = n(x_i', j) / n(j) with j = D(s, a, X_i) (Eq. 2), P(s' | s, a) = prod_i
+                 (Eq. 3), and (s, a) is known when every factor's component has n(j) >= m_i (Eq. 4);
+                 the other pairs are bootstrapped. One threshold m for every factor (their Taxi and
+                 SysAdmin experiments: m_i = 20 and 10, the values of SL-SPIBB's m in our domains).
 
 Both then compute the Pi_b-SPIBB policy: policy iteration in the estimated MDP (Laroche et al.,
 Sec. 2.3, with the greedy projection of their Alg. 1; Simao & Spaan, Alg. 1), where in every state
 the policy keeps the baseline's probability on bootstrapped actions and puts the rest of the mass on
 the best non-bootstrapped action (ties: the action the current policy prefers, so that the
-iteration cannot cycle between equal actions). The number of iterations is reported
+iteration cannot cycle between equal actions; Laroche et al.'s code takes the first index and stops when
+Q stops changing: the same values). The number of iterations is reported
 (Solution.iterations; max_iter reached: not converged). The result is a stochastic policy; its value
 in the estimated MDP is reported as the promise, which is an estimate (the guarantee of SPIBB is an
 improvement over the baseline w.h.p., not a value bound).
@@ -26,7 +40,8 @@ The estimated MDP: flat SPIBB keeps the maximum-likelihood transitions of every 
 once (Laroche et al., Thm 1 and Lemma 2: bootstrapped pairs are followed with the baseline's
 probabilities, so their estimates are used; their code passes the MLE model), and only unseen pairs
 have no estimate; SL-SPIBB gives every bootstrapped pair an absorbing (zero) row, as Simao & Spaan,
-Alg. 3, line 9.
+Alg. 3, line 9; Factored SPIBB keeps the product estimate of every pair whose components were all seen
+(as flat SPIBB keeps its MLE), and a zero row where some component has no data.
 
 The baseline policy (`behaviour`): "uniform", the uniformly random logger of our experiments (1 / K
 over the action vectors of the data: both papers take the baseline as given), or "mle", estimated
@@ -167,6 +182,39 @@ def sl_model(
     for i in range(n):
         P *= factors[:, :, i, B[:, i]]  # the product of the factors, for every next state
     P[~known] = 0.0
+    return SpibbModel(P, ~known, baseline_policy(dataset, behaviour), dataset.reward)
+
+
+def factored_model(
+    dataset: Dataset, parents: dict[str, tuple[str, ...]], m: int = 10, behaviour: str = "mle"
+) -> SpibbModel:
+    """Simao & Spaan's Factored Pi_b-SPIBB model (AAAI 2019, Alg. 2, lines 1-2) on the given parents
+    (state and action variables of slice t) of every state variable."""
+    s, k, s_next = _indices(dataset)
+    B, A = dataset.B, dataset.actions
+    S, K = len(B), len(A)
+    column = {v: (B[:, i][:, None], (S, K)) for i, v in enumerate(dataset.state_vars)}
+    column |= {v: (A[:, j][None, :], (S, K)) for j, v in enumerate(dataset.action_vars)}
+    P = np.ones((S, K, S))
+    known = np.ones((S, K), dtype=bool)
+    seen = np.ones((S, K), dtype=bool)
+    for i, v in enumerate(dataset.state_vars):
+        pa = tuple(parents[v])
+        unknown = [x for x in pa if x not in column]
+        if unknown:
+            raise ValueError(f"parents of {v!r} must be slice-t state or action variables, not {unknown}")
+        cards = [dataset.cards[x] for x in pa]
+        values = (
+            np.stack([np.broadcast_to(*column[x]) for x in pa], axis=-1) if pa else np.zeros((S, K, 0), int)
+        )
+        comp = encode(values, cards) if pa else np.zeros((S, K), dtype=np.int64)  # j = D(s, a, X_i)
+        counts = np.zeros((int(np.prod(cards)) if pa else 1, dataset.cards[v]))
+        np.add.at(counts, (comp[s, k], B[s_next, i]), 1)  # n(x_i', j)
+        n = counts.sum(1)  # n(j)
+        known &= n[comp] >= m  # Eq. 4
+        seen &= n[comp] > 0
+        P *= (counts / np.maximum(n, 1)[:, None])[comp][:, :, B[:, i]]  # Eqs. 2-3
+    P[~seen] = 0.0
     return SpibbModel(P, ~known, baseline_policy(dataset, behaviour), dataset.reward)
 
 

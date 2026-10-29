@@ -81,7 +81,8 @@ def test_experiment_1_compares_discovery_with_the_full_factored_graph():
 def test_experiment_2_compares_with_the_state_of_the_art():
     _, protocol, _ = load("exp2", "sysadmin_mdp")
     for kind in ("mdp", "imdp"):
-        assert {"DiFaRL", "FOCUS", "SL-SPIBB", "offline DQN"} <= set(protocol.METHODS[kind])
+        assert {"DiFaRL", "FOCUS", "flat SPIBB", "SL-SPIBB", "offline DQN"} <= set(protocol.METHODS[kind])
+        assert "Factored SPIBB (true graph)" in protocol.METHODS[kind]
 
 
 @pytest.mark.parametrize(
