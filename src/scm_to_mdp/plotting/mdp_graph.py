@@ -28,9 +28,12 @@ def draw(
     threshold: float = 0.05,
     max_outcomes: int = 3,
     positions: np.ndarray | None = None,
+    edge_labels: np.ndarray | None = None,
 ):
     """P_true [S, K, S'] over the model's actions; model.L == model.U for an exact MDP. positions
-    [S, 2]: where the nodes go (scaled into the picture); default a circle."""
+    [S, 2]: where the nodes go (scaled into the picture); default a circle. edge_labels [S, K, S']
+    (strings): the label of every drawn edge instead of the model's probability or interval (e.g. a
+    parametric MDP's expression in its parameters)."""
     setup()
     S, K, _ = P_true.shape
     exact = np.array_equal(model.L, model.U)
@@ -53,6 +56,8 @@ def draw(
             for t, solid in outcomes(P_true[s, k], threshold, max_outcomes):
                 lo, hi = model.L[s, k, t], model.U[s, k, t]
                 label = f"{lo:.2f}" if exact else f"[{lo:.2f}, {hi:.2f}]"
+                if edge_labels is not None:
+                    label = str(edge_labels[s, k, t])
                 style = dict(color=ACTION_COLOURS[k % len(ACTION_COLOURS)], lw=1.0, ls="-" if solid else "--")
                 if t == s:
                     _self_loop(ax, pos[s], node_r, k, K, label, style)
