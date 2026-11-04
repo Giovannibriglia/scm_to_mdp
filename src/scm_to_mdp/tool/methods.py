@@ -55,10 +55,20 @@ import numpy as np
 
 from scm_to_mdp.baselines import difarl, flat_mdp, flat_rmdp, focus, offline_q, spibb, true_model
 from scm_to_mdp.compilation import product_bounds
-from scm_to_mdp.core import ActionGroups, Dataset, FactorBounds, Graph, IntervalMDP, Reward, Solution
+from scm_to_mdp.core import (
+    NEXT_MARK,
+    ActionGroups,
+    Dataset,
+    FactorBounds,
+    Graph,
+    IntervalMDP,
+    NotApplicable,
+    Reward,
+    Solution,
+)
 from scm_to_mdp.scm_learning import nbn_intervals, nbn_point
 from scm_to_mdp.selection import bic_best, given
-from scm_to_mdp.solving import robust_vi, value_iteration, vertex_robust_vi
+from scm_to_mdp.solving import factored_robust_vi, nature_mdp, robust_vi, value_iteration, vertex_robust_vi
 from scm_to_mdp.utils.limits import run_limited
 
 LEARNERS = (
@@ -72,9 +82,10 @@ LEARNERS = (
     "sl_spibb",
     "focus",
     "factored_spibb",
+    "kwik",
     "oracle",
 )
-BASELINES = LEARNERS[1:-1]  # every learner but ours ("causal") and the oracle
+BASELINES = tuple(x for x in LEARNERS if x not in ("causal", "kwik", "oracle"))  # neither ours nor the oracle
 OFFLINE_Q = ("offline_dqn", "offline_cql")
 POINT_ALPHA = 1.0  # X -> MDP: Laplace (Dirichlet(1) posterior mean; scm_learning/nbn_point.py)
 WIDEN_K = 2  # BIC -> IMDP (hull / padded): inputs added to every family (scm_learning/nbn_intervals.py)
@@ -82,9 +93,23 @@ CQL_ALPHA = 0.1  # offline CQL's penalty weight (baselines/offline_q.py says how
 GIVEN_GRAPHS = ("oracle", "logger_markov", "random_matched", "plus_one")  # graphs given, not discovered
 DISCOVERY = ("bic", "pcmci+", "ges", "dynotears", "full") + GIVEN_GRAPHS
 SELECTION = {"bic_best": bic_best.select, "given": given.select}
+KWIK_DISCOVERY = ("strehl", "met_rmax")  # discovery/kwik_structure.py: Strehl et al. 2007, Met-Rmax
+KWIK_MODES = ("s4", "kwik", "point", "spibb")  # kwik_learn
+# Schnitzer, Abate, Parker (AAAI 2026): interval arithmetic (box), McCormick, exact (vertex products); and
+# value iteration on nature's MDP at the robust ("worst") or optimistic ("best") fixed point (nature_mdp)
+SET_SOLVERS = ("box_robust_vi", "mccormick_robust_vi", "exact_robust_vi", "worst_mdp_vi", "best_mdp_vi")
 SOLVERS_FOR = {
-    "causal": ("box_robust_vi", "vertex_robust_vi", "vi"),
-    "flat_rmdp": ("robust_vi",),
+    "causal": (
+        "box_robust_vi",
+        "vertex_robust_vi",
+        "mccormick_robust_vi",
+        "exact_robust_vi",
+        "worst_mdp_vi",
+        "best_mdp_vi",
+        "vi",
+    ),  # fmt: skip
+    "kwik": SET_SOLVERS + ("vi", "spibb"),
+    "flat_rmdp": ("robust_vi", "worst_mdp_vi", "best_mdp_vi"),  # nature's MDP of the joint set
     "flat_mdp": ("vi", "robust_vi"),
     "difarl": ("fqi",),
     "offline_dqn": ("greedy_q",),
@@ -95,7 +120,7 @@ SOLVERS_FOR = {
     "factored_spibb": ("spibb",),
     "oracle": ("vi", "robust_vi"),
 }
-ROBUST_SOLVERS = ("box_robust_vi", "vertex_robust_vi", "robust_vi")
+ROBUST_SOLVERS = ("box_robust_vi", "vertex_robust_vi", "mccormick_robust_vi", "exact_robust_vi", "robust_vi")
 STEPS = ("discovery", "selection", "learning", "relax", "training", "solve")  # every step a method can have
 STOPPED = ("timeout", "memout")
 # Method names before 2026-10-26: the robust arms are interval MDPs, so "-> RMDP" became "-> IMDP" (and the
@@ -143,6 +168,10 @@ def discovery_function(name: str):
         from scm_to_mdp.discovery import full_factored
 
         return full_factored.fit
+    if name in KWIK_DISCOVERY:
+        from scm_to_mdp.discovery import kwik_structure
+
+        return kwik_structure.strehl_sl if name == "strehl" else kwik_structure.met_rmax
     from scm_to_mdp.discovery import oracle
 
     return oracle.fit
@@ -192,10 +221,29 @@ class Method:
             if self.discovery not in GIVEN_GRAPHS:
                 _check_options(discovery_function(self.discovery), self.discovery_options, 1, "discovery")
             _check_options(causal_learner(self).learn, self.learning_options, 2, "learning")
-        elif self.learner == "factored_spibb":  # its graph is given (Simao & Spaan, AAAI 2019)
-            if (self.discovery, self.selection) != ("oracle", "given") or self.discovery_options:
-                raise ValueError("factored_spibb takes the true graph: discovery 'oracle', selection 'given'")
+        elif (
+            self.learner == "factored_spibb"
+        ):  # on the true graph (Simao & Spaan, AAAI 2019) or a learned one
+            if self.discovery not in DISCOVERY or self.selection not in SELECTION:
+                raise ValueError(
+                    f"factored_spibb needs discovery in {DISCOVERY} and selection in {list(SELECTION)}"
+                )
+            if (self.discovery in GIVEN_GRAPHS + ("full",)) != (self.selection == "given"):
+                raise ValueError(
+                    "selection 'given' goes with the given graphs and 'full', and only with them"
+                )
+            if self.discovery not in GIVEN_GRAPHS:
+                _check_options(discovery_function(self.discovery), self.discovery_options, 1, "discovery")
             _check_options(spibb.factored_model, self.learning_options, 2, "learning (Factored SPIBB)")
+        elif self.learner == "kwik":
+            if self.discovery not in KWIK_DISCOVERY or self.selection is not None:
+                raise ValueError(f"the kwik learner needs discovery in {KWIK_DISCOVERY} and no selection")
+            _check_options(discovery_function(self.discovery), self.discovery_options, 1, "discovery")
+            _check_options(kwik_learn, self.learning_options, 2, "learning (KWIK)")
+            mode = self.learning_options.get("mode", "s4")
+            fits = {"s4": SET_SOLVERS, "kwik": SET_SOLVERS, "point": ("vi",), "spibb": ("spibb",)}
+            if mode not in KWIK_MODES or self.solver not in fits[mode]:
+                raise ValueError(f"kwik mode {mode!r} is solved with one of {fits.get(mode)}")
         else:
             if self.discovery is not None or self.selection is not None:
                 raise ValueError(f"learner {self.learner!r} has no discovery or selection to choose")
@@ -232,6 +280,12 @@ class Method:
         }.get(self.solver)
         if solver_fn is not None:
             _check_options(solver_fn, self.solver_options, 3 if self.solver == "vi" else 2, "solver")
+        elif self.solver in ("mccormick_robust_vi", "exact_robust_vi"):
+            _check_options(factored_robust_vi.solve, self.solver_options, 4, "solver (Schnitzer et al.)")
+        elif self.solver in ("worst_mdp_vi", "best_mdp_vi"):
+            _check_options(nature_mdp.solve, self.solver_options, 2, "solver (nature's MDP)")
+            if "choice" in self.solver_options:
+                raise ValueError("the choice is the solver's name: worst_mdp_vi or best_mdp_vi")
         elif self.solver == "spibb":
             _check_options(spibb.solve, self.solver_options, 2, "solver (SPIBB)")
         elif self.solver == "greedy_q":
@@ -249,8 +303,12 @@ class Method:
         discovery: full-fact -> IMDP / MDP) is a baseline."""
         if self.learner == "oracle":
             return "oracle"
-        if self.learner == "factored_spibb":  # a baseline method, but given the true graph
-            return "reference"
+        if self.learner == "factored_spibb":  # a baseline method; given the true graph: a reference
+            if self.discovery == "oracle":
+                return "reference"
+            return "baseline" if self.discovery == "full" else "ours"
+        if self.learner == "kwik":
+            return "ours"
         if self.learner in BASELINES or self.discovery == "full":
             return "baseline"
         if self.discovery == "oracle":
@@ -264,7 +322,7 @@ class Method:
         adversarial = self.solver_options.get("nature", "adversarial") == "adversarial"  # robust_vi
         return (
             self.solver in ROBUST_SOLVERS
-            and self.learner in ("causal", "flat_rmdp", "oracle")
+            and self.learner in ("causal", "kwik", "flat_rmdp", "oracle")
             and adversarial
         )
 
@@ -295,7 +353,7 @@ class Limits:
 @dataclass
 class Result:
     method: Method
-    status: str = "ok"  # "ok", or how the failed step stopped: "memout", "timeout", "error"
+    status: str = "ok"  # "ok", or how the failed step stopped: "memout", "timeout", "error", "not_applicable"
     failed_step: str | None = None
     error: str | None = None
     steps: dict = field(default_factory=dict)  # step -> {"status", "seconds", "gb"}
@@ -327,6 +385,8 @@ def _run_step(result: Result, name: str, fn, x, limits: Limits | None):
             value, status = fn(x), "ok"
         except MemoryError:
             value, status = None, "memout"
+        except NotApplicable as err:  # not an error: the method does not apply to this model
+            value, status = str(err), "not_applicable"
         except Exception as err:  # noqa: BLE001 - reported in the result, and as a warning
             value, status = repr(err), "error"
         seconds, gb = time.monotonic() - start, math.nan
@@ -340,6 +400,8 @@ def _run_step(result: Result, name: str, fn, x, limits: Limits | None):
     if status == "ok":
         return value
     result.status, result.failed_step = status, name
+    if status == "not_applicable":
+        result.error = value  # why (no warning: an expected outcome)
     if status == "error":
         result.error = value
         warnings.warn(f"step {name} failed: {value}", stacklevel=3)
@@ -349,6 +411,30 @@ def _run_step(result: Result, name: str, fn, x, limits: Limits | None):
 # ==========================================================================================
 # Learning (S2-S7) and solving (S8)
 # ==========================================================================================
+def kwik_learn(data: Dataset, structure, mode: str = "s4", hull: str = "accepted", delta: float = 0.05,
+               behaviour: str = "mle"):  # fmt: skip
+    """S4 of the kwik learner (scm_learning/kwik_intervals.py, baselines/spibb.kwik_model): "s4" our
+    Clopper-Pearson sets with a hull over the candidates; "kwik" the learner's own predictions +- its
+    accuracy; "point" its predictions with HALT for "don't know" (value iteration); "spibb" Factored
+    Pi_b-SPIBB with the "don't know" pairs bootstrapped."""
+    from scm_to_mdp.scm_learning import kwik_intervals
+
+    if mode == "s4":
+        return kwik_intervals.learn(data, structure, delta, hull)
+    if mode == "kwik":
+        return kwik_intervals.kwik_bounds(data, structure)
+    if mode == "point":
+        return kwik_intervals.kwik_point(data, structure)
+    if mode == "spibb":
+        return spibb.kwik_model(data, structure, behaviour)
+    raise ValueError(f"mode must be one of {KWIK_MODES}, not {mode!r}")
+
+
+def without_same_step(parents: dict) -> dict:
+    """The slice-t parents only (Factored SPIBB's model has no same-step arcs: Simao & Spaan, Eq. 3)."""
+    return {v: tuple(p for p in pa if not p.endswith(NEXT_MARK)) for v, pa in parents.items()}
+
+
 def causal_learner(method: Method):
     """S4 of the causal learner: interval sets (nbn_intervals) for the robust solvers, point estimates
     (nbn_point, no guarantee) for value iteration ("X -> MDP")."""
@@ -392,13 +478,30 @@ def learning_steps(
     if m.learner == "sl_spibb":
         return [("learning", lambda d: spibb.sl_model(d, **m.learning_options))]
     if m.learner == "factored_spibb":
-        if true_parents is None:
-            raise ValueError("factored_spibb needs the true graph as true_parents (tool/sweep.py)")
-        discover = discovery_function("oracle")
+        if m.discovery in GIVEN_GRAPHS:
+            if true_parents is None:
+                raise ValueError(f"discovery {m.discovery!r} needs its graph as true_parents (tool/sweep.py)")
+            discover = discovery_function("oracle")
+            first = ("discovery", lambda d: discover(d, true_parents))
+        else:
+            discover = discovery_function(m.discovery)
+            first = ("discovery", lambda d: discover(d, **m.discovery_options))
+        select = SELECTION[m.selection]
         return [
-            ("discovery", lambda d: discover(d, true_parents)),
-            ("selection", lambda candidates: given.select(candidates, data)),
-            ("learning", lambda graph: spibb.factored_model(data, graph.parents, **m.learning_options)),
+            first,
+            ("selection", lambda candidates: select(candidates, data)),
+            (
+                "learning",
+                lambda graph: spibb.factored_model(
+                    data, without_same_step(graph.parents), **m.learning_options
+                ),
+            ),  # fmt: skip
+        ]
+    if m.learner == "kwik":
+        discover = discovery_function(m.discovery)
+        return [
+            ("discovery", lambda d: discover(d, **m.discovery_options)),
+            ("learning", lambda structure: kwik_learn(data, structure, **m.learning_options)),
         ]
     if m.learner == "focus":
         options = {"seed": seed, **m.learning_options}
@@ -417,6 +520,12 @@ def solver_steps(data: Dataset, method: Method, gamma: float, seed: int = 0) -> 
         return [("relax", product_bounds.compile), ("solve", lambda mdp: robust_vi.solve(mdp, gamma, **opts))]
     if method.solver == "vertex_robust_vi":
         return [("solve", lambda bounds: vertex_robust_vi.solve(bounds, gamma, **opts))]
+    if method.solver in ("mccormick_robust_vi", "exact_robust_vi"):
+        how = "mccormick" if method.solver == "mccormick_robust_vi" else "vertex"
+        return [("solve", lambda bounds: factored_robust_vi.solve(bounds, gamma, how, **opts))]
+    if method.solver in ("worst_mdp_vi", "best_mdp_vi"):
+        choice = "worst" if method.solver == "worst_mdp_vi" else "best"
+        return [("solve", lambda bounds: nature_mdp.solve(bounds, gamma, choice=choice, **opts))]
     if method.solver == "robust_vi":
         return [("solve", lambda mdp: robust_vi.solve(mdp, gamma, **opts))]
     if method.solver == "vi":
@@ -427,6 +536,10 @@ def solver_steps(data: Dataset, method: Method, gamma: float, seed: int = 0) -> 
             return value_iteration.solve(mdp.L, mdp.reward, gamma, **opts)
 
         compile_first = [("relax", product_bounds.exact)] if method.learner == "causal" else []
+        if method.learner == "kwik":  # the KWIK predictions' product, HALT for "don't know"
+            from scm_to_mdp.scm_learning import kwik_intervals
+
+            compile_first = [("relax", lambda bounds: kwik_intervals.exact_with_halt(bounds, gamma))]
         return compile_first + [("solve", vi)]  # causal: the factor estimates' product, an exact MDP
     if method.solver == "spibb":
         return [("solve", lambda model: spibb.solve(model, gamma, **opts))]
@@ -447,9 +560,21 @@ def _train_q(data: Dataset, gamma: float, options: dict, _model=None):
 SHARED_STEPS = ("discovery", "selection")
 
 
+def _graph_view(x, data: Dataset):
+    """result.graph of a learned structure: a Graph as is; a KwikStructure as the union of the candidates
+    it used (KwikStructure.parents; for the structure metrics, the coverage of the learned graph and the
+    saved models) with its share of "don't know"."""
+    if x is None or isinstance(x, Graph):
+        return x
+    known = [f.known.mean() for f in x.factors.values()]
+    return Graph(x.parents(data), report={"kwik_dont_know": float(1 - np.mean(known)), **x.params})
+
+
 def _shared_key(method: Method):
-    """Methods with the same discovery and selection (on the same data) share their graph."""
-    if method.learner != "causal":
+    """Methods with the same discovery and selection (on the same data) share their graph: the causal
+    learner and Factored SPIBB on a graph (one discovery for every compilation of it), and the kwik
+    learner's structure (one per discovery and its options, for every S4 mode)."""
+    if method.learner not in ("causal", "factored_spibb", "kwik"):
         return None
     return (method.discovery, tuple(sorted(method.discovery_options.items())), method.selection)
 
@@ -486,20 +611,24 @@ def learn(
                 entry["error"],
             )
             return result
-        result.graph = x = entry["graph"]
+        x = entry["graph"]
+        result.graph = _graph_view(x, data)
+        if result.graph is not None:
+            result.info.update(result.graph.report)
         steps = [(name, step) for name, step in steps if name not in SHARED_STEPS]
+    last_shared = [name for name, _ in steps if name in SHARED_STEPS][-1:] or [None]
     for name, step in steps:
         x = _run_step(result, name, step, x, limits)
         if (
             key is not None
             and key not in shared
             and name in SHARED_STEPS
-            and (x is None or name == "selection")
+            and (x is None or name == last_shared[0])
         ):
-            graph = x if isinstance(x, Graph) else None
+            graph = x if x is not None else None  # a Graph (causal, Factored SPIBB) or a KwikStructure
             shared[key] = {
                 "steps": {s: dict(result.steps[s]) for s in SHARED_STEPS if s in result.steps},
-                "info": dict(result.info) | (dict(graph.report) if graph is not None else {}),
+                "info": dict(result.info) | (dict(getattr(graph, "report", {})) if graph is not None else {}),
                 "graph": graph,
                 "status": result.status,
                 "failed_step": result.failed_step,
@@ -510,10 +639,13 @@ def learn(
         if isinstance(x, Graph):
             result.graph = x
             result.info.update(x.report)
+        if name == "discovery" and method.learner == "kwik":  # the structure goes on; a Graph view is kept
+            result.graph = _graph_view(x, data)
+            result.info.update(result.graph.report)
         if isinstance(x, ActionGroups):
             result.info["groups"] = len(x.groups)
         if isinstance(x, FactorBounds):
-            result.info.update(x.info)
+            result.info.update({k: v for k, v in x.info.items() if not k.startswith("_")})  # "_": internal
     result.model = x
     return result
 

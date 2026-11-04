@@ -262,7 +262,8 @@ def interval_metrics(model, dataset: Dataset, truth: MDPGroundTruth, gamma: floa
     s4_coverage_seen   the same over the (s, a) the data visit (an unseen row is [0, 1] and covers
                  trivially, which inflates s4_coverage)
     s4_unseen    share of parent rows with no data (their interval is [0, 1])
-    s4_rows      number of parent rows (every factor's family; the whole (s, a) grid for flat IMDP)
+    s4_rows      number of parent rows (every factor's family; the whole (s, a) grid for flat IMDP; the
+                 (s, a, factor) triples for factored sets without parent rows, e.g. KWIK's)
     The last two come from the learner when it reports them (FactorBounds.info)."""
     lo, hi = factor_intervals(model, dataset)
     P = true_factors(truth, dataset)
@@ -283,8 +284,11 @@ def interval_metrics(model, dataset: Dataset, truth: MDPGroundTruth, gamma: floa
     info = getattr(model, "info", {}) or {}
     if "s4_rows" in info:
         out["s4_rows"], out["s4_unseen"] = info["s4_rows"], info["s4_unseen"]
-    else:  # joint rows (s, a): unseen when every entry is [0, 1]
+    elif hasattr(model, "L"):  # joint rows (s, a): unseen when every entry is [0, 1]
         unseen = np.all((model.L <= 1e-12) & (model.U >= 1 - 1e-12), axis=-1)
+        out["s4_rows"], out["s4_unseen"] = int(unseen.size), float(unseen.mean())
+    else:  # factored sets without parent rows (KWIK: context-specific): (s, a, factor) rows
+        unseen = np.all(~valid | ((lo <= 1e-12) & (hi >= 1 - 1e-12)), axis=-1)
         out["s4_rows"], out["s4_unseen"] = int(unseen.size), float(unseen.mean())
     return out
 

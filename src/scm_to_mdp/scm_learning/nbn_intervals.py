@@ -26,7 +26,17 @@ ties in input order) and the first k are used:
 
 delta is split over every family (NBN's HypothesisSet.factor_sets), so all families' intervals hold
 together. The ranking uses the same data as the intervals: as for G itself, the level is conditional
-on that choice. FactorBounds.info["added_parents"] says which inputs were added; info also holds the
+on that choice, unless n_candidates restores it.
+
+Post-selection (`n_candidates`): when the parent sets were chosen from the same data, out of a family F_i
+of candidate parent sets per variable fixed before seeing the data, the intervals are built at
+delta / |F_i| (a union bound over the family: on that event the intervals of every candidate hold
+together, so those of the selected one hold whatever the choice; Agarwal, Brantley, Jiang, Kakade, Sun,
+"RL: Theory and Algorithms", Lemma A.20). n_candidates: 1 (parents fixed in advance: the true graph, the
+full graph), "inputs" (every subset of the slice-t inputs: 2^{number of inputs}), "inputs+next" (also
+the other next-state variables, for discoveries with same-step edges), or a number.
+
+FactorBounds.info["added_parents"] says which inputs were added; info also holds the
 number of parent rows that can occur ("s4_rows") and the share of them with no data ("s4_unseen").
 """
 
@@ -64,13 +74,34 @@ def ranked_additions(dataset: Dataset, graph: Graph, k: int) -> dict[str, list[s
     return out
 
 
+CANDIDATES = ("inputs", "inputs+next")
+
+
+def candidate_count(dataset: Dataset, n_candidates: int | str = 1) -> int:
+    """|F_i| of the module docstring: 1, 2^{n inputs} ("inputs"), 2^{n inputs + n state - 1}
+    ("inputs+next"), or the number given."""
+    if n_candidates == "inputs":
+        return 2 ** len(dataset.inputs)
+    if n_candidates == "inputs+next":
+        return 2 ** (len(dataset.inputs) + len(dataset.state_vars) - 1)
+    if isinstance(n_candidates, str) or int(n_candidates) < 1:
+        raise ValueError(f"n_candidates must be >= 1 or one of {CANDIDATES}, not {n_candidates!r}")
+    return int(n_candidates)
+
+
 def learn(
-    dataset: Dataset, graph: Graph, delta: float = 0.05, widen: str | None = None, k: int = 2
+    dataset: Dataset,
+    graph: Graph,
+    delta: float = 0.05,
+    widen: str | None = None,
+    k: int = 2,
+    n_candidates: int | str = 1,
 ) -> FactorBounds:
     """lo, hi [S, K, n, C]: interval of P(x_i' = v | parents) at every state s and action k; a factor
     with same-step parents is a conditional (FactorBounds.conditional), and lo, hi hold its hull.
     widen: None (the parents of graph), "pad" or "hull" (see the module docstring), with k slice-t
-    inputs added (the same-step parents stay those of graph)."""
+    inputs added (the same-step parents stay those of graph). n_candidates: the union bound over the
+    candidate parent sets when graph was chosen from the data (module docstring)."""
     if widen not in WIDEN:
         raise ValueError(f"widen must be one of {WIDEN}, not {widen!r}")
     if widen is not None and k < 1:
@@ -86,10 +117,11 @@ def learn(
         families = {v: [base[v]] for v, _ in pairs}
     hs = HypothesisSet(dataset.variables, {v_next: families[v] for v, v_next in pairs})
     counts = hs.counts(dataset.tensors())
+    n_family = candidate_count(dataset, n_candidates)
     sets = hs.factor_sets(
         counts,
         builder="interval",
-        delta=delta,
+        delta=delta / n_family,
         sampling="trajectory",
         method="clopper_pearson",
     )
@@ -117,7 +149,7 @@ def learn(
         for parents in families[v]:
             rows += feasible_rows(parents, dataset.cards, dataset.action_vars, dataset.actions)
             seen += int((counts[(v_next, parents)].sum(-1) > 0).sum())
-    info = {"s4_rows": rows, "s4_unseen": 1 - seen / rows}
+    info = {"s4_rows": rows, "s4_unseen": 1 - seen / rows, "s4_candidates": n_family}
     if widen:
         info |= {"widen": widen, "added_parents": json.dumps(added)}
     return FactorBounds(

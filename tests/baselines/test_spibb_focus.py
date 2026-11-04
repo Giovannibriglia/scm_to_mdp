@@ -132,7 +132,7 @@ def test_factored_spibb_is_a_reference_given_the_true_graph(truth):
     assert result.graph.parents == truth.parents_in(data)
     out = evaluate(result, data, truth, GAMMA)
     assert out["shd"] == 0 and np.isfinite(out["true"])
-    with pytest.raises(ValueError, match="true graph"):
+    with pytest.raises(ValueError, match="factored_spibb needs discovery"):  # a graph, true or learned
         Method("factored_spibb", "spibb")
     with pytest.raises(ValueError, match="true_parents"):
         learn(data, method)

@@ -97,7 +97,11 @@ def episodes(dataset: Dataset) -> dict[int, np.ndarray]:
     return series
 
 
-def link_assumptions(dataset: Dataset) -> dict:
+def link_assumptions(dataset: Dataset, same_step: bool = True) -> dict:
+    """Tigramite's link assumptions (module docstring). same_step=False: no link between two state
+    variables within a step (no x' -> y'; Strehl, Diuk, Littman, AAAI 2007, Assumption 1: "the DBNs have
+    no synchronic arcs"); a link absent from the dict is assumed absent. The class is then one DAG: every
+    lagged link is oriented by time, and the state -> action links of a step are oriented by assumption."""
     names = dataset.inputs
     states = [names.index(v) for v in dataset.state_vars]
     actions = [names.index(a) for a in dataset.action_vars]
@@ -108,10 +112,11 @@ def link_assumptions(dataset: Dataset) -> dict:
     for j in actions:
         for i in states:
             links[j][(i, 0)] = "-?>"  # within a step: the state may cause the action (the policy)
-    for j in states:
-        for i in states:
-            if i != j:
-                links[j][(i, 0)] = "o?o"  # within a step: two states, either direction
+    if same_step:
+        for j in states:
+            for i in states:
+                if i != j:
+                    links[j][(i, 0)] = "o?o"  # within a step: two states, either direction
     return links
 
 
@@ -157,16 +162,21 @@ def ci_test(name: str, n_perm: int = N_PERM):
 
 
 def fit(
-    dataset: Dataset, alpha: float = 0.01, ci_test_name: str = "ours_fast", n_perm: int = N_PERM
+    dataset: Dataset,
+    alpha: float = 0.01,
+    ci_test_name: str = "ours_fast",
+    n_perm: int = N_PERM,
+    same_step: bool = True,
 ) -> Candidates:
     """PCMCI+ at level alpha with the conditional independence test ci_test_name (CI_TESTS); n_perm: the
-    permutations of a permutation p-value."""
+    permutations of a permutation p-value; same_step: allow links between two state variables within a
+    step (x' - y'), see link_assumptions."""
     data = DataFrame(
         episodes(dataset), analysis_mode="multiple", var_names=dataset.inputs, missing_flag=MISSING
     )
     pcmci = PCMCI(dataframe=data, cond_ind_test=ci_test(ci_test_name, n_perm), verbosity=0)
     result = pcmci.run_pcmciplus(
-        tau_min=0, tau_max=1, pc_alpha=alpha, link_assumptions=link_assumptions(dataset)
+        tau_min=0, tau_max=1, pc_alpha=alpha, link_assumptions=link_assumptions(dataset, same_step)
     )
     directed, undirected = mixed_graph(result["graph"], dataset)
     return Candidates("graph_class", frozenset(directed), frozenset(undirected), keep_vstructures=False)

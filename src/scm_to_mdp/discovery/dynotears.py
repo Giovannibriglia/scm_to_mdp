@@ -80,15 +80,19 @@ def _design(dataset: Dataset) -> tuple[np.ndarray, list[str], np.ndarray]:
     return Y, owner, X
 
 
-def solve(X: np.ndarray, Y: np.ndarray, lambda_w: float, lambda_a: float) -> tuple[np.ndarray, np.ndarray]:
-    """W [d, d], A [m, d] minimising DYNOTEARS' objective with h(W) = 0 (no thresholding)."""
+def solve(
+    X: np.ndarray, Y: np.ndarray, lambda_w: float, lambda_a: float, same_step: bool = True
+) -> tuple[np.ndarray, np.ndarray]:
+    """W [d, d], A [m, d] minimising DYNOTEARS' objective with h(W) = 0 (no thresholding). same_step=False:
+    W fixed at 0 (no same-step edge x'_j -> x'_i); then h(W) = 0 and the problem is a lasso of every x'_i
+    on the inputs."""
     n, d = X.shape
     m = Y.shape[1]
     Z = np.concatenate([X, Y], axis=1)
     G, c = Z.T @ Z / n, Z.T @ X / n  # the loss only needs these: 1/(2n)||X - Z B||^2, B = [W; A]
     const = float(np.sum(X * X)) / (2 * n)
     size_w, size_a = d * d, m * d
-    bounds_w = [(0, 0) if i == j else (0, None) for i in range(d) for j in range(d)]  # no self-loops
+    bounds_w = [(0, 0) if i == j or not same_step else (0, None) for i in range(d) for j in range(d)]
     bounds = bounds_w * 2 + [(0, None)] * (2 * size_a)
 
     def unpack(x):
@@ -134,14 +138,22 @@ def solve(X: np.ndarray, Y: np.ndarray, lambda_w: float, lambda_a: float) -> tup
     return unpack(x)
 
 
-def fit(dataset: Dataset, lambda_w: float = LAMBDA, lambda_a: float = LAMBDA, tau: float = TAU) -> Candidates:
+def fit(
+    dataset: Dataset,
+    lambda_w: float = LAMBDA,
+    lambda_a: float = LAMBDA,
+    tau: float = TAU,
+    same_step: bool = True,
+) -> Candidates:
+    """DYNOTEARS (module docstring); same_step=False: no same-step edge (W = 0, Strehl, Diuk, Littman,
+    AAAI 2007, Assumption 1)."""
     Y, owner, X = _design(dataset)
     Ys, keep_y = _standardise(Y)
     Xs, keep_x = _standardise(X)
     if Xs.shape[1] == 0:  # no next-state variable varies in the data (e.g. 10 transitions): no edge
         return Candidates("graph_class", frozenset(), frozenset(), keep_vstructures=False,
                           report={"intra_weights": 0})  # fmt: skip
-    W, A = solve(Xs, Ys, lambda_w, lambda_a)
+    W, A = solve(Xs, Ys, lambda_w, lambda_a, same_step)
     targets = [v for v, k in zip(dataset.next_vars, keep_x, strict=True) if k]
     owners = [o for o, k in zip(owner, keep_y, strict=True) if k]
     directed = set()

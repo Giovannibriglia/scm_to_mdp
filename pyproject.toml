@@ -6,6 +6,7 @@ readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
     "gadjid>=0.1.0",
+    "highspy>=1.15.1",
     "matplotlib>=3.7",
     "nbn>=0.26",
     "numpy>=1.24",

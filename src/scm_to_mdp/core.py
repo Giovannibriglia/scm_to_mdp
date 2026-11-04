@@ -49,6 +49,11 @@ def encode(values: np.ndarray, cards: list[int]) -> np.ndarray:
 
 
 # ---- reward ---------------------------------------------------------------------------------------
+class NotApplicable(ValueError):
+    """A method that does not apply to this model (e.g. Schnitzer et al.'s factored solvers on a graph with
+    same-step links): the run's status is "not_applicable", not an error, and larger budgets still run."""
+
+
 @dataclass(frozen=True)
 class Reward:
     """Reward of a step s --a--> s': R[s, a] + r_next[s']. Arriving in a terminal state ends the

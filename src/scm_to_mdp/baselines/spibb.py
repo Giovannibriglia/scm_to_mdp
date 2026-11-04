@@ -243,3 +243,21 @@ def solve(model: SpibbModel, gamma: float, max_iter: int = 200) -> Solution:
         pi = new
     V = value_iteration.policy_value(P, reward, pi, gamma)
     return Solution(V, pi.argmax(1), pi, iterations=iterations)
+
+
+def kwik_model(dataset: Dataset, structure, behaviour: str = "mle") -> SpibbModel:
+    """Factored Pi_b-SPIBB on a KWIK structure (discovery/kwik_structure.py; ours: Simao & Spaan's
+    Alg. 2 with the KWIK learner in place of the known dependency function). A (s, a) is known when every
+    factor's learner predicts there (no "don't know"): then P(s' | s, a) = prod_i its predictions (Eq. 3,
+    the midpoint normalised); the other pairs are bootstrapped (a zero row, as Factored SPIBB's unseen
+    components)."""
+    B = dataset.B
+    S, K = len(B), len(dataset.actions)
+    P = np.ones((S, K, S))
+    known = np.ones((S, K), dtype=bool)
+    for (i, k), f in structure.factors.items():
+        p = f.predict / np.maximum(f.predict.sum(1, keepdims=True), 1e-12)
+        P[:, k, :] *= p[:, B[:, i]]  # factor i at the value of x_i in every next state
+        known[:, k] &= f.known
+    P[~known] = 0.0
+    return SpibbModel(P, ~known, baseline_policy(dataset, behaviour), dataset.reward)

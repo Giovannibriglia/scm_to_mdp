@@ -32,11 +32,13 @@ from typing import Any
 
 import psutil
 
+from scm_to_mdp.core import NotApplicable
+
 
 @dataclass
 class StepResult:
     value: Any  # the step's output (or the error message when status == "error")
-    status: str  # "ok", "memout", "timeout" or "error"
+    status: str  # "ok", "memout", "timeout", "not_applicable" or "error"
     peak_gb: float  # peak memory (includes pages shared with the parent: an upper bound)
     seconds: float
 
@@ -55,6 +57,8 @@ def _child(conn, fn, args, parent: int):
         conn.send(("ok", fn(*args), _peak_rss_gb()))
     except MemoryError:
         conn.send(("memout", None, _peak_rss_gb()))
+    except NotApplicable as err:  # the method does not apply to this model (core.NotApplicable)
+        conn.send(("not_applicable", str(err), _peak_rss_gb()))
     except Exception as err:  # noqa: BLE001 - reported, not hidden
         conn.send(("error", repr(err), _peak_rss_gb()))
 
