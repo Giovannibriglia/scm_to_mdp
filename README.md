@@ -51,6 +51,19 @@ bash experiments/run_chain.sh exp1_smoke                          # every domain
 Results go to `results/<experiment>/<domain>_<kind>_<date>_<time>/` (tables and figures in `summary/`).
 `.venv/bin/python experiments/run.py --list` lists every script; `--workers N` sets the parallel jobs.
 
+**Arms added after a run started** go in their own run on the same grids and are joined afterwards.
+Experiment 1's sparse graph (`sparse -> IMDP / MDP`: each next-state variable gets itself and its own
+action variables; `discovery/sparse.py`) is `exp1_sparse` (smoke: `exp1_sparse_smoke`):
+
+```bash
+RESUME=1 bash experiments/run_chain.sh exp1_sparse                                       # the extra arms
+.venv/bin/python experiments/merge_runs.py results/exp1 results/exp1_sparse --out results/exp1_merged
+```
+
+`merge_runs.py` joins a pair only if the grids, the protocol and the data are the same (the oracle, run
+in both, must have the same reference values), keeps the first run's rows for shared methods, and
+rebuilds every table and figure in the new folder; the two runs are left as they are.
+
 ### How a run uses the machine
 
 The scripts run as they are on a laptop or a server: at start they look at the machine, choose, print

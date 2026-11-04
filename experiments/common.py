@@ -75,7 +75,8 @@ DEEP = ("offline DQN", "offline CQL")
 
 def methods(names, domain) -> dict:
     """The named methods of tool.standard_methods and tool.oracle_methods, in the order given, with the
-    domain's SPIBB settings (domains.Domain) and the uniform logger as SPIBB's baseline policy."""
+    domain's SPIBB settings and sparse-graph actions (domains.Domain) and the uniform logger as SPIBB's
+    baseline policy."""
     every = (
         standard_methods(
             max_parents=None,
@@ -88,6 +89,7 @@ def methods(names, domain) -> dict:
             # Factored SPIBB: one count threshold for every factor, SL-SPIBB's m (Simao & Spaan's
             # m_i: Taxi 20, SysAdmin 10, AAAI 2019)
             factored_spibb_options={"m": domain.sl_spibb_m, "behaviour": "uniform"},
+            sparse_actions=domain.sparse_actions,
         )
         | oracle_methods()
     )

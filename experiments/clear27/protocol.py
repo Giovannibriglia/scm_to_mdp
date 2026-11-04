@@ -52,7 +52,7 @@ from common import main  # noqa: E402, F401
 from domains import DOMAINS  # noqa: E402
 
 from scm_to_mdp.tool import Grid, Method, oracle_methods, standard_methods  # noqa: E402
-from scm_to_mdp.tool.methods import DISCOVERY, POINT_ALPHA  # noqa: E402
+from scm_to_mdp.tool.methods import FIXED_GRAPHS, POINT_ALPHA  # noqa: E402
 
 EXPERIMENT = "clear27"
 N_TRANSITIONS = [1, 2, 5, 10, 20, 50, 100, 200, 500, 1000, 2000, 5000, 10_000, 20_000, 50_000, 100_000,
@@ -89,7 +89,7 @@ def set_arms(source: str, base: dict, learning: dict) -> dict:
 def graph_arms(source: str, discovery: str, domain, options: dict | None = None) -> dict:
     """Point 2 on one graph source (a discovery, the true graph or a fixed graph)."""
     options = options or {}
-    learned = discovery not in ("oracle", "full", "sparse")
+    learned = discovery not in ("oracle",) + FIXED_GRAPHS
     selection = "bic_best" if learned else "given"
     base = {"learner": "causal", "discovery": discovery, "selection": selection, "discovery_options": options}
     # a learned graph: the union bound over every parent set it could have chosen (with same-step links,
@@ -162,14 +162,12 @@ def source_methods(source: str, domain) -> dict:
         "strehl": lambda: kwik_arms("strehl", domain),
         "met": lambda: kwik_arms("met", domain),
         "fullfact": lambda: graph_arms("full-fact", "full", domain),
-        "sparse": lambda: graph_arms("sparse", "sparse", domain),
+        "sparse": lambda: graph_arms("sparse", "sparse", domain, {"actions": domain.sparse_actions}),
         "flat": flat_arms,
         "sota": lambda: sota_arms(domain),
     }
     if source not in arms:
         raise ValueError(f"source must be one of {SOURCES}, not {source!r}")
-    if source == "sparse" and "sparse" not in DISCOVERY:
-        raise RuntimeError("the sparse graph needs discovery/sparse.py (branch `sparse`, not merged yet)")
     return {"oracle -> MDP": oracle_methods()["oracle -> MDP"]} | arms[source]()
 
 

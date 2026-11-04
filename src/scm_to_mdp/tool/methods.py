@@ -6,6 +6,8 @@ A Method names one choice per step. The learner is one of:
                  discovery: "bic" | "pcmci+" | "ges" | "dynotears" | "oracle" (the true graph, given)
                             | "full" (the full factored graph: every slice-t input a parent of every
                             x_i', no same-step edge; discovery/full_factored.py)
+                            | "sparse" (x_i and its own action variables only: discovery/sparse.py;
+                            discovery_options {"actions": "all" | "by_index"})
                             | a control graph (discovery/controls.py: "logger_markov", "random_matched",
                             "plus_one"; built from the truth by the sweep and given like the oracle's)
                  selection: "bic_best" | "given" (for the oracle and the controls)
@@ -91,7 +93,8 @@ POINT_ALPHA = 1.0  # X -> MDP: Laplace (Dirichlet(1) posterior mean; scm_learnin
 WIDEN_K = 2  # BIC -> IMDP (hull / padded): inputs added to every family (scm_learning/nbn_intervals.py)
 CQL_ALPHA = 0.1  # offline CQL's penalty weight (baselines/offline_q.py says how it was chosen)
 GIVEN_GRAPHS = ("oracle", "logger_markov", "random_matched", "plus_one")  # graphs given, not discovered
-DISCOVERY = ("bic", "pcmci+", "ges", "dynotears", "full") + GIVEN_GRAPHS
+FIXED_GRAPHS = ("full", "sparse")  # graphs fixed in advance, no discovery (baselines)
+DISCOVERY = ("bic", "pcmci+", "ges", "dynotears") + FIXED_GRAPHS + GIVEN_GRAPHS
 SELECTION = {"bic_best": bic_best.select, "given": given.select}
 KWIK_DISCOVERY = ("strehl", "met_rmax")  # discovery/kwik_structure.py: Strehl et al. 2007, Met-Rmax
 KWIK_MODES = ("s4", "kwik", "point", "spibb")  # kwik_learn
@@ -172,6 +175,10 @@ def discovery_function(name: str):
         from scm_to_mdp.discovery import kwik_structure
 
         return kwik_structure.strehl_sl if name == "strehl" else kwik_structure.met_rmax
+    if name == "sparse":
+        from scm_to_mdp.discovery import sparse
+
+        return sparse.fit
     from scm_to_mdp.discovery import oracle
 
     return oracle.fit
@@ -213,10 +220,10 @@ class Method:
                 raise ValueError(f"the causal learner needs discovery in {DISCOVERY}")
             if self.selection not in SELECTION:
                 raise ValueError(f"the causal learner needs selection in {list(SELECTION)}")
-            if (self.discovery in GIVEN_GRAPHS + ("full",)) != (self.selection == "given"):
+            if (self.discovery in GIVEN_GRAPHS + FIXED_GRAPHS) != (self.selection == "given"):
                 raise ValueError(
-                    f"selection 'given' goes with the given graphs {GIVEN_GRAPHS} and 'full', and only"
-                    " with them"
+                    f"selection 'given' goes with the given graphs {GIVEN_GRAPHS} and the fixed graphs"
+                    f" {FIXED_GRAPHS}, and only with them"
                 )
             if self.discovery not in GIVEN_GRAPHS:
                 _check_options(discovery_function(self.discovery), self.discovery_options, 1, "discovery")
@@ -228,9 +235,9 @@ class Method:
                 raise ValueError(
                     f"factored_spibb needs discovery in {DISCOVERY} and selection in {list(SELECTION)}"
                 )
-            if (self.discovery in GIVEN_GRAPHS + ("full",)) != (self.selection == "given"):
+            if (self.discovery in GIVEN_GRAPHS + FIXED_GRAPHS) != (self.selection == "given"):
                 raise ValueError(
-                    "selection 'given' goes with the given graphs and 'full', and only with them"
+                    "selection 'given' goes with the given and the fixed graphs, and only with them"
                 )
             if self.discovery not in GIVEN_GRAPHS:
                 _check_options(discovery_function(self.discovery), self.discovery_options, 1, "discovery")
@@ -299,17 +306,17 @@ class Method:
     def role(self) -> str:
         """ "baseline" (no causal structure learned), "reference" (given the true graph: true graph ->
         IMDP, true graph -> MDP), "control" (given a wrong graph of a known kind: discovery/controls.py)
-        or "ours"; "oracle": the true observed MDP given to the solver. The full factored graph (no
-        discovery: full-fact -> IMDP / MDP) is a baseline."""
+        or "ours"; "oracle": the true observed MDP given to the solver. The fixed graphs (no discovery:
+        full-fact -> IMDP / MDP, sparse -> IMDP / MDP) are baselines."""
         if self.learner == "oracle":
             return "oracle"
-        if self.learner == "factored_spibb":  # a baseline method; given the true graph: a reference
+        if self.learner == "factored_spibb":  # a baseline on a fixed graph; given the true graph: a reference
             if self.discovery == "oracle":
                 return "reference"
-            return "baseline" if self.discovery == "full" else "ours"
+            return "baseline" if self.discovery in FIXED_GRAPHS else "ours"
         if self.learner == "kwik":
             return "ours"
-        if self.learner in BASELINES or self.discovery == "full":
+        if self.learner in BASELINES or self.discovery in FIXED_GRAPHS:
             return "baseline"
         if self.discovery == "oracle":
             return "reference"
@@ -722,6 +729,7 @@ def standard_methods(
     spibb_options: dict | None = None,
     sl_spibb_options: dict | None = None,
     factored_spibb_options: dict | None = None,
+    sparse_actions: str = "all",
 ) -> dict[str, Method]:
     """Every named method (experiments/exp1 and exp2 pick theirs in their protocol.py):
     ours (BIC / PCMCI+ / GES / DYNOTEARS -> IMDP; BIC -> IMDP with hull or padded families; the same
@@ -732,7 +740,9 @@ def standard_methods(
     every (s, a) independently; the pair measures what the box costs), the controls (given wrong
     graphs of a known kind, discovery/controls.py: logger-Markov graph, random matched graph, true
     graph + 1, each -> IMDP with the box), the full factored graph (full-fact -> IMDP / MDP: every
-    slice-t input a parent of every next-state variable, no discovery) and the baselines (flat IMDP,
+    slice-t input a parent of every next-state variable, no discovery), the sparse graph (sparse ->
+    IMDP / MDP: each x_i' gets x_i and its own action variables, `sparse_actions` "all" | "by_index",
+    discovery/sparse.py) and the baselines (flat IMDP,
     flat MDP, DiFaRL, flat SPIBB, SL-SPIBB with candidate parent sets of `state_parents` state
     variables, FOCUS; with `deep`, also offline DQN and offline CQL) and Factored SPIBB on the true
     graph (a reference: its structure is given, Simao & Spaan, AAAI 2019). Every baseline uses the
@@ -770,6 +780,12 @@ def standard_methods(
         "true graph -> IMDP": Method("causal", "box_robust_vi", **oracle),
         # no discovery: the full factored graph, given (discovery/full_factored.py)
         "full-fact -> IMDP": Method("causal", "box_robust_vi", **(oracle | {"discovery": "full"})),
+        # no discovery: x_i and its own actions only (discovery/sparse.py)
+        "sparse -> IMDP": Method(
+            "causal",
+            "box_robust_vi",
+            **(oracle | {"discovery": "sparse", "discovery_options": {"actions": sparse_actions}}),
+        ),
         **(
             {
                 "true graph -> factored IMDP (per-(s,a) product)": Method(
@@ -822,6 +838,14 @@ def standard_methods(
         "full-fact -> MDP": Method(
             "causal", "vi", discovery="full", selection="given", learning_options={"alpha": POINT_ALPHA}
         ),  # fmt: skip
+        "sparse -> MDP": Method(
+            "causal",
+            "vi",
+            discovery="sparse",
+            discovery_options={"actions": sparse_actions},
+            selection="given",
+            learning_options={"alpha": POINT_ALPHA},
+        ),
         "flat IMDP": Method("flat_rmdp", "robust_vi", learning_options={"delta": delta}),
         "flat MDP": Method("flat_mdp", "vi"),
         "DiFaRL": Method(

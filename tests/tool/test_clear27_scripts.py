@@ -36,13 +36,13 @@ def test_the_data_protocol(domain):
     assert "11" not in map(str, g.sizes) and "18x13" not in map(str, g.sizes)
 
 
-@pytest.mark.parametrize("source", [s for s in protocol.SOURCES if s != "sparse"])
+@pytest.mark.parametrize("source", protocol.SOURCES)
 def test_every_source_has_the_oracle_and_point_2(source):
     methods = protocol.experiment_grid("sysadmin", source).methods
     assert next(iter(methods)) == "oracle -> MDP"
     names = {
         "truegraph": "true graph", "dynotears": "DYNOTEARS", "dynotears_lagged": "DYNOTEARS (lagged)",
-        "pcmci": "PCMCI+", "pcmci_lagged": "PCMCI+ (lagged)", "fullfact": "full-fact",
+        "pcmci": "PCMCI+", "pcmci_lagged": "PCMCI+ (lagged)", "fullfact": "full-fact", "sparse": "sparse",
     }  # fmt: skip
     if source in names:
         assert set(methods) == {"oracle -> MDP"} | {f"{names[source]} -> {c}" for c in POINT_2}
@@ -61,3 +61,6 @@ def test_learned_graphs_pay_the_union_bound_and_lagged_drops_same_step():
     assert lag["PCMCI+ (lagged) -> IMDP (IA)"].discovery_options["same_step"] is False
     true = protocol.experiment_grid("sysadmin", "truegraph").methods
     assert true["true graph -> IMDP (IA)"].learning_options["n_candidates"] == 1
+    sparse = protocol.experiment_grid("sysadmin", "sparse").methods
+    assert sparse["sparse -> IMDP (IA)"].learning_options["n_candidates"] == 1  # fixed in advance
+    assert {m.role for n, m in sparse.items() if n != "oracle -> MDP"} == {"baseline"}

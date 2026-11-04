@@ -20,7 +20,7 @@ import sys
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
-EXPERIMENTS = ("exp1", "exp2", "exp1_smoke", "exp2_smoke")
+EXPERIMENTS = ("exp1", "exp2", "exp1_smoke", "exp2_smoke", "exp1_sparse", "exp1_sparse_smoke")
 KINDS = ("mdp", "imdp")
 
 

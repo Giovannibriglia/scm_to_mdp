@@ -187,3 +187,19 @@ def test_sweep_resume_and_report(tmp_path):
         columns=[c for c in res.columns if c.endswith(("_s", "_gb"))]
     )
     pd.testing.assert_frame_equal(before, after)
+
+
+def test_the_sparse_graph_arms_are_baselines(truth, dataset):
+    from scm_to_mdp.tool import standard_methods
+
+    every = standard_methods(exact=False, sparse_actions="all")
+    for name in ("sparse -> IMDP", "sparse -> MDP"):
+        method = every[name]
+        assert method.role == "baseline" and method.guarantee == name.endswith("IMDP")
+        result = solve(learn(dataset, method, true_parents=truth.true_parents), dataset, GAMMA)
+        assert result.ok, (name, result.error)
+        out = evaluate(result, dataset, truth, GAMMA)
+        assert out["recall"] < 1  # SysAdmin's machines interact: the sparse graph misses those edges
+    bad = Method("causal", "vi", discovery="sparse", discovery_options={"actions": "x"}, selection="given")
+    failed = learn(dataset, bad)  # a step that fails is reported, not raised
+    assert failed.status == "error" and "actions must be one of" in failed.error

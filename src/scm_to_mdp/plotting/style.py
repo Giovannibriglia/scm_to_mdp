@@ -32,6 +32,8 @@ ARM_STYLE = {
     "BIC -> IMDP (padded)": {"color": "#332288", "marker": "s"},
     "oracle -> IMDP": {"color": "#404040", "marker": "D"},  # the true observed MDP (baselines/true_model.py)
     "full-fact -> IMDP": {"color": "#0072B2", "marker": "^"},  # no discovery: every input a parent
+    "sparse -> IMDP": {"color": "#CC79A7", "marker": "o"},  # no discovery: itself and its own actions
+    # (GES's colour: GES is not in experiment 1)
 }
 ARM_LABEL = {
     "BIC -> IMDP": "BIC → IMDP",
@@ -47,6 +49,8 @@ ARM_LABEL = {
     "DiFaRL": "DiFaRL",
     "full-fact -> IMDP": "full-fact → IMDP",
     "full-fact -> MDP": "full-fact → MDP",
+    "sparse -> IMDP": "sparse → IMDP",
+    "sparse -> MDP": "sparse → MDP",
     "oracle -> IMDP": "oracle",  # the true observed MDP (± the solver's tolerance in an IMDP grid)
     "oracle -> MDP": "oracle",  # a grid has one of the two
 }
