@@ -102,3 +102,9 @@ def test_cooperative_is_an_upper_bound_and_nature_mdps_reproduce_the_fixed_point
             rob, opt = fr.solve(b, 0.9, how), fr.solve(b, 0.9, how, "cooperative")
         assert np.allclose(worst.V, rob.V, atol=1e-5) and np.all(opt.V >= best.V - 1e-9)
         assert np.all(best.V >= worst.V - 1e-9)
+
+
+def test_too_many_vertices_is_a_memout():
+    c = 12  # 12 * 2^11 vertices > MAX_VERTICES
+    with pytest.raises(MemoryError):
+        fr.factor_vertices(np.full(c, 0.0), np.full(c, 1.0))

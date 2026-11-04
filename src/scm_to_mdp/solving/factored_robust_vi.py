@@ -51,13 +51,15 @@ from scm_to_mdp.solving.stopping import sound_lower_bound, stop_at
 
 METHODS = ("vertex", "mccormick")
 NATURES = ("adversarial", "cooperative")
-MAX_VERTICES = 4096  # per factor and (s, a): above it the vertex method refuses (App. C: exponential)
+MAX_VERTICES = 4096  # per factor and (s, a): above it the vertex method stops, as a memout (App. C)
 
 LP_METHODS = ("highs", "highs-ds", "highs-ipm")  # McCormick's last resort: scipy's linprog, each method
 # McCormick: the LP of every (s, a) is kept as a HiGHS model (only its cost changes between sweeps, so each
 # solve starts from the last optimal basis) while the kept models' non-zeros stay within this budget (about
-# 200 bytes each in memory, so about 4 GB); beyond it, a model is rebuilt each sweep from its kept basis
-MODEL_NNZ_BUDGET = 20_000_000
+# 200 bytes each in memory, so about 1 GB, leaving room for the worker's data under the 8 GB step limit:
+# the clear27 pilot hit 8 GB on Drone 7-1 with 20M); beyond it, a model is rebuilt each sweep from its
+# kept basis (about 3x slower)
+MODEL_NNZ_BUDGET = 5_000_000
 
 
 def factor_vertices(lo: np.ndarray, hi: np.ndarray) -> np.ndarray:
@@ -66,7 +68,11 @@ def factor_vertices(lo: np.ndarray, hi: np.ndarray) -> np.ndarray:
     c = lo.shape[-1]
     frees = [c - 1] if c == 2 else range(c)  # c = 2: the segment's two ends (free = 0 repeats them)
     if c * 2 ** (c - 1) > MAX_VERTICES:
-        raise ValueError(f"a factor with {c} values has up to {c * 2 ** (c - 1)} vertices (> {MAX_VERTICES})")
+        # a size limit, not an error: reported as "memout" (the vertex products would not fit), so the
+        # grid skips the larger budgets of this size, as for any step stopped by its limits
+        raise MemoryError(
+            f"a factor with {c} values has up to {c * 2 ** (c - 1)} vertices (> {MAX_VERTICES})"
+        )
     cands = []
     for free in frees:
         others = [j for j in range(c) if j != free]

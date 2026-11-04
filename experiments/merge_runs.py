@@ -18,6 +18,7 @@ run's saved models of those methods; meta.json with every method and where each 
 
 import argparse
 import json
+import re
 import shutil
 import sys
 from pathlib import Path
@@ -38,12 +39,17 @@ SAME_DATA = (
 KEYS = ("size", "seed", "n_transitions")
 
 
+RUN_NAME = re.compile(r"^(?P<script>.+)_\d{4}-\d{2}-\d{2}_\d{2}-\d{2}-\d{2}$")  # <script>_<date>_<time>
+
+
 def latest_runs(folder: Path) -> dict[str, Path]:
-    """{<domain>_<kind>: its latest run folder} in an experiment folder."""
+    """{<domain>_<kind>: its latest run folder} in an experiment folder (<domain>_<kind>_<date>_<time>; the
+    time may start with 20, so the name is matched as a whole, not split at "_20")."""
     runs = {}
     for path in sorted(folder.glob("*_*_20*")):
-        if (path / "grid.json").exists():
-            runs[path.name.rsplit("_20", 1)[0]] = path  # sorted by date: the latest wins
+        match = RUN_NAME.match(path.name)
+        if match and (path / "grid.json").exists():
+            runs[match["script"]] = path  # sorted by date: the latest wins
     return runs
 
 

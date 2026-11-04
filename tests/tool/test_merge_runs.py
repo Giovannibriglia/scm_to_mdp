@@ -62,3 +62,14 @@ def test_other_grids_or_other_data_are_refused(tmp_path):
         [str(a.parent), str(other_data.parent), "--out", str(tmp_path / "m"), "--no-report"]
     )
     assert code == 1 and not (tmp_path / "m").exists()
+
+
+def test_latest_runs_reads_runs_started_at_20_hours(tmp_path):
+    """A run started at 20:xx has "_20" in its time too (frozenlake_mdp_2026-10-29_20-29-11)."""
+    for name in ("frozenlake_mdp_2026-10-29_20-29-11", "frozenlake_mdp_2026-10-28_09-00-00",
+                 "sysadmin_imdp_2026-10-28_08-28-52"):  # fmt: skip
+        (tmp_path / name).mkdir()
+        (tmp_path / name / "grid.json").write_text("{}")
+    runs = merge_runs.latest_runs(tmp_path)
+    assert runs == {"frozenlake_mdp": tmp_path / "frozenlake_mdp_2026-10-29_20-29-11",
+                    "sysadmin_imdp": tmp_path / "sysadmin_imdp_2026-10-28_08-28-52"}  # fmt: skip
