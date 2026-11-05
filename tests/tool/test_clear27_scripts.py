@@ -33,7 +33,8 @@ def test_the_data_protocol(domain):
     assert g.n_transitions[0] == 10 and g.n_transitions[-1] == 500_000 and len(g.n_transitions) == 15
     assert g.seeds == list(range(10)) and [p.label for p in g.policies] == ["uniform"]
     assert g.out_dir == ROOT / "results" / "clear27" / f"{domain}_truegraph"
-    assert "18x13" not in map(str, g.sizes) and g.save_models == "none"
+    assert "18x13" not in map(str, g.sizes)
+    assert g.save_models == ("all" if domain == "sysadmin" else "none")
     if domain == "sysadmin":
         assert list(g.sizes) == list(range(2, 12))
     assert g.limits.mem_gb == 6.0 and g.solve_floor_s == 400.0

@@ -72,7 +72,10 @@ N_TRANSITIONS = [10, 20, 50, 100, 200, 500, 1000, 2000, 5000, 10_000, 20_000, 50
 LIMITS = Limits(mem_gb=6.0, timeout_s={"discovery": 600.0, "selection": 600.0, "learning": 600.0,
                                        "relax": 300.0, "training": 600.0, "solve": 400.0})  # fmt: skip
 SOLVE_FLOOR_S = 400.0  # the relative solve limit (3 x the oracle's sweeps) is far below it in every domain
-SAVE_MODELS = "none"  # about 144 arms x 15 budgets: the saved models would fill the disk
+# the models (and their pictures) of the first seed at every budget: SysAdmin only ("all": about 25-35 GB,
+# mostly full-fact's, which stores every parent row); the other domains keep the results only, from which
+# every figure of the report is made (the report reads results.csv, never the models)
+SAVE_MODELS = {"sysadmin": "all"}
 SMOKE = os.environ.get("SMOKE", "0") == "1"
 SMOKE_TRANSITIONS = [100, 1000]
 DELTA = common.DELTA
@@ -211,7 +214,7 @@ def experiment_grid(domain: str, source: str) -> Grid:
         limits=LIMITS,
         solve_factor=common.SOLVE_FACTOR,
         solve_floor_s=SOLVE_FLOOR_S,
-        save_models=SAVE_MODELS,
+        save_models="none" if smoke else SAVE_MODELS.get(domain, "none"),
         workers="auto",
         out_dir=common.ROOT / "results" / (EXPERIMENT + ("_smoke" if smoke else "")) / f"{domain}_{source}",
         reward_transfer=False,
