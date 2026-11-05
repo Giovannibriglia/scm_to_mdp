@@ -10,30 +10,31 @@ import matplotlib
 matplotlib.use("Agg")  # figures are written to files, also from worker processes
 import matplotlib.pyplot as plt  # noqa: E402
 
-# colour-blind safe colours (Okabe & Ito); the same method always looks the same. The line style
-# comes from the role (ROLE_LINE), not from here.
+# colour-blind safe colours: Okabe & Ito (2008), and Paul Tol's indigo, olive and teal for the rest.
+# Colours are unique within one experiment's figures (exp1, exp2), and some are reused across them
+# for methods that never share a figure (e.g. orange: flat in exp1, DiFaRL in exp2); the marker and
+# the line style (ROLE_LINE) tell methods apart as well. Green means "given the true graph".
 ARM_STYLE = {
-    "BIC -> IMDP": {"color": "#0072B2", "marker": "o"},
-    "PCMCI+ -> IMDP": {"color": "#009E73", "marker": "s"},
+    "PCMCI+ -> IMDP": {"color": "#0072B2", "marker": "s"},  # blue
+    "DYNOTEARS -> IMDP": {"color": "#D55E00", "marker": "p"},  # vermilion
+    "sparse -> IMDP": {"color": "#CC79A7", "marker": "o"},  # reddish purple (exp1, sparse arm)
+    "true graph -> IMDP": {"color": "#009E73", "marker": "d"},  # bluish green
+    "Schnitzer exact": {"color": "#009E73", "marker": "d"},  # its name in results written before v1.33
+    "Factored SPIBB (true graph)": {"color": "#009E73", "marker": "d"},  # given the true graph (exp2)
+    "oracle -> IMDP": {"color": "#000000", "marker": "D"},  # the true observed MDP (baselines/true_model.py)
+    "flat IMDP": {"color": "#E69F00", "marker": "v"},  # orange
+    "flat MDP": {"color": "#E69F00", "marker": "v"},
+    "full-fact -> IMDP": {"color": "#56B4E9", "marker": "^"},  # sky blue; no discovery: every input a parent
+    "DiFaRL": {"color": "#E69F00", "marker": "P"},  # exp2
+    "FOCUS": {"color": "#56B4E9", "marker": "h"},  # exp2
+    "flat SPIBB": {"color": "#CC79A7", "marker": "<"},  # exp2
+    "SL-SPIBB": {"color": "#332288", "marker": ">"},  # indigo (Tol), exp2
+    "offline DQN": {"color": "#999933", "marker": "X"},  # olive (Tol), exp2
+    "offline CQL": {"color": "#882255", "marker": "*"},  # wine (Tol)
+    "BIC -> IMDP": {"color": "#44AA99", "marker": "o"},  # teal (Tol)
     "GES -> IMDP": {"color": "#CC79A7", "marker": "^"},
-    "true graph -> IMDP": {"color": "#8C564B", "marker": "d"},
-    "Schnitzer exact": {"color": "#8C564B", "marker": "d"},  # its name in results written before v1.33
-    "flat IMDP": {"color": "#E69F00", "marker": "v"},
-    "flat MDP": {"color": "#7F7F7F", "marker": "v"},
-    "DiFaRL": {"color": "#D55E00", "marker": "P"},
-    "offline DQN": {"color": "#56B4E9", "marker": "X"},
-    "offline CQL": {"color": "#000000", "marker": "*"},
-    "flat SPIBB": {"color": "#9467BD", "marker": "<"},
-    "SL-SPIBB": {"color": "#9467BD", "marker": ">"},
-    "Factored SPIBB (true graph)": {"color": "#9467BD", "marker": "d"},  # the SPIBB family, given the graph
-    "FOCUS": {"color": "#17BECF", "marker": "h"},
-    "DYNOTEARS -> IMDP": {"color": "#882255", "marker": "p"},
     "BIC -> IMDP (hull)": {"color": "#332288", "marker": "o"},
     "BIC -> IMDP (padded)": {"color": "#332288", "marker": "s"},
-    "oracle -> IMDP": {"color": "#404040", "marker": "D"},  # the true observed MDP (baselines/true_model.py)
-    "full-fact -> IMDP": {"color": "#0072B2", "marker": "^"},  # no discovery: every input a parent
-    "sparse -> IMDP": {"color": "#CC79A7", "marker": "o"},  # no discovery: itself and its own actions
-    # (GES's colour: GES is not in experiment 1)
 }
 ARM_LABEL = {
     "BIC -> IMDP": "BIC → IMDP",
@@ -98,7 +99,7 @@ def setup():
             "xtick.labelsize": 7.5,
             "ytick.labelsize": 7.5,
             "legend.fontsize": 7.5,
-            "lines.linewidth": 1.4,
+            "lines.linewidth": 1.6,
             "lines.markersize": 4.5,
             "axes.spines.top": False,
             "axes.spines.right": False,

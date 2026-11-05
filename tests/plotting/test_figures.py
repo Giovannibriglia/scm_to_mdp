@@ -116,6 +116,194 @@ def test_transitions_needed_counts_only_lasting_success():
     assert np.isinf(needed[1])  # never good up to the largest n
 
 
+def test_coverage_efficiency_needs_lasting_coverage_and_small_sets(tmp_path):
+    """Left: the first n from which coverage stays >= 95%; right: also mean width <= 0.1. The oracle and
+    the methods without intervals (point models) are left out."""
+    rows = []
+    # (n, coverage, width) per seed for "PCMCI+ -> IMDP"; the true graph is always covered, and small at 80
+    runs = {
+        0: [(10, 0.99, 1.0), (20, 0.80, 0.9), (40, 0.97, 0.3), (80, 1.0, 0.08)],
+        1: [(10, 0.90, 1.0), (20, 0.96, 0.5), (40, 0.98, 0.2), (80, 0.99, 0.2)],
+        2: [(10, 1.0, 1.0), (20, 1.0, 0.5), (40, 1.0, 0.09), (80, 1.0, 0.05)],
+    }
+    for seed, cells in runs.items():
+        for n, cov, width in cells:
+            for method, role, c, w in [
+                ("PCMCI+ -> IMDP", "ours", cov, width),
+                ("true graph -> IMDP", "reference", 1.0, 1.0 if n < 80 else 0.05),
+                ("oracle -> IMDP", "oracle", 1.0, 0.0),
+                ("flat MDP", "baseline", np.nan, np.nan),
+            ]:
+                rows.append({"size": "3", "n_states": 8, "seed": seed, "n_transitions": n, "method": method,
+                             "role": role, "status": "ok", "s4_coverage_seen": c, "s4_width": w})  # fmt: skip
+    res = pd.DataFrame(rows)
+    methods = list(res["method"].unique())
+    styles = method_styles(
+        {m: (r, "IMDP" in m) for m, r in res.drop_duplicates("method")[["method", "role"]].values}
+    )
+    out = figures.coverage_efficiency(
+        res,
+        ["3"],
+        ["3"],
+        "N",
+        methods,
+        styles,
+        "s4_coverage_seen",
+        "t",
+        tmp_path / "coverage_seen",
+        target=0.95,
+        eps=0.1,
+    )
+    assert (tmp_path / "coverage_seen.pdf").exists()
+    valid, tight = (out[k].set_index("method") for k in ("valid", "tight"))
+    assert set(valid.index) == {"PCMCI+ -> IMDP", "true graph -> IMDP"}  # no oracle, no point model
+    needed = figures.transitions_needed(
+        res[res["method"] == "PCMCI+ -> IMDP"],
+        condition=pd.to_numeric(res["s4_coverage_seen"]) >= 0.95,
+    ).set_index("seed")["n_star"]
+    assert needed.to_dict() == {0: 40, 1: 20, 2: 10}  # seed 0: covered at 10, not at 20
+    assert valid.at["true graph -> IMDP", "median"] == 10
+    assert tight.at["true graph -> IMDP", "median"] == 80
+    assert tight.at["PCMCI+ -> IMDP", "median"] == 80  # seeds: 80, never, 40
+    empty = figures.coverage_efficiency(
+        res, ["3"], ["3"], "N", methods, styles, "s4_coverage", "t", tmp_path / "coverage"
+    )
+    assert empty["valid"].empty and not (tmp_path / "coverage.pdf").exists()
+
+
+def test_guarantee_efficiency_needs_a_lasting_promise_and_a_proof_better_than_random(tmp_path):
+    """Left: the first n from which the promise holds (safe); right: also (V_rob - V_rand) / (V* - V_rand)
+    >= 0. The oracle and the point models (no contain_all) are left out. The per-budget certificate:
+    proved (V_opt - V_rob) and actual (V* - V^pi) regret, normalised."""
+    rows = []
+    # per seed of "PCMCI+ -> IMDP": (n, safe, promise, cert_gap); V* = 10, V_rand = 0, V^pi = 9
+    runs = {
+        0: [(10, True, -5.0, 9.0), (20, False, 2.0, 5.0), (40, True, 1.0, 2.0), (80, True, 4.0, 0.5)],
+        1: [(10, False, -5.0, 9.0), (20, True, -1.0, 3.0), (40, True, 2.0, 0.8), (80, True, 5.0, 0.4)],
+        2: [(10, True, -5.0, 9.0), (20, True, -2.0, 6.0), (40, True, -1.0, 3.0), (80, False, 6.0, 0.2)],
+    }
+    for seed, cells in runs.items():
+        for n, safe, promise, gap in cells:
+            for method, role, sf, pr, g, c in [
+                ("PCMCI+ -> IMDP", "ours", safe, promise, gap, True),
+                ("oracle -> IMDP", "oracle", True, 9.0, 0.0, True),
+                ("flat MDP", "baseline", False, 9.5, np.nan, np.nan),
+            ]:
+                rows.append({"size": "3", "n_states": 8, "seed": seed, "n_transitions": n, "method": method,
+                             "role": role, "status": "ok", "safe": sf, "promise": pr, "cert_gap": g,
+                             "contain_all": c, "V_star_obs": 10.0, "V_random": 0.0, "true": 9.0})  # fmt: skip
+    res = pd.DataFrame(rows)
+    methods = list(res["method"].unique())
+    styles = method_styles(
+        {m: (r, "IMDP" in m) for m, r in res.drop_duplicates("method")[["method", "role"]].values}
+    )
+    out = figures.guarantee_efficiency(res, ["3"], ["3"], "N", methods, styles, "t", tmp_path / "guarantee")
+    assert (tmp_path / "guarantee.pdf").exists()
+    valid, tight = (out[k].set_index("method") for k in ("valid", "tight"))
+    assert list(valid.index) == ["PCMCI+ -> IMDP"]  # no oracle, no point model
+    assert valid.at["PCMCI+ -> IMDP", "median"] == 40  # seeds: 40, 20, never (breaks at 80)
+    assert tight.at["PCMCI+ -> IMDP", "median"] == 40  # seeds: 40, 40, never
+    assert out["contain"].set_index("method").at["PCMCI+ -> IMDP", "median"] == 10
+    at = res[res["n_transitions"] == 40]  # certificates 2.0, 0.8, 3.0 -> 0.2; regret 1 - 0.9 = 0.1
+    axis = figures.Axis(at, ["3"], ["3"], "N")
+    table = figures.certificate(at, axis, methods, styles, "t", tmp_path / "certificate").set_index("method")
+    assert (tmp_path / "certificate.pdf").exists() and list(table.index) == ["PCMCI+ -> IMDP"]
+    assert table.at["PCMCI+ -> IMDP", "median"] == pytest.approx(0.2)
+    assert table.at["PCMCI+ -> IMDP", "regret"] == pytest.approx(0.1)
+
+
+def test_regret_map_marks_the_frontier_where_the_regret_stays_small(tmp_path):
+    """Cells hold the median normalised regret over seeds; reached = the first n from which the regret
+    stays <= 0.05 (median over seeds); the oracle is left out."""
+    rows = []
+    # V* = 10, V_rand = 0: regret = 1 - true / 10; per seed of "PCMCI+ -> IMDP": true at n = 10, 20, 40, 80
+    runs = {0: [5.0, 9.6, 9.0, 9.8], 1: [12.0, 9.7, 9.9, 9.9], 2: [5.0, 6.0, 9.6, 9.9]}
+    for seed, trues in runs.items():
+        for n, true in zip((10, 20, 40, 80), trues, strict=True):
+            for method, role, v in [("PCMCI+ -> IMDP", "ours", true), ("oracle -> IMDP", "oracle", 10.0)]:
+                row = {"size": "3", "n_states": 8, "seed": seed, "n_transitions": n, "method": method}
+                rows.append(
+                    row | {"role": role, "status": "ok", "true": v, "V_star_obs": 10.0, "V_random": 0.0}
+                )
+    res = pd.DataFrame(rows)
+    methods = list(res["method"].unique())
+    styles = method_styles({"PCMCI+ -> IMDP": ("ours", True), "oracle -> IMDP": ("oracle", True)})
+    cells = figures.regret_map(res, ["3"], ["3"], "N", methods, styles, "t", tmp_path / "regret_map")
+    assert (tmp_path / "regret_map.pdf").exists()
+    assert set(cells["method"]) == {"PCMCI+ -> IMDP"}
+    at = cells.set_index("n_transitions")
+    assert at.at[10, "regret"] == pytest.approx(0.5)  # regrets 0.5, -0.2, 0.5 -> median 0.5
+    # regret <= 0.05 at n and every larger n: seed 0 from 80 (0.1 at 40), seed 1 from 10 (-0.2, 0.03, ...),
+    # seed 2 from 40 (0.04, 0.01) -> median 40
+    assert at.at[10, "n_reached"] == 40
+
+
+def test_regret_gain_pairs_seeds_and_scales_by_decades(tmp_path):
+    """The gain is paired per seed and divided by log10 of the step; the learning rate fits r ~ n^-b."""
+    rows = []
+    # V* = 10, V_rand = 0: regret r = 1 - true / 10 = 0.8 * (n / 10)^-0.5 for every seed (b = 0.5)
+    for seed in range(3):
+        for n in (10, 100, 1000, 10000):
+            true = 10 * (1 - 0.8 * (n / 10) ** -0.5)
+            for method, role, v in [("PCMCI+ -> IMDP", "ours", true), ("oracle -> IMDP", "oracle", 10.0)]:
+                row = {"size": "3", "n_states": 8, "seed": seed, "n_transitions": n, "method": method}
+                rows.append(
+                    row | {"role": role, "status": "ok", "true": v, "V_star_obs": 10.0, "V_random": 0.0}
+                )
+    res = pd.DataFrame(rows)
+    methods = list(res["method"].unique())
+    styles = method_styles({"PCMCI+ -> IMDP": ("ours", True), "oracle -> IMDP": ("oracle", True)})
+    cells, rates = figures.regret_gain(res, ["3"], ["3"], "N", methods, styles, "t", tmp_path / "regret_gain")
+    assert (tmp_path / "regret_gain.pdf").exists() and set(cells["method"]) == {"PCMCI+ -> IMDP"}
+    first = cells.set_index("n_from").loc[10]
+    assert first["gain"] == pytest.approx(0.8 - 0.8 * 10**-0.5)  # one decade: 0.8 -> 0.253
+    rate = rates.set_index("method").loc["PCMCI+ -> IMDP"]
+    assert rate["rate"] == pytest.approx(0.5) and rate["seeds"] == 3
+
+
+def test_zoom_by_size_draws_one_figure_per_size_and_drops_empty_panels(tmp_path):
+    """Per size and budget: the median share of V*_obs (every seed finished), the seeds whose sets contain
+    the truth, the median of the missed edges; the oracle left out; two sizes with the same number of
+    states get distinct files; a run without sets (an MDP) has no middle panel."""
+    rows = []
+    # V*_obs = 10; per seed of "PCMCI+ -> IMDP": (true, contain_all, missing) at n = 10, 100, 1000
+    runs = {0: [(5.0, 0, 3), (9.0, 1, 1), (9.9, 1, 0)], 1: [(6.0, 0, 4), (9.6, 1, 1), (9.8, 1, 0)],
+            2: [(4.0, 1, 3), (9.0, 0, 2), (9.7, 1, 0)]}  # fmt: skip
+    for size in ("a", "b"):  # both 8 observed states
+        for seed, cells in runs.items():
+            for n, (true, contain, missing) in zip((10, 100, 1000), cells, strict=True):
+                for method, role, v, c, m in [("PCMCI+ -> IMDP", "ours", true, contain, missing),
+                                              ("oracle -> IMDP", "oracle", 10.0, 1, np.nan),
+                                              ("flat MDP", "baseline", 8.0, np.nan, np.nan)]:  # fmt: skip
+                    stopped = method == "flat MDP" and n == 1000 and seed == 2
+                    rows.append({"size": size, "n_states": 8, "n_observed_states": 8, "seed": seed,
+                                 "n_transitions": n, "method": method, "role": role, "V_star": 10.0,
+                                 "status": "timeout" if stopped else "ok", "true": v, "V_star_obs": 10.0,
+                                 "V_random": 0.0, "contain_all": c, "missing": m})  # fmt: skip
+    res = pd.DataFrame(rows)
+    methods = list(res["method"].unique())
+    styles = method_styles(
+        {m: (r, "IMDP" in m) for m, r in res.drop_duplicates("method")[["method", "role"]].values}
+    )
+    points = figures.zoom_by_size(res, ["a", "b"], ["a", "b"], methods, styles, 0.95, "t", tmp_path)
+    assert sorted(p.name for p in tmp_path.glob("*.pdf")) == [
+        "observed_states=8_a.pdf",
+        "observed_states=8_b.pdf",
+    ]
+    assert set(points["method"]) == {"PCMCI+ -> IMDP", "flat MDP"}  # no oracle
+    at = points[(points["size"] == "a") & (points["method"] == "PCMCI+ -> IMDP")].set_index("n_transitions")
+    assert at.at[100, "share"] == pytest.approx(0.9)  # 0.9, 0.96, 0.9 -> median 0.9
+    assert at.at[10, "contain"] == 1 and at.at[1000, "contain"] == 3
+    assert at.at[10, "missing"] == 3  # 3, 4, 3
+    flat = points[(points["size"] == "a") & (points["method"] == "flat MDP")]
+    assert list(flat["n_transitions"]) == [10, 100]  # a seed stopped at 1000: no point
+    assert flat["contain"].isna().all() and flat["missing"].isna().all()
+    # only point models: the figure has no "contain" panel (and no "missing" panel without a graph)
+    mdp = res[res["method"] == "flat MDP"].assign(contain_all=np.nan)
+    out = figures.zoom_by_size(mdp, ["a"], ["a"], ["flat MDP"], styles, 0.95, "t", tmp_path / "mdp")
+    assert (tmp_path / "mdp" / "observed_states=8.png").exists() and out["contain"].isna().all()
+
+
 def test_parameter_learning_figure(tmp_path):
     rng = np.random.default_rng(0)
     rows = [

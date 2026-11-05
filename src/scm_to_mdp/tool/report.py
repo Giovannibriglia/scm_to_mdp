@@ -23,6 +23,8 @@ from scm_to_mdp.plotting import figures
 from scm_to_mdp.plotting.style import method_styles
 from scm_to_mdp.tool.sweep import read_results
 
+COVERAGE_TARGET = 0.99  # the coverage figures: share of the true probabilities inside the intervals
+COVERAGE_EPS = 0.2  # and the "small sets" test: mean interval width <= 0.2
 ROLE_ORDER = {"ours": 0, "oracle": 1, "reference": 1, "control": 2, "baseline": 3}
 
 
@@ -91,6 +93,7 @@ def report(out_dir, target: float = 0.95, delta: float | None = 0.05, show: bool
         if delta is not None:  # the headline of exp3: value among the methods whose promise holds
             figures.gated_comparison(at_n, axis, methods, styles, delta, title, folder / "gated_comparison")
         figures.decision_edges(at_n, axis, methods, styles, title, folder / "decision_edges")
+        figures.certificate(at_n, axis, methods, styles, title, folder / "certificate")
         if "s4_width" in at_n:
             stem = folder / "parameter_learning"
             figures.parameter_learning(at_n, axis, methods, styles, delta, title, stem)
@@ -174,14 +177,15 @@ def report(out_dir, target: float = 0.95, delta: float | None = 0.05, show: bool
         f"{name}: transitions for a {target:.0%}-optimal policy",
         fig_dir / "sample_efficiency",
     )
+    largest = figures.samples_label(figures.sample_grid(res)[-1])
+
+    def cell(r):
+        if not np.isfinite(r["median_t"]):
+            return f"> {largest}"
+        hi = "inf" if not np.isfinite(r["ci_hi_t"]) else figures.samples_label(r["ci_hi_t"])
+        return f"{figures.samples_label(r['median_t'])} [{figures.samples_label(r['ci_lo_t'])}, {hi}]"
+
     if len(summary):
-
-        def cell(r):
-            if not np.isfinite(r["median_t"]):
-                return f"> {figures.samples_label(figures.sample_grid(res)[-1])}"
-            hi = "inf" if not np.isfinite(r["ci_hi_t"]) else figures.samples_label(r["ci_hi_t"])
-            return f"{figures.samples_label(r['median_t'])} [{figures.samples_label(r['ci_lo_t'])}, {hi}]"
-
         table = summary.assign(cell=summary.apply(cell, axis=1)).pivot(
             index="size", columns="method", values="cell"
         )
@@ -194,6 +198,72 @@ def report(out_dir, target: float = 0.95, delta: float | None = 0.05, show: bool
         )
         lines += [f"## {caption}", "", "```", table.to_string(), "```", ""]
         shown += [caption + ":", table.to_string(), ""]
+
+    # ---- transitions needed for valid (and small) probability sets (S4), and for a valid set that
+    # certifies a near-optimal policy (S4 -> S8) -----------------------------------------------------
+    def needed_table(summary):
+        table = summary.assign(cell=summary.apply(cell, axis=1)).pivot(
+            index="size", columns="method", values="cell"
+        )
+        table = table.reindex(
+            index=[s for s in sizes if s in table.index], columns=[m for m in methods if m in table]
+        )
+        table.index = pd.Index([labels[s] for s in table.index], name=size_name)
+        return table.to_string()
+
+    panels = []
+    for column, stem in (("s4_coverage_seen", "coverage_seen"), ("s4_coverage", "coverage")):
+        title = f"{name}: transitions for valid probability sets"
+        sets = figures.coverage_efficiency(
+            res, sizes, [labels[s] for s in sizes], size_name, methods, styles, column, title,
+            fig_dir / stem, target=COVERAGE_TARGET, eps=COVERAGE_EPS,
+        )  # fmt: skip
+        valid = f"{column} >= {COVERAGE_TARGET:.0%}"
+        panels += [(sets, (("valid", valid), ("tight", f"{valid} and s4_width <= {COVERAGE_EPS:g}")))]
+    args = (res, sizes, [labels[s] for s in sizes], size_name, methods, styles)
+    sets = figures.guarantee_efficiency(*args, f"{name}: transitions for a guarantee", fig_dir / "guarantee")
+    half = figures.guarantee_efficiency(*args, "", None, useful=0.5)
+    cells = figures.regret_map(*args, f"{name}: normalised regret over size and data", fig_dir / "regret_map")
+    if len(cells):
+        frontier = cells.drop_duplicates(["size", "method"])[["size", "method", "n_reached"]]
+        frontier = frontier.assign(cell=frontier["n_reached"].map(
+            lambda v: figures.samples_label(v) if np.isfinite(v) else f"> {largest}"))  # fmt: skip
+        table = frontier.pivot(index="size", columns="method", values="cell")
+        table = table.reindex(
+            index=[s for s in sizes if s in table.index], columns=[m for m in methods if m in table]
+        )
+        table.index = pd.Index([labels[s] for s in table.index], name=size_name)
+        caption = (
+            "Transitions until the normalised regret stays <= 0.05 (median over seeds); '>' = not reached"
+        )
+        lines += [f"## {caption}", "", "```", table.to_string(), "```", ""]
+    title = f"{name}: what more data buys (normalised regret)"
+    _, rates = figures.regret_gain(*args, title, fig_dir / "regret_gain")
+    # one figure per size over the transitions: quality, valid sets, missed edges (figures/zoom_all_methods/)
+    figures.zoom_by_size(
+        res, sizes, [labels[s] for s in sizes], methods, styles, target, name, fig_dir / figures.ZOOM_FOLDER
+    )
+    if len(rates):
+        rate_cells = [f"{r:.2f} ({n})" for r, n in rates[["rate", "seeds"]].values]
+        table = rates.assign(cell=rate_cells).pivot(index="size", columns="method", values="cell")
+        table = table.reindex(
+            index=[s for s in sizes if s in table.index], columns=[m for m in methods if m in table]
+        )
+        table.index = pd.Index([labels[s] for s in table.index], name=size_name)
+        caption = "Learning rate b of the normalised regret ~ n^-b, before it is <= 0.05"
+        caption += ": median over seeds (seeds fitted)"
+        lines += [f"## {caption}", "", "```", table.to_string(), "```", ""]
+    panels += [
+        (sets, (("valid", "the promise holds in every state (safe)"),
+                ("tight", "it holds and V_rob >= V_random (normalised promise >= 0)"),
+                ("contain", "the set contains the true MDP (contain_all)"))),
+        (half, (("tight", "it holds and the normalised promise >= 0.5"),)),
+    ]  # fmt: skip
+    for sets_, parts in panels:
+        for key, what in parts:
+            if not sets_[key].empty:
+                caption = f"Transitions until {what}: median over seeds [95% CI]; '>' = not reached"
+                lines += [f"## {caption}", "", "```", needed_table(sets_[key]), "```", ""]
     hard = res.drop_duplicates(["size"]).set_index("size")
     share = (hard["V_random"] / figures.target_value(hard)).reindex(sizes)
     hard_text = "\n".join(f"{size_name} = {labels[s]:<8} {v:.1%}" for s, v in share.items())

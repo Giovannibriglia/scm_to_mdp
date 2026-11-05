@@ -15,13 +15,20 @@ after such a stop) has its marker on the limit line, at every size concerned.
 Figure over the problem size and the number of transitions:
     sample_efficiency   transitions (samples) needed for a policy that is at
                         least 95% optimal
+    coverage_efficiency transitions needed for probability sets that contain >= 99% of the true
+                        probabilities (left), and are also small: mean width <= 0.2 (right)
+    guarantee_efficiency transitions needed for a promise that holds (left), and that also proves the
+                        policy better than the random one (right)
+
+One figure per size, over the number of transitions (figures/zoom_all_methods/):
+    zoom_by_size  policy quality, intervals that contain the true kernel, true edges missed
 """
 
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 from matplotlib.lines import Line2D
-from matplotlib.ticker import FuncFormatter
+from matplotlib.ticker import FuncFormatter, LogLocator, NullFormatter
 
 from scm_to_mdp.plotting.stats import iqm_ci, median_ci
 from scm_to_mdp.plotting.style import FULL_WIDTH, save, setup
@@ -685,23 +692,34 @@ def target_value(res: pd.DataFrame) -> pd.Series:
     return pd.to_numeric(res["V_star"], errors="coerce")
 
 
-def transitions_needed(res: pd.DataFrame, target: float = 0.95) -> pd.DataFrame:
+def transitions_needed(
+    res: pd.DataFrame, target: float = 0.95, condition: pd.Series | None = None
+) -> pd.DataFrame:
     """For every (size, seed, method): n* = the smallest number of transitions n of the grid
     such that the policy is at least `target` optimal (true >= target * V_star_obs at the nominal start)
     at n and at every larger n of the grid; inf if never; t_star = the transitions (samples) of that
     dataset (= n*). A run that stopped counts as not optimal.
     Sizes with V_star_obs <= 0 have no such ratio and are left out. n_observed_states: what the
-    learners see (n_states counts the hidden variables too)."""
+    learners see (n_states counts the hidden variables too).
+    condition: another success test, one boolean per row of res (NaN = not met), in place of the
+    value test (`target` is then unused and no size is left out); a stopped run still fails it."""
     rows = []
-    res = res.assign(_target=target_value(res), _obs=observed_states(res).reindex(res["size"]).to_numpy())
+    if condition is not None:
+        res = res.assign(_good=condition.reindex(res.index).fillna(False).astype(bool))
+    res = res.assign(_obs=observed_states(res).reindex(res["size"]).to_numpy())
+    if condition is None:
+        res = res.assign(_target=target_value(res))
     if "transitions" not in res:
         res = res.assign(transitions=np.nan)
     for (size, seed, method), g in res.groupby(["size", "seed", "method"]):
         g = g.sort_values("n_transitions")
-        v_star = g["_target"].iloc[0]
-        if not np.isfinite(v_star) or v_star <= 0:
-            continue
-        good = (g["status"] == "ok") & (pd.to_numeric(g["true"], errors="coerce") >= target * v_star)
+        if condition is not None:
+            good = (g["status"] == "ok") & g["_good"]
+        else:
+            v_star = g["_target"].iloc[0]
+            if not np.isfinite(v_star) or v_star <= 0:
+                continue
+            good = (g["status"] == "ok") & (pd.to_numeric(g["true"], errors="coerce") >= target * v_star)
         from_here = good[::-1].cummin()[::-1].to_numpy()  # good at n and at every larger n
         grid = g["n_transitions"].to_numpy()
         samples = pd.to_numeric(g["transitions"], errors="coerce").to_numpy(float)
@@ -760,23 +778,14 @@ def samples_label(v: float) -> str:
     return f"{v:.0f}"
 
 
-def sample_efficiency(
-    res, sizes, labels, xlabel, methods, styles, target: float, title: str, stem
-) -> pd.DataFrame:
-    """x: observed states (Axis), y: transitions (samples) needed for a policy at least `target`
-    optimal: the median over seeds, with its 95% confidence interval as the band (plotting/stats.median_ci;
-    a seed that never reaches the target has t* = inf). Not reached within the grid: an open marker on
-    the line above the largest dataset. Returns the table of medians and intervals (of the budget n*
-    and of the transitions t*)."""
-    setup()
-    summary = summarize_needed(transitions_needed(res, target))
-    if summary.empty:  # no run finished (or no size has V*_obs > 0): nothing to draw
-        return summary
+def _needed_panel(ax, res, summary, sizes, labels, xlabel, methods, styles, ylabel: str) -> list[str]:
+    """One panel of transitions needed (summarize_needed): x the observed states, y the median t* over
+    seeds with its 95% CI as the band; not reached: an open marker on the line above the largest
+    dataset. Returns the methods drawn."""
     grid = sample_grid(res)
     top = grid[-1] * 1.8
     axis = Axis(res[res["size"].isin(set(summary["size"]))], sizes, labels, xlabel)
     position = dict(zip(axis.order, axis.x, strict=True))
-    fig, ax = plt.subplots(figsize=(FULL_WIDTH, 4.6))
     shown = []
     for m in methods:
         sub = summary[summary["method"] == m]
@@ -788,7 +797,7 @@ def sample_efficiency(
         med, lo, hi = (sub[c].to_numpy(float) for c in ("median_t", "ci_lo_t", "ci_hi_t"))
         reached = np.isfinite(med)
         y = np.where(reached, med, top)
-        ax.plot(x, y, ls=st["ls"], color=st["color"], lw=1.4)
+        ax.plot(x, y, ls=st["ls"], color=st["color"], lw=1.6)
         # band: 95% CI of the median over seeds (an end at inf is drawn at the "not reached" line)
         lower = np.where(np.isfinite(lo), lo, top)
         upper = np.where(np.isfinite(hi), hi, top)
@@ -809,18 +818,664 @@ def sample_efficiency(
     ax.text(axis.x[0], top, f" not reached with {samples_label(grid[-1])} transitions", va="bottom",
             fontsize=7.5, color="grey")  # fmt: skip
     ax.set_yscale("log")
-    axis.finish(ax, f"transitions for a {target:.0%}-optimal policy")
+    axis.finish(ax, ylabel)
     ax.set_xlim(axis.x[0] - 0.4, axis.x[-1] + 0.4)
     ax.set_yticks(grid, [samples_label(g) for g in grid])
     ax.set_ylim(grid[0] / 1.4, top * 1.5)
-    ax.set_title(title)
+    return shown
+
+
+def _needed_extras() -> list:
     hollow = Line2D(
         [], [], ls="none", marker="o", color="k", markerfacecolor="white", label="not reached (median)"
     )
     band = plt.Rectangle(
         (0, 0), 1, 1, color="grey", alpha=0.25, lw=0, label="95% CI of the median over seeds"
     )
-    _legend(fig, shown, styles, extra=[hollow, band])
+    return [hollow, band]
+
+
+def sample_efficiency(
+    res, sizes, labels, xlabel, methods, styles, target: float, title: str, stem
+) -> pd.DataFrame:
+    """x: observed states (Axis), y: transitions (samples) needed for a policy at least `target`
+    optimal: the median over seeds, with its 95% confidence interval as the band (plotting/stats.median_ci;
+    a seed that never reaches the target has t* = inf). Not reached within the grid: an open marker on
+    the line above the largest dataset. Returns the table of medians and intervals (of the budget n*
+    and of the transitions t*)."""
+    setup()
+    summary = summarize_needed(transitions_needed(res, target))
+    if summary.empty:  # no run finished (or no size has V*_obs > 0): nothing to draw
+        return summary
+    fig, ax = plt.subplots(figsize=(FULL_WIDTH, 4.6))
+    ylabel = f"transitions for a {target:.0%}-optimal policy"
+    shown = _needed_panel(ax, res, summary, sizes, labels, xlabel, methods, styles, ylabel)
+    ax.set_title(title)
+    _legend(fig, shown, styles, extra=_needed_extras())
     fig.tight_layout(rect=(0, 0.17, 1, 1))
     save(fig, stem)
     return summary
+
+
+COVERAGE_NAMES = {
+    "s4_coverage_seen": "true probabilities inside the intervals, seen (s, a)",
+    "s4_coverage": "true probabilities inside the intervals, every (s, a)",
+}
+
+
+def _set_methods(res: pd.DataFrame, methods, has: pd.Series) -> list[str]:
+    """The methods with a value in `has` (a mask over res), the oracle left out (the true model:
+    trivially valid, and of width 0)."""
+    present = has.groupby(res["method"]).any()
+    roles = res.drop_duplicates("method").set_index("method")["role"] if "role" in res else pd.Series()
+    oracle = {m for m in methods if roles.get(m) == "oracle" or m.startswith("oracle")}
+    return [m for m in methods if present.get(m, False) and m not in oracle]
+
+
+def _two_needed_panels(rows, out, heads, sizes, labels, xlabel, methods, styles, suptitle, stem):
+    """Left and right: transitions needed for out["valid"] and out["tight"] (_needed_panel)."""
+    setup()
+    fig, axes = plt.subplots(1, 2, figsize=(FULL_WIDTH, 4.0), sharey=True)
+    shown = []
+    for ax, key, head in zip(axes, ("valid", "tight"), heads, strict=True):
+        drawn = _needed_panel(
+            ax, rows, out[key], sizes, labels, xlabel, methods, styles, "transitions needed"
+        )
+        shown += [m for m in drawn if m not in shown]
+        ax.set_title(head, fontsize=9)
+        ax.tick_params(axis="x", labelsize=6.5, labelrotation=45)
+    axes[1].set_ylabel("")
+    axes[1].texts[0].remove()  # "not reached ..." once, on the left panel
+    fig.suptitle(suptitle, fontsize=9.5)
+    _legend(fig, shown, styles, extra=_needed_extras())
+    fig.tight_layout(rect=(0, 0.14, 1, 1))
+    save(fig, stem)
+
+
+def coverage_efficiency(
+    res, sizes, labels, xlabel, methods, styles, column: str, title: str, stem,
+    target: float = 0.99, eps: float = 0.2,
+) -> dict[str, pd.DataFrame]:  # fmt: skip
+    """Transitions needed for valid (left) and for valid and small (right) probability sets (S4), on the
+    axes of sample_efficiency: left, until `column` (a share of the true factor probabilities inside
+    their intervals, evaluation.interval_metrics) is >= target; right, until it is and the mean
+    interval width s4_width (hi - lo on the probability scale, weighted by the best policy's
+    occupancy; an unseen row counts 1) is <= eps. Both at n and at every larger n (transitions_needed).
+    Only the methods with intervals; not the oracle (the true model, trivially valid and of width 0).
+    Returns {"valid": summary, "tight": summary} (summarize_needed); empty when no method has `column`."""
+    empty = {"valid": pd.DataFrame(), "tight": pd.DataFrame()}
+    if column not in res or "s4_width" not in res:
+        return empty
+    value = pd.to_numeric(res[column], errors="coerce")
+    width = pd.to_numeric(res["s4_width"], errors="coerce")
+    kept = _set_methods(res, methods, value.notna())
+    if not kept:
+        return empty
+    rows = res[res["method"].isin(kept)]
+    valid = value.loc[rows.index] >= target - 1e-12
+    tight = valid & (width.loc[rows.index] <= eps + 1e-12)
+    out = {
+        "valid": summarize_needed(transitions_needed(rows, condition=valid)),
+        "tight": summarize_needed(transitions_needed(rows, condition=tight)),
+    }
+    if out["valid"].empty:
+        return empty
+    heads = (f"coverage \u2265 {target:.0%}", f"coverage \u2265 {target:.0%} and mean width \u2264 {eps:g}")
+    suptitle = f"{title}\n({COVERAGE_NAMES.get(column, column)})"
+    _two_needed_panels(rows, out, heads, sizes, labels, xlabel, kept, styles, suptitle, stem)
+    return out
+
+
+CERT_FLOOR = 0.01  # the certificate figures (log axis): a value at or below it is drawn on it
+
+
+def _median_table(rows: pd.DataFrame, column: str) -> pd.DataFrame:
+    """Per size and method: the median over seeds of `column` and its 95% CI (stats.median_ci)."""
+    out = []
+    for (size, method), x in rows.groupby(["size", "method"]):
+        values = pd.to_numeric(x[column], errors="coerce").dropna().to_numpy(float)
+        if len(values):
+            med, lo, hi = median_ci(values)
+            out.append({"size": size, "method": method, "median": med, "ci_lo": lo, "ci_hi": hi,
+                        "seeds": len(values)})  # fmt: skip
+    return pd.DataFrame(out, columns=["size", "method", "median", "ci_lo", "ci_hi", "seeds"])
+
+
+def _certificate_panel(ax, rows, axis: Axis, methods, styles) -> tuple[list[str], pd.DataFrame]:
+    """Proved vs actual regret of the finished runs in rows (one number of transitions), over the sizes
+    of axis, both normalised by V*_obs - V_random (normalised): the certificate (V_opt - V_rob), a bound
+    on the regret when the set contains the true MDP (filled markers, line, 95% CI of the median as the
+    band), and the actual regret V*_obs - V^pi = 1 - norm_value (hollow markers). Medians over seeds;
+    log scale, values <= CERT_FLOOR drawn on it; a dotted line at 1 (the whole gap from random to
+    optimal; its label is in the caller's legend). Returns the methods drawn and the table (size,
+    method, median, ci_lo, ci_hi, seeds, regret: the median actual regret)."""
+    done = normalised(rows[rows["status"] == "ok"])
+    cert = _median_table(done, "norm_cert_gap")
+    regret = _median_table(done.assign(norm_regret_=1.0 - done["norm_value"]), "norm_regret_")
+    cert = cert.merge(regret[["size", "method", "median"]].rename(columns={"median": "regret"}),
+                      on=["size", "method"], how="left")  # fmt: skip
+    position = dict(zip(axis.order, axis.x, strict=True))
+    shown = []
+    for m in methods:
+        sub = cert[(cert["method"] == m) & cert["size"].isin(position)]
+        sub = sub.sort_values("size", key=lambda c: c.map(position))
+        if sub.empty:
+            continue
+        st = styles[m]
+        x = sub["size"].map(position).to_numpy(float) + 1.5 * _dodge(methods, m)
+        med, lo, hi, reg = (
+            np.maximum(sub[c].to_numpy(float), CERT_FLOOR) for c in ("median", "ci_lo", "ci_hi", "regret")
+        )
+        ax.plot(x, med, ls=st["ls"], color=st["color"], marker=st["marker"], markersize=6, lw=1.6)
+        ax.fill_between(x, lo, hi, color=st["color"], alpha=0.15, lw=0)
+        ax.plot(x, reg, ls="none", marker=st["marker"], color=st["color"], markerfacecolor="white",
+                markersize=5, markeredgewidth=1.0)  # fmt: skip
+        shown.append(m)
+    ax.axhline(1.0, color="grey", ls=":", lw=0.8)
+    ax.set_yscale("log")
+    ax.yaxis.set_major_locator(LogLocator(base=10, subs=(1.0, 2.0, 5.0)))
+    ax.yaxis.set_major_formatter(
+        FuncFormatter(lambda v, _: f"\u2264 {v:g}" if v <= CERT_FLOOR * 1.001 else f"{v:g}")
+    )
+    ax.yaxis.set_minor_formatter(NullFormatter())
+    ax.set_ylim(bottom=CERT_FLOOR / 1.3)
+    axis.finish(ax, r"regret, as a share of $V^* - V_{\mathrm{rand}}$")
+    ax.set_xlim(axis.x[0] - 0.4, axis.x[-1] + 0.4)
+    return shown, cert
+
+
+def certificate(res, axis: Axis, methods, styles, title: str, stem) -> pd.DataFrame:
+    """At one number of transitions (res = its rows): proved vs actual regret over the problem size
+    (_certificate_panel), for the methods with interval sets, not the oracle. Returns its table;
+    nothing drawn without the columns."""
+    if not {"cert_gap", "V_star_obs", "V_random"} <= set(res.columns):
+        return pd.DataFrame()
+    kept = _set_methods(res, methods, pd.to_numeric(res["cert_gap"], errors="coerce").notna())
+    if not kept:
+        return pd.DataFrame()
+    rows = res[res["method"].isin(kept)]
+    setup()
+    fig, ax = plt.subplots(figsize=(FULL_WIDTH * 0.62, 4.2))
+    shown, cert = _certificate_panel(ax, rows, axis, kept, styles)
+    if cert.empty:
+        plt.close(fig)
+        return cert
+    ax.set_title(f"{title}\nproved vs actual regret of the returned policy", fontsize=9)
+    ax.tick_params(axis="x", labelsize=7, labelrotation=45 if len(axis.x) > 6 else 0)
+    band = plt.Rectangle(
+        (0, 0), 1, 1, color="grey", alpha=0.25, lw=0, label="95% CI of the median over seeds"
+    )
+    proved = Line2D(
+        [], [], ls="-", marker="o", color="k", label=r"proved: $V_{\mathrm{opt}} - V_{\mathrm{rob}}$"
+    )
+    actual = Line2D(
+        [], [], ls="none", marker="o", color="k", markerfacecolor="white", label=r"actual: $V^* - V^\pi$"
+    )
+    whole = Line2D([], [], ls=":", color="grey", label="1 = the whole gap from random to optimal")
+    handles = [Line2D([], [], ls=styles[m]["ls"], marker=styles[m]["marker"], color=styles[m]["color"],
+                      label=styles[m]["label"]) for m in shown] + [proved, actual, whole, band]  # fmt: skip
+    fig.legend(
+        handles=handles, loc="lower center", ncol=2, frameon=False, fontsize=7.5, bbox_to_anchor=(0.5, -0.01)
+    )
+    fig.tight_layout(rect=(0, 0.25, 1, 1))
+    save(fig, stem)
+    return cert
+
+
+def guarantee_efficiency(
+    res, sizes, labels, xlabel, methods, styles, title: str, stem, useful: float = 0.0
+) -> dict[str, pd.DataFrame]:
+    """The guarantee on the axes of sample_efficiency (S8 -> S9). Left: transitions needed until the
+    promise holds (safe: promise <= true value in every observed live state; evaluation.evaluate), at
+    n and at every larger n (transitions_needed): a run whose promise breaks at a larger n never
+    counts. Right: until it holds and also proves the policy better than the random one: normalised
+    promise (V_rob - V_random) / (V*_obs - V_random) >= `useful` (0: V_rob >= V_random). Only the
+    methods with interval sets (contain_all), not the oracle. Returns {"valid": summary, "tight":
+    summary} (summarize_needed), and with `contain`, "contain": until the set contains the true MDP
+    (contain_all, the event the promise relies on); empty without the columns. stem None: no figure."""
+    empty = {"valid": pd.DataFrame(), "tight": pd.DataFrame(), "contain": pd.DataFrame()}
+    if not {"safe", "promise", "contain_all", "V_star_obs", "V_random"} <= set(res.columns):
+        return empty
+    contain = _as_float(res["contain_all"].astype(object).where(res["contain_all"].notna()))
+    kept = _set_methods(res, methods, contain.notna())
+    if not kept:
+        return empty
+    rows = res[res["method"].isin(kept)]
+    safe = _as_float(rows["safe"].astype(object).where(rows["safe"].notna())) == 1.0
+    promise = normalised(rows)["norm_promise"]
+    out = {
+        "valid": summarize_needed(transitions_needed(rows, condition=safe)),
+        "tight": summarize_needed(transitions_needed(rows, condition=safe & (promise >= useful - 1e-12))),
+        "contain": summarize_needed(transitions_needed(rows, condition=contain.loc[rows.index] == 1.0)),
+    }
+    if out["valid"].empty:
+        return empty
+    better = "random" if useful == 0 else f"{useful:g} of the gap from random to optimal"
+    proof = "\n" + r"$V_{\mathrm{rob}} \geq V_{\mathrm{rand}}$" if useful == 0 else ""
+    heads = (
+        "the promise holds in every state",
+        f"it holds and proves the policy better than {better}{proof}",
+    )
+    if stem is not None:  # None: the tables only
+        _two_needed_panels(rows, out, heads, sizes, labels, xlabel, kept, styles, title, stem)
+    return out
+
+
+# ==========================================================================================
+# Regret map: normalised regret over (problem size, number of transitions), one panel per method
+# ==========================================================================================
+AS_RANDOM = (0.95, 1.05)  # "about as good as the random policy" (e.g. a fallback to a uniform logger)
+RANDOM_LIKE = "#9E9E9E"  # grey
+WORSE_THAN_RANDOM = "#D55E00"  # vermilion (Okabe & Ito): regret above AS_RANDOM[1]
+REACHED = "#F0F0F0"  # very light grey: the regret stays within the target from here on
+
+
+def regret_map(
+    res, sizes, labels, xlabel, methods, styles, title: str, stem, target: float = 0.05
+) -> pd.DataFrame:
+    """One panel per method (not the oracle): x the problem sizes (by observed states), y the numbers of
+    transitions; a cell is the median over seeds of the normalised regret 1 - norm_value =
+    (V*_obs - V^pi) / (V*_obs - V_random) at the nominal start (normalised), on a colour gradient
+    (viridis) up to AS_RANDOM[0], then grey (about random) and vermilion (worse than random). Reached: per
+    seed, the first n from which the normalised regret stays <= target at every larger n
+    (transitions_needed's rule); per size, the median over seeds; the
+    cells from there up are grey and a black line marks the frontier. Hatched: some seed stopped by a
+    limit (time or memory) at that cell; x: no finished run. Returns the cells (size, n_transitions,
+    method, regret, n_reached)."""
+    if not {"true", "V_star_obs", "V_random"} <= set(res.columns):
+        return pd.DataFrame()
+    data = normalised(res)
+    data = data.assign(regret=1.0 - pd.to_numeric(data["norm_value"], errors="coerce"))
+    kept = _set_methods(data, methods, data["regret"].notna())
+    if not kept:
+        return pd.DataFrame()
+    data = data[data["method"].isin(kept)]
+    good = (data["regret"] <= target + 1e-12).fillna(False)
+    reached = summarize_needed(transitions_needed(data, condition=good)).set_index(["size", "method"])[
+        "median"
+    ]
+    finished = data[data["status"] == "ok"]
+    cells = (
+        finished.groupby(["size", "n_transitions", "method"])["regret"]
+        .median()
+        .rename("regret")
+        .reset_index()
+    )
+    stopped = data[data["status"].isin(STOPPED)].groupby(["size", "n_transitions", "method"]).size()
+    axis = Axis(data, sizes, labels, xlabel)
+    grid = sorted(data["n_transitions"].unique())
+    order = axis.order
+    cmap = plt.get_cmap("viridis_r")  # colour-blind safe gradient, yellow = no regret
+    norm = plt.Normalize(0.0, AS_RANDOM[0])
+
+    def colour(v):
+        if not np.isfinite(v):
+            return None
+        if v > AS_RANDOM[1]:
+            return WORSE_THAN_RANDOM
+        if v >= AS_RANDOM[0]:
+            return RANDOM_LIKE
+        return cmap(norm(max(v, 0.0)))
+
+    setup()
+    ncol = min(3, len(kept))
+    nrow = int(np.ceil(len(kept) / ncol))
+    fig, axes = plt.subplots(nrow, ncol, figsize=(FULL_WIDTH, 2.25 * nrow + 0.9), squeeze=False,
+                             sharex=True, sharey=True)  # fmt: skip
+    for k, m in enumerate(kept):
+        ax = axes.flat[k]
+        for i, s in enumerate(order):
+            n_star = reached.get((s, m), np.inf)
+            for j, n in enumerate(grid):
+                if np.isfinite(n_star) and n >= n_star:
+                    ax.add_patch(plt.Rectangle((i - 0.5, j - 0.5), 1, 1, color=REACHED, lw=0))
+                    continue
+                row = cells[(cells["size"] == s) & (cells["n_transitions"] == n) & (cells["method"] == m)]
+                c = colour(float(row["regret"].iloc[0])) if len(row) else None
+                if c is None:
+                    ax.plot(i, j, marker="x", color="grey", markersize=3, lw=0)
+                else:
+                    ax.add_patch(plt.Rectangle((i - 0.5, j - 0.5), 1, 1, color=c, lw=0))
+                if stopped.get((s, n, m), 0):
+                    ax.add_patch(plt.Rectangle((i - 0.5, j - 0.5), 1, 1, fill=False, hatch="////",
+                                               edgecolor="white", lw=0))  # fmt: skip
+            if np.isfinite(n_star):  # the frontier: the lower edge of the first reached cell
+                j = grid.index(n_star) if n_star in grid else int(np.searchsorted(grid, n_star))
+                ax.plot([i - 0.5, i + 0.5], [j - 0.5, j - 0.5], color="black", lw=1.4)
+        ax.set_xlim(-0.5, len(order) - 0.5)
+        ax.set_ylim(-0.5, len(grid) - 0.5)
+        ax.set_title(styles[m]["label"], fontsize=8.5)
+        ax.grid(False)
+        ax.set_xticks(range(len(order)), axis.labels, rotation=60, fontsize=6.5)
+        ax.set_yticks(range(len(grid)), [samples_label(g) for g in grid], fontsize=6.5)
+        if k % ncol == 0:
+            ax.set_ylabel("transitions")
+        if k // ncol == nrow - 1 or k + ncol >= len(kept):
+            ax.set_xlabel("observed states", fontsize=7.5)
+    for k in range(len(kept), nrow * ncol):  # empty panels: the one above shows the x tick labels
+        axes.flat[k].set_visible(False)
+        above = axes.flat[k - ncol]
+        above.xaxis.set_tick_params(labelbottom=True)
+        above.set_xlabel("observed states", fontsize=7.5)
+    bar = fig.add_axes((0.08, 0.045, 0.36, 0.014))
+    cb = fig.colorbar(plt.cm.ScalarMappable(norm=norm, cmap=cmap), cax=bar, orientation="horizontal")
+    cb.set_label("normalised regret (median over seeds)", fontsize=7)
+    cb.ax.tick_params(labelsize=6.5)
+    handles = [
+        plt.Rectangle((0, 0), 1, 1, color=RANDOM_LIKE, label=f"{AS_RANDOM[0]:g}–{AS_RANDOM[1]:g} (≈ random)"),
+        plt.Rectangle((0, 0), 1, 1, color=WORSE_THAN_RANDOM, label=f"> {AS_RANDOM[1]:g} (worse than random)"),
+        plt.Rectangle((0, 0), 1, 1, color=REACHED, label=f"reached: ≤ {target:g} from here on"),
+        plt.Rectangle(
+            (0, 0), 1, 1, facecolor="#888888", hatch="////", edgecolor="white", label="a seed stopped"
+        ),
+        Line2D([], [], ls="none", marker="x", color="grey", label="no finished run"),
+    ]
+    fig.legend(
+        handles=handles, loc="lower right", ncol=2, frameon=False, fontsize=7, bbox_to_anchor=(0.99, 0.0)
+    )
+    fig.suptitle(title, fontsize=9.5)
+    fig.tight_layout(rect=(0, 0.075 + 0.05 / nrow, 1, 1))
+    save(fig, stem)
+    out = cells.assign(
+        n_reached=[reached.get((s, m), np.inf) for s, m in zip(cells["size"], cells["method"], strict=True)]
+    )
+    return out
+
+
+# ==========================================================================================
+# Regret gain: what one more step of data buys, over (problem size, step of the budget grid)
+# ==========================================================================================
+GAIN_LIMIT = 1.0  # colour scale of the gain per decade: [-GAIN_LIMIT, GAIN_LIMIT], beyond it the end colours
+NOTHING_TO_GAIN = "#BDBDBD"  # mid grey, apart from the white middle (gain ~ 0) of the diverging scale
+
+
+def _paired_gains(data: pd.DataFrame, grid: list) -> pd.DataFrame:
+    """Per (size, seed, method) and step n_k -> n_{k+1} of the grid, both runs finished: the gain per decade
+    (r(n_k) - r(n_{k+1})) / log10(n_{k+1} / n_k), r the normalised regret. Paired by seed: the datasets
+    are nested (the smaller budget is a prefix of the larger), so the difference is the effect of the
+    added data."""
+    ok = data[data["status"] == "ok"].set_index(["size", "seed", "method", "n_transitions"])["regret"]
+    ok = ok[~ok.index.duplicated()]
+    rows = []
+    for a, b in zip(grid[:-1], grid[1:], strict=True):
+        try:
+            ra, rb = ok.xs(a, level="n_transitions"), ok.xs(b, level="n_transitions")
+        except KeyError:
+            continue
+        both = pd.concat([ra.rename("ra"), rb.rename("rb")], axis=1, join="inner").dropna()
+        gain = (both["ra"] - both["rb"]) / np.log10(b / a)
+        rows.append(
+            pd.DataFrame({"gain": gain, "ra": both["ra"], "rb": both["rb"]})
+            .reset_index()
+            .assign(n_from=a, n_to=b)
+        )
+    if not rows:
+        return pd.DataFrame(columns=["size", "seed", "method", "gain", "ra", "rb", "n_from", "n_to"])
+    return pd.concat(rows, ignore_index=True)
+
+
+def learning_rates(data: pd.DataFrame, target: float = 0.05, min_points: int = 3) -> pd.DataFrame:
+    """Per (size, method): the learning rate b of r ~ n^-b, the slope of log r on log n (least squares,
+    sign flipped) over the finished runs of each seed with target < r (before the regret is small; r > 0),
+    with at least min_points budgets; the median over the seeds that have a fit, and how many have one."""
+    out = []
+    ok = data[(data["status"] == "ok") & (data["regret"] > target)]
+    for (size, method), g in ok.groupby(["size", "method"]):
+        rates = []
+        for _, s in g.groupby("seed"):
+            if s["n_transitions"].nunique() >= min_points:
+                slope = np.polyfit(
+                    np.log10(s["n_transitions"].astype(float)), np.log10(s["regret"].astype(float)), 1
+                )[0]
+                rates.append(-slope)
+        if rates:
+            out.append({"size": size, "method": method, "rate": float(np.median(rates)), "seeds": len(rates)})
+    return pd.DataFrame(out, columns=["size", "method", "rate", "seeds"])
+
+
+def regret_gain(res, sizes, labels, xlabel, methods, styles, title: str, stem, target: float = 0.05):
+    """One panel per method (not the oracle), on the axes of regret_map: x the problem sizes, y the steps
+    n_k -> n_{k+1} of the budget grid; a cell is the median over seeds of the paired gain per decade of
+    data (_paired_gains) on a diverging colour-blind-safe scale (purple: the added data lowered the
+    regret; orange: it raised it), clipped at +-GAIN_LIMIT. A dot: the 95% CI of the median
+    (stats.median_ci) excludes 0. Grey: the median regret is <= target at both ends (nothing left to
+    gain); x: no paired run. Returns (cells: size, n_from, n_to, method, gain, lo, hi, seeds;
+    learning_rates)."""
+    empty = (pd.DataFrame(), pd.DataFrame())
+    if not {"true", "V_star_obs", "V_random"} <= set(res.columns):
+        return empty
+    data = normalised(res)
+    data = data.assign(regret=1.0 - pd.to_numeric(data["norm_value"], errors="coerce"))
+    kept = _set_methods(data, methods, data["regret"].notna())
+    if not kept:
+        return empty
+    data = data[data["method"].isin(kept)]
+    grid = sorted(data["n_transitions"].unique())
+    pairs = _paired_gains(data, grid)
+    if pairs.empty:
+        return empty
+    cells = []
+    for (size, a, b, m), g in pairs.groupby(["size", "n_from", "n_to", "method"]):
+        med, lo, hi = median_ci(g["gain"].to_numpy(float))
+        done = g["ra"].median() <= target and g["rb"].median() <= target
+        cells.append({"size": size, "n_from": a, "n_to": b, "method": m, "gain": med, "lo": lo, "hi": hi,
+                      "seeds": len(g), "nothing_to_gain": bool(done)})  # fmt: skip
+    cells = pd.DataFrame(cells)
+    rates = learning_rates(data, target)
+
+    axis = Axis(data, sizes, labels, xlabel)
+    order = axis.order
+    steps = list(zip(grid[:-1], grid[1:], strict=True))
+    cmap = plt.get_cmap("PuOr")  # orange (negative: a loss) ... purple (positive: a gain); colour-blind safe
+    norm = plt.Normalize(-GAIN_LIMIT, GAIN_LIMIT)
+    setup()
+    ncol = min(3, len(kept))
+    nrow = int(np.ceil(len(kept) / ncol))
+    fig, axes = plt.subplots(nrow, ncol, figsize=(FULL_WIDTH, 2.25 * nrow + 1.1), squeeze=False,
+                             sharex=True, sharey=True)  # fmt: skip
+    index = cells.set_index(["size", "n_from", "method"])
+    for k, m in enumerate(kept):
+        ax = axes.flat[k]
+        for i, s in enumerate(order):
+            for j, (a, _) in enumerate(steps):
+                if (s, a, m) not in index.index:
+                    ax.plot(i, j, marker="x", color="grey", markersize=3, lw=0)
+                    continue
+                c = index.loc[(s, a, m)]
+                if c["nothing_to_gain"]:
+                    ax.add_patch(plt.Rectangle((i - 0.5, j - 0.5), 1, 1, color=NOTHING_TO_GAIN, lw=0))
+                    continue
+                ax.add_patch(
+                    plt.Rectangle(
+                        (i - 0.5, j - 0.5),
+                        1,
+                        1,
+                        color=cmap(norm(np.clip(c["gain"], -GAIN_LIMIT, GAIN_LIMIT))),
+                        lw=0,
+                    )
+                )
+                if c["lo"] > 0 or c["hi"] < 0:
+                    ax.plot(i, j, marker=".", color="black", markersize=2.5, lw=0)
+        ax.set_xlim(-0.5, len(order) - 0.5)
+        ax.set_ylim(-0.5, len(steps) - 0.5)
+        ax.set_title(styles[m]["label"], fontsize=8.5)
+        ax.grid(False)
+        ax.set_xticks(range(len(order)), axis.labels, rotation=60, fontsize=6.5)
+        ax.set_yticks(
+            range(len(steps)), [f"{samples_label(a)}→{samples_label(b)}" for a, b in steps], fontsize=6
+        )
+        if k % ncol == 0:
+            ax.set_ylabel("more data: from → to")
+        if k + ncol >= len(kept):
+            ax.set_xlabel("observed states", fontsize=7.5)
+    for k in range(len(kept), nrow * ncol):  # empty panels: the one above shows the x tick labels
+        axes.flat[k].set_visible(False)
+        above = axes.flat[k - ncol]
+        above.xaxis.set_tick_params(labelbottom=True)
+        above.set_xlabel("observed states", fontsize=7.5)
+    bar = fig.add_axes((0.18, 0.045, 0.4, 0.014))
+    cb = fig.colorbar(
+        plt.cm.ScalarMappable(norm=norm, cmap=cmap), cax=bar, orientation="horizontal", extend="both"
+    )
+    cb.set_label("gain in normalised regret per decade of data (median over seeds)", fontsize=7)
+    cb.ax.tick_params(labelsize=6.5)
+    extra = [
+        plt.Rectangle(
+            (0, 0),
+            1,
+            1,
+            color=NOTHING_TO_GAIN,
+            label=f"already near-optimal (regret ≤ {target:g} before and after)",
+        ),
+        Line2D([], [], ls="none", marker=".", color="black", label="95% CI of the median excludes 0"),
+        Line2D([], [], ls="none", marker="x", color="grey", label="no paired run"),
+    ]
+    fig.legend(
+        handles=extra, loc="lower right", ncol=1, frameon=False, fontsize=7, bbox_to_anchor=(0.98, 0.0)
+    )
+    fig.suptitle(title, fontsize=9.5)
+    fig.tight_layout(rect=(0, 0.09 + 0.05 / nrow, 1, 1))
+    save(fig, stem)
+    return cells, rates
+
+
+# ==========================================================================================
+# One size at a time, over the number of logged transitions
+# ==========================================================================================
+ZOOM_FOLDER = "zoom_all_methods"  # figures/<ZOOM_FOLDER>/observed_states=<n>.{pdf,png}
+
+
+def _zoom_stems(res: pd.DataFrame, present: list[str], folder) -> dict:
+    """size -> figure stem: observed_states=<n>, with the size's name appended when two sizes have
+    the same number of observed states (e.g. Taxi's two variants)."""
+    states = observed_states(res).reindex(present)
+    twice = states.duplicated(keep=False)
+    stems = {}
+    for s in present:
+        n = f"{int(states[s])}" if np.isfinite(states[s]) else "unknown"
+        tag = f"_{s}" if twice[s] or n == "unknown" else ""
+        stems[s] = folder / f"observed_states={n}{tag}".replace(" ", "_").replace("/", "-")
+    return stems
+
+
+def zoom_by_size(res, sizes, labels, methods, styles, target: float, name: str, folder) -> pd.DataFrame:
+    """One figure per size, over the logged transitions (log x), every method but the oracle (the true
+    model: optimal at every budget):
+        top      the share of the optimum V^pi / V*_obs (target_value) at the nominal start: the median
+                 over seeds and its 95% CI (plotting/stats.median_ci); a dashed line at `target`
+        middle   the seeds (of all) whose intervals contain the true kernel in every (s, a) (contain_all;
+                 the methods with probability sets only)
+        bottom   the true edges the learned graph misses (missing): median and 95% CI (the methods with
+                 a graph only)
+    A panel no method has values for is left out (e.g. the middle one for point-estimate MDPs). Per
+    method, a vertical line at the transitions it needs for a `target`-optimal policy (the median over
+    seeds of transitions_needed, as sample_efficiency; none if not reached), also in the legend. A point
+    is drawn only when every seed of that size and budget finished. Files: folder /
+    observed_states=<n>.{pdf,png} (_zoom_stems). Returns the points drawn (size, method,
+    n_transitions, transitions, share, share_lo, share_hi, contain, missing, missing_lo, missing_hi)."""
+    columns = ["size", "method", "n_transitions", "transitions", "share", "share_lo", "share_hi",
+               "contain", "missing", "missing_lo", "missing_hi"]  # fmt: skip
+    if not {"true", "status"} <= set(res.columns) or res.empty:
+        return pd.DataFrame(columns=columns)
+    setup()
+    data = res.assign(
+        _share=pd.to_numeric(res["true"], errors="coerce") / target_value(res).where(lambda v: v > 0),
+        _contain=_as_float(res["contain_all"].astype(object)) if "contain_all" in res else np.nan,
+        _missing=pd.to_numeric(res["missing"], errors="coerce") if "missing" in res else np.nan,
+    )
+    kept = _set_methods(data, methods, data["_share"].notna())
+    grid = sorted(data["n_transitions"].unique())
+    samples = dict(zip(grid, sample_grid(data), strict=True))
+    needed = summarize_needed(transitions_needed(data[data["method"].isin(kept)], target))
+    needed = needed.set_index(["size", "method"])["median_t"] if len(needed) else pd.Series(dtype=float)
+    present = [s for s in sizes if s in set(data["size"])]
+    names = dict(zip(sizes, labels, strict=True))
+    stems = _zoom_stems(data, present, folder)
+    states = observed_states(data)
+    points = []
+    for size in present:
+        rows = data[(data["size"] == size) & data["method"].isin(kept)]
+        n_seeds = rows["seed"].nunique()
+        drawn = {}  # method -> its points at this size
+        for m in kept:
+            g = rows[rows["method"] == m]
+            out = []
+            for n in grid:
+                x = g[g["n_transitions"] == n]
+                if len(x) < n_seeds or (x["status"] != "ok").any() or x["_share"].isna().any():
+                    continue  # some seed did not finish (or has no value): no point
+                share, lo, hi = median_ci(x["_share"].to_numpy(float))
+                c = x["_contain"]
+                miss = x["_missing"].dropna().to_numpy(float)
+                mm = median_ci(miss) if len(miss) == len(x) else (np.nan, np.nan, np.nan)
+                out.append({"size": size, "method": m, "n_transitions": n, "transitions": samples[n],
+                            "share": share, "share_lo": lo, "share_hi": hi,
+                            "contain": float((c == 1.0).sum()) if c.notna().all() else np.nan,
+                            "missing": mm[0], "missing_lo": mm[1], "missing_hi": mm[2]})  # fmt: skip
+            if out:
+                drawn[m] = pd.DataFrame(out)
+                points += out
+        if not drawn:
+            continue
+        panels = ["share"]
+        if any(d["contain"].notna().any() for d in drawn.values()):
+            panels.append("contain")
+        if any(d["missing"].notna().any() for d in drawn.values()):
+            panels.append("missing")
+        shown = list(drawn)
+        ncol = 1 if len(shown) <= 6 else 2
+        legend_rows = int(np.ceil(len(shown) / ncol))
+        height = 2.3 * len(panels) + 0.75 + 0.17 * legend_rows
+        fig, axes = plt.subplots(len(panels), 1, figsize=(0.68 * FULL_WIDTH, height), sharex=True)
+        axes = np.atleast_1d(axes)
+        handles = []
+        for m in shown:
+            st, d = styles[m], drawn[m]
+            x = d["transitions"].to_numpy(float)
+            t_star = needed.get((size, m), np.inf)
+            reached = f"{samples_label(t_star)}" if np.isfinite(t_star) else "not reached"
+            for ax, panel in zip(axes, panels, strict=True):
+                if panel == "share":
+                    y, lo, hi = (d[c].to_numpy(float) for c in ("share", "share_lo", "share_hi"))
+                elif panel == "contain":
+                    y, lo, hi = d["contain"].to_numpy(float), None, None
+                else:
+                    y, lo, hi = (d[c].to_numpy(float) for c in ("missing", "missing_lo", "missing_hi"))
+                if np.isnan(y).all():
+                    continue
+                ax.plot(x, y, ls=st["ls"], marker=st["marker"], color=st["color"], markersize=4.5)
+                if lo is not None:
+                    ax.fill_between(x, lo, hi, color=st["color"], alpha=0.15, lw=0)
+                if np.isfinite(t_star):
+                    ax.axvline(t_star, color=st["color"], ls=st["ls"], lw=0.9, alpha=0.8)
+            handles.append(Line2D([], [], ls=st["ls"], marker=st["marker"], color=st["color"],
+                                  label=f"{st['label']}  ({target:.0%}-optimal: {reached})"))  # fmt: skip
+        for ax, panel in zip(axes, panels, strict=True):
+            if panel == "share":
+                ax.axhline(target, color="grey", ls="--", lw=0.8)
+                ax.set_title("policy quality (median, 95% CI over seeds)")
+                ax.set_ylabel("optimal share\n(true value / $V^*_{obs}$)")
+            elif panel == "contain":
+                ax.set_ylim(-0.5, n_seeds + 0.5)
+                ax.set_title("intervals contain the true kernel in every (s, a)")
+                ax.set_ylabel(f"seeds (of {n_seeds})")
+            else:
+                ax.set_ylim(bottom=-0.5)
+                ax.set_title("why: true edges the learned graph misses (median, 95% CI)")
+                ax.set_ylabel("true edges missed")
+            ax.set_xscale("log")
+            ax.grid(alpha=0.3)
+        axes[-1].set_xlabel("logged transitions (log scale)")
+        axes[-1].xaxis.set_major_formatter(FuncFormatter(lambda v, _: samples_label(v)))
+        axes[-1].xaxis.set_minor_formatter(NullFormatter())
+        n_states = states.get(size, np.nan)
+        head = f"{int(n_states):,} observed states" if np.isfinite(n_states) else names[size]
+        if np.isfinite(n_states) and stems[size].name != f"observed_states={int(n_states)}":
+            head += f" ({names[size]})"  # two sizes with the same number of states
+        fig.suptitle(f"{name}: {head}\nvertical lines: transitions for a {target:.0%}-optimal policy "
+                     "(median over seeds)", fontsize=9)  # fmt: skip
+        fig.legend(handles=handles, loc="lower center", ncol=ncol, frameon=False, fontsize=7,
+                   bbox_to_anchor=(0.5, 0.0))  # fmt: skip
+        fig.tight_layout(rect=(0, (0.25 + 0.17 * legend_rows) / height, 1, 1))
+        save(fig, stems[size])
+    return pd.DataFrame(points, columns=columns)
