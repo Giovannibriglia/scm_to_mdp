@@ -32,7 +32,8 @@ Post-selection (`n_candidates`): when the parent sets were chosen from the same 
 of candidate parent sets per variable fixed before seeing the data, the intervals are built at
 delta / |F_i| (a union bound over the family: on that event the intervals of every candidate hold
 together, so those of the selected one hold whatever the choice; Agarwal, Brantley, Jiang, Kakade, Sun,
-"RL: Theory and Algorithms", Lemma A.20). n_candidates: 1 (parents fixed in advance: the true graph, the
+"RL: Theory and Algorithms", Lemma A.18, p. 197: Hoeffding + union bound over a finite class; Lemma A.20
+is its linear-class version). n_candidates: 1 (parents fixed in advance: the true graph, the
 full graph), "inputs" (every subset of the slice-t inputs: 2^{number of inputs}), "inputs+next" (also
 the other next-state variables, for discoveries with same-step edges), or a number.
 

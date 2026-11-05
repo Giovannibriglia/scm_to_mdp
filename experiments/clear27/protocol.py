@@ -17,19 +17,23 @@ seed 0) into results/clear27_smoke, to check every script runs before the real l
 "Point 2", the compilation block, applied to every graph source (COMPILATIONS):
 
     IMDP    Clopper-Pearson intervals (delta = DELTA; for a learned graph with the post-selection union
-            bound over its candidate family, Agarwal et al., Lemma A.20: n_candidates), then one of
+            bound over its candidate family, Agarwal et al., Lemma A.18: n_candidates), then one of
             Schnitzer, Abate, Parker's relaxations (AAAI 2026, arXiv:2508.00707), then robust VI:
                 IA         interval arithmetic, the box of the products (Eq. 11)
                 McCormick  the recursive McCormick relaxation (Eqs. 12a-d, App. B.2)
                 exact      the vertex products (Thm 1)
     MDP     (a) plug-in   point estimates (Laplace), value iteration; one MDP for the three relaxations
             (b) worst     nature's choice at the robust fixed point, per relaxation, then VI (Badings,
-                          RVSS Sec. 3.3.2, p. 42: the same value and policies as the IMDP arm)
+                          RVSS Sec. 3.3.2, p. 42: fixing nature gives an MDP; Prop. 3.33-3.35, pp. 44-45:
+                          the same value as the IMDP arm, and the robust policy is optimal in it up to ties)
             (c) best      nature's choice at the optimistic fixed point, per relaxation, then VI: an upper
                           bound when the truth is in the set (Suilen et al. 2024, p. 12; Jackson et al.
-                          2021, Thm 2); its policy has no guarantee
-            Factored SPIBB  Simao & Spaan (AAAI 2019) on the same graph (its Thm 1 needs the graph given
-                          in advance: on a learned graph it is an empirical arm)
+                          2021, Thm 2; Badings, RVSS Lemma 3.32); its policy lacks the max-min guarantee
+                          of the IMDP arm
+            Factored SPIBB  Simao & Spaan (AAAI 2019) on the same graph, solved by Pi_b-SPIBB policy
+                          iteration, not VI (baselines/spibb.py); its guarantee is an improvement over the
+                          baseline w.h.p., not a value bound, and its Thm 1 needs the graph given in advance:
+                          on a learned graph it is an empirical arm
 
 The pools, one script per (domain, source) so that each discovery runs once per dataset and every
 compilation of it reuses its graph (tool/methods.py: _shared_key). Every script also runs the oracle
