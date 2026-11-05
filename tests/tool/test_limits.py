@@ -53,3 +53,33 @@ def allocate_late(gb):
 def test_memout_after_the_first_second():
     out = run_limited(allocate_late, 1.0, mem_gb=0.4)
     assert out.status == "memout"
+
+
+SHARED = None
+
+
+def read_shared():
+    """Reads (does not write) the parent's array: its pages stay shared with the parent."""
+    total = float(SHARED.sum())
+    time.sleep(1)
+    return total
+
+
+def test_pages_shared_with_the_parent_do_not_count_against_the_step():
+    """PSS (Linux): a forked step that only reads 0.8 GB of its parent's data is charged its share of those
+    pages (about half, shared with the parent), while memory it allocates itself still counts in full
+    (and is stopped above the limit)."""
+    from scm_to_mdp.utils import limits
+
+    global SHARED
+    SHARED = np.ones(int(0.8e9 / 8))
+    try:
+        out = run_limited(read_shared, mem_gb=2)
+        assert out.status == "ok"
+        if limits.MEMORY == "pss":
+            assert out.peak_gb < 0.6, out.peak_gb
+        own = run_limited(allocate, 0.8, mem_gb=2)
+        assert own.status == "ok" and own.peak_gb > 0.6, own.peak_gb
+        assert run_limited(allocate, 1.5, mem_gb=1).status == "memout"
+    finally:
+        SHARED = None

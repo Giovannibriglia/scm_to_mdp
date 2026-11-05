@@ -1,8 +1,17 @@
 """Run one pipeline step with a memory limit and a time limit.
 
-The step runs in a forked child process. A monitor in the parent reads the child's memory (resident
-set size, with the child's own children) and kills it above the limit ("memout"), or when it runs
-longer than the time limit ("timeout"). macOS does not enforce RLIMIT_AS, hence the monitor. A child
+The step runs in a forked child process. A monitor in the parent reads the child's memory (with the
+child's own children) and kills it above the limit ("memout"), or when it runs longer than the time
+limit ("timeout"). Memory is the proportional set size on Linux (PSS: private pages in full, each page
+shared with other processes divided among them) and the resident set size elsewhere (RSS; MEMORY, or the
+environment variable SCM_TO_MDP_MEMORY = "pss" | "uss" | "rss"). On Linux a forked child's RSS counts in
+full every page it shares with its parent (the data and the true model), so RSS overstates each step by
+the parent's size: on the server at SysAdmin N = 11, 4.3 GB for a step that uses under 1 GB itself. The
+sum of the PSS of all processes is the memory the machine uses, so workers x the limit <= the RAM still
+holds. macOS has no PSS, and its USS counts a parent's page as private once the child has read it, so
+macOS keeps RSS (which there counts only the pages the child touched). Reading PSS walks the process's
+memory map (1-10 ms for a process of a few GB), done every poll seconds.
+macOS does not enforce RLIMIT_AS, hence the monitor. A child
 killed by another process with SIGKILL (on Linux, the out-of-memory killer) also counts as "memout".
 Time is time.monotonic(), which does not advance while the computer sleeps (macOS and Linux): a
 laptop going to sleep in the middle of a step must not turn that step into a timeout.
@@ -39,7 +48,7 @@ from scm_to_mdp.core import NotApplicable
 class StepResult:
     value: Any  # the step's output (or the error message when status == "error")
     status: str  # "ok", "memout", "timeout", "not_applicable" or "error"
-    peak_gb: float  # peak memory (includes pages shared with the parent: an upper bound)
+    peak_gb: float  # peak memory in the MEMORY measure (sampled every poll seconds)
     seconds: float
 
 
@@ -63,15 +72,38 @@ def _child(conn, fn, args, parent: int):
         conn.send(("error", repr(err), _peak_rss_gb()))
 
 
+def _measure() -> str:
+    asked = os.environ.get("SCM_TO_MDP_MEMORY", "").lower()
+    if asked in ("pss", "uss", "rss"):
+        return asked
+    return "pss" if sys.platform.startswith("linux") else "rss"
+
+
+MEMORY = _measure()
+
+
+def _bytes(proc: psutil.Process) -> int:
+    """proc's memory in the MEMORY measure (RSS when the full information cannot be read)."""
+    if MEMORY != "rss":
+        try:
+            info = proc.memory_full_info()
+            value = getattr(info, MEMORY, None)
+            if value is not None:
+                return int(value)
+        except (psutil.AccessDenied, psutil.ZombieProcess):
+            pass
+    return proc.memory_info().rss
+
+
 def _memory(proc: psutil.Process, family: list[psutil.Process]) -> int:
-    """Resident memory of proc and of its children (family: listed by the caller, see run_limited)."""
+    """Memory of proc and of its children (family: listed by the caller, see run_limited), in MEMORY."""
     try:
-        total = proc.memory_info().rss
+        total = _bytes(proc)
     except psutil.NoSuchProcess:
         return 0
     for c in family:
         try:
-            total += c.memory_info().rss
+            total += _bytes(c)
         except psutil.NoSuchProcess:
             pass
     return total
@@ -118,13 +150,14 @@ def run_limited(
         now = time.monotonic()
         if receiver.poll(poll if now - start < 1.0 else slow_poll):
             status, value, child_peak = receiver.recv()
-            peak = max(peak, child_peak * 1e9)  # the child's own peak (between two readings too)
+            if MEMORY == "rss":  # the child's own peak (between two readings too); RSS only
+                peak = max(peak, child_peak * 1e9)
             break
         if time.monotonic() - listed > 1.0:
             family, listed = _family(watch), time.monotonic()
-        rss = _memory(watch, family)
-        peak = max(peak, rss)
-        if rss > mem_gb * 1e9:
+        used = _memory(watch, family)
+        peak = max(peak, used)
+        if used > mem_gb * 1e9:
             _kill(watch)
             status = "memout"
         elif timeout_s is not None and time.monotonic() - start > timeout_s:
