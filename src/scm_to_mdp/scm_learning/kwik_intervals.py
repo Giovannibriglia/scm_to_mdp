@@ -18,11 +18,12 @@ turn it into a factored interval MDP, and one into a point model:
         hull="accepted"  the candidates the learner chose: Strehl's pair unions D u D_j of the accepted D (a
                          "don't know" row gets [0, 1]); Met-Rmax's surviving meteorologists. They are chosen
                          from the data, so delta is also split over every candidate table the choice could
-                         pick (a union bound: Agarwal, Brantley, Jiang, Kakade, Sun, Lemma A.18). Strehl: some
-                         union D u D_j contains the true parents whichever D was accepted (j the true one, or
-                         any j when D is), so the level is 1 - delta. Met-Rmax: the hull covers the truth only
-                         if a survivor contains the true parents; the learner may eliminate it (with the
-                         paper's m its Thm 1 confidence is nominal), so the level is 1 - delta - P(that).
+                         pick (a union bound: Agarwal, Brantley, Jiang, Kakade, Sun, as in Lemma A.20).
+                         Strehl: some union D u D_j contains the true parents whichever D was accepted (j the
+                         true one, or any j when D is), so the level is 1 - delta. Met-Rmax: the hull covers
+                         the truth only if a survivor contains the true parents; the learner may eliminate it
+                         (with the paper's m its Thm 1 confidence is nominal), so the level is
+                         1 - delta - P(that).
     kwik_bounds   the learners' own inference (the "KWIK" arms): the prediction +- its accuracy (Strehl's
                   2 eps1, proof of Thm 1; Met-Rmax's eps, Thm 1), [0, 1] where it says "don't know". Its
                   level is the papers' (with their m, or with a calibrated m).

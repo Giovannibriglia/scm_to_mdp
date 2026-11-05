@@ -17,7 +17,8 @@ seed 0) into results/clear27_smoke, to check every script runs before the real l
 "Point 2", the compilation block, applied to every graph source (COMPILATIONS):
 
     IMDP    Clopper-Pearson intervals (delta = DELTA; for a learned graph with the post-selection union
-            bound over its candidate family, Agarwal et al., Lemma A.18: n_candidates), then one of
+            bound over its candidate family, Agarwal et al., as in Lemma A.20, with Lemma 6.2 for the random
+            counts: n_candidates), then one of
             Schnitzer, Abate, Parker's relaxations (AAAI 2026, arXiv:2508.00707), then robust VI:
                 IA         interval arithmetic, the box of the products (Eq. 11)
                 McCormick  the recursive McCormick relaxation (Eqs. 12a-d, App. B.2)
