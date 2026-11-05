@@ -15,6 +15,51 @@ uv sync --extra discovery          # environment (uv; Python 3.12, from uv.lock)
 
 Tested on macOS (arm64) and Linux (Ubuntu 20.04, x86_64). Without `uv`: `pip install --user uv`.
 
+## Main experiments: clear27
+
+`experiments/clear27/` runs every graph source through the same compilations, on four domains: SysAdmin
+(N = 2..11), Drone (side 3..12), Sepsis (2..4 vitals) and Aircraft (4x3 .. 16x12), 15 data budgets (10 ..
+500k transitions), 10 seeds. Per domain, 11 sources, one script each (`<domain>_<source>.py`):
+
+| sources | what |
+|---|---|
+| `truegraph` | the true graph (reference) |
+| `dynotears`, `dynotears_lagged`, `pcmci`, `pcmci_lagged` | DYNOTEARS / PCMCI+, with and without same-step links |
+| `strehl`, `met` | the KWIK structure learners (Strehl et al. 2007, Met-Rmax 2009), with and without KWIK |
+| `fullfact`, `sparse`, `flat` | baselines: the full factored graph, the sparse graph, no structure |
+| `sota` | DiFaRL, FOCUS, SL-SPIBB, flat SPIBB, offline DQN, offline CQL |
+
+Each graph source goes to an IMDP (Clopper-Pearson sets, then interval arithmetic, McCormick or exact,
+then robust VI) and to MDPs (plug-in; nature's worst and best MDP of each relaxation; Factored SPIBB).
+Methods, limits and their reasons: `experiments/clear27/protocol.py`.
+
+**Launch the four domains** (one after the other; each runs its 11 sources in sequence):
+
+```bash
+SMOKE=1 bash experiments/clear27/run_sysadmin.sh      # first: a tiny grid of every script (minutes)
+bash experiments/clear27/run_sysadmin.sh && bash experiments/clear27/run_drone.sh && \
+    bash experiments/clear27/run_sepsis.sh && bash experiments/clear27/run_aircraft.sh
+```
+
+On a server, in a `tmux` session, log only:
+
+```bash
+tmux new-session -d -s clear27 "SHOW=0 RESUME=1 bash -c 'for d in sysadmin drone sepsis aircraft; do \
+    bash experiments/clear27/run_\$d.sh; done'"
+```
+
+| option | effect |
+|---|---|
+| `RESUME=1` | continue the latest run of every script (also safe for a first launch) |
+| `SMOKE=1` | the smallest size, 100 and 1,000 transitions, one seed, into `results/clear27_smoke/` |
+| `SHOW=0` | write the output to the logs only |
+| `bash experiments/clear27/run_drone.sh flat pcmci` | only these sources of a domain |
+
+Results: `results/clear27/<domain>_<source>_<date>_<time>/`; logs: `results/clear27/logs/` (`chain.log`:
+start, end and exit code of every script). Limits per step: discovery, selection, learning and training
+600 s, compilation 300 s, solve 400 s, memory 6 GB (PSS on Linux, RSS on macOS); a step over its limit is
+recorded as `timeout` / `memout` and the larger budgets of that size are skipped.
+
 ## Running the experiments
 
 From the repository root. A script is `<experiment> <domain> <kind>`: experiment `exp1` or `exp2`,

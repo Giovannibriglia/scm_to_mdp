@@ -30,10 +30,34 @@ def test_every_script_exists_and_names_its_grid():
 @pytest.mark.parametrize("domain", DOMAINS)
 def test_the_data_protocol(domain):
     g = protocol.experiment_grid(domain, "truegraph")
-    assert g.n_transitions[0] == 1 and g.n_transitions[-1] == 500_000 and len(g.n_transitions) == 18
+    assert g.n_transitions[0] == 10 and g.n_transitions[-1] == 500_000 and len(g.n_transitions) == 15
     assert g.seeds == list(range(10)) and [p.label for p in g.policies] == ["uniform"]
     assert g.out_dir == ROOT / "results" / "clear27" / f"{domain}_truegraph"
-    assert "11" not in map(str, g.sizes) and "18x13" not in map(str, g.sizes)
+    assert "18x13" not in map(str, g.sizes) and g.save_models == "none"
+    if domain == "sysadmin":
+        assert list(g.sizes) == list(range(2, 12))
+    assert g.limits.mem_gb == 6.0 and g.solve_floor_s == 400.0
+    assert g.limits.timeout_s == {"discovery": 600.0, "selection": 600.0, "learning": 600.0, "relax": 300.0,
+                                  "training": 600.0, "solve": 400.0}  # fmt: skip
+
+
+def test_smoke_mode_is_a_tiny_grid_of_the_same_script(monkeypatch):
+    monkeypatch.setattr(protocol, "SMOKE", True)
+    g = protocol.experiment_grid("drone", "strehl")
+    assert len(g.sizes) == 1 and g.n_transitions == [100, 1000] and g.seeds == [0]
+    assert g.out_dir == ROOT / "results" / "clear27_smoke" / "drone_strehl"
+    assert g.methods.keys() == protocol.source_methods("strehl", protocol.DOMAINS["drone"]).keys()
+
+
+def test_one_shell_script_per_domain_runs_every_source():
+    import subprocess
+
+    runner = (ROOT / "experiments" / "clear27" / "run_domain.sh").read_text()
+    assert all(s in runner for s in protocol.SOURCES)
+    for d in DOMAINS:
+        sh = ROOT / "experiments" / "clear27" / f"run_{d}.sh"
+        assert f'run_domain.sh" {d}' in sh.read_text()
+        assert subprocess.run(["bash", "-n", str(sh)]).returncode == 0
 
 
 @pytest.mark.parametrize("source", protocol.SOURCES)

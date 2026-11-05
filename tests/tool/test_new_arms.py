@@ -111,3 +111,41 @@ def test_factored_solvers_are_not_applicable_with_same_step_links(truth, dataset
     for limits in (None, Limits(mem_gb=4.0, timeout_s={})):
         r = solve(learn(dataset, method, limits, true_parents=parents), dataset, GAMMA, limits)
         assert r.status == "not_applicable" and r.failed_step == "solve", (limits, r.status, r.error)
+
+
+def test_the_worst_mdp_reuses_the_imdp_solve_of_the_same_set(truth, dataset):
+    """Option A: "MDP (worst, X)" takes nature's kernel at the IMDP arm's robust value (one inner problem
+    per (s, a)) instead of the robust iteration again; its value is within about 3 tol of the full solve's
+    (badings_claude, kallenberg_claude), and a stopped IMDP solve is inherited."""
+    for relaxation, robust in (
+        ("ia", "box_robust_vi"),
+        ("mccormick", "mccormick_robust_vi"),
+        ("exact", "exact_robust_vi"),
+    ):
+        imdp = Method("causal", robust, **TRUE)
+        worst = Method("causal", "worst_mdp_vi", solver_options={"relaxation": relaxation}, **TRUE)
+        shared = {}
+        a = solve(
+            learn(dataset, imdp, true_parents=truth.true_parents, shared=shared),
+            dataset,
+            GAMMA,
+            shared=shared,
+        )
+        reused = solve(
+            learn(dataset, worst, true_parents=truth.true_parents, shared=shared),
+            dataset,
+            GAMMA,
+            shared=shared,
+        )
+        alone = solve(learn(dataset, worst, true_parents=truth.true_parents), dataset, GAMMA)
+        assert a.ok and reused.ok and alone.ok, relaxation
+        assert reused.info.get("solve_reused") == "IMDP" and "solve_reused" not in alone.info
+        assert np.allclose(reused.solution.V, alone.solution.V, atol=1e-5), relaxation
+        assert np.all(reused.solution.V >= a.solution.V - 1e-6), (
+            relaxation
+        )  # from above: a fixed nature helps
+    from scm_to_mdp.tool.methods import _robust_key
+
+    stopped = {_robust_key(worst): {"status": "timeout"}}
+    r = solve(learn(dataset, worst, true_parents=truth.true_parents), dataset, GAMMA, shared=stopped)
+    assert (r.status, r.failed_step, r.info["solve_reused"]) == ("timeout", "solve", "IMDP")

@@ -574,7 +574,8 @@ def _graph_view(x, data: Dataset):
     if x is None or isinstance(x, Graph):
         return x
     known = [f.known.mean() for f in x.factors.values()]
-    return Graph(x.parents(data), report={"kwik_dont_know": float(1 - np.mean(known)), **x.params})
+    params = {f"kwik_{k}": v for k, v in x.params.items()}  # k, m, m_sub, eps(1), D, delta, accuracy
+    return Graph(x.parents(data), report={"kwik_dont_know": float(1 - np.mean(known)), **params})
 
 
 def _shared_key(method: Method):
@@ -657,21 +658,82 @@ def learn(
     return result
 
 
-def solve(result: Result, data: Dataset, gamma: float, limits: Limits | None = None, seed: int = 0) -> Result:
+RELAXATION_OF = {"box_robust_vi": "ia", "mccormick_robust_vi": "mccormick", "exact_robust_vi": "exact",
+                 "robust_vi": "ia"}  # fmt: skip  # the robust solvers whose fixed point a worst MDP can reuse
+
+
+def _robust_key(method: Method):
+    """The key of a robust solve that "MDP (worst, <relaxation>)" of the same learner, graph and sets can
+    reuse (the same learning: the IMDP arm of that relaxation), or None."""
+    if method.solver == "worst_mdp_vi":
+        relaxation = method.solver_options.get("relaxation", "ia")
+    elif (
+        method.solver in RELAXATION_OF and method.solver_options.get("nature", "adversarial") == "adversarial"
+    ):
+        if method.learner == "oracle" or (method.solver == "robust_vi" and method.learner != "flat_rmdp"):
+            return None
+        relaxation = RELAXATION_OF[method.solver]
+    else:
+        return None
+    if method.learner == "flat_rmdp":
+        relaxation = "ia"  # one factor: the three relaxations are the same set
+    options = lambda d: tuple(sorted((k, repr(v)) for k, v in d.items()))  # noqa: E731
+    return ("robust V", method.learner, method.discovery, options(method.discovery_options), method.selection,
+            options(method.learning_options), relaxation)  # fmt: skip
+
+
+def solve(
+    result: Result,
+    data: Dataset,
+    gamma: float,
+    limits: Limits | None = None,
+    seed: int = 0,
+    shared: dict | None = None,
+) -> Result:
     """Solve the learned model: result.solution is the policy and its promise (in place). seed (the
-    run's seed) is used only by solvers that draw random numbers."""
+    run's seed) is used only by solvers that draw random numbers. shared (the dict of tool/sweep.py for one
+    dataset): an IMDP arm stores its robust value (or how its solve stopped), and the worst MDP of the same
+    learning and relaxation reuses it: nature's kernel at that value (one inner problem per (s, a)) and
+    value iteration, instead of the robust iteration again; when the IMDP arm stopped, the worst MDP stops
+    in the same way (its own solve is that same iteration). Without an entry it solves on its own."""
     if not result.ok:
+        return result
+    method = result.method
+    key = _robust_key(method) if shared is not None else None
+    if key is not None and method.solver == "worst_mdp_vi" and key in shared:
+        entry = shared[key]
+        if isinstance(entry, dict):  # the IMDP arm's solve stopped
+            result.status, result.failed_step = entry["status"], "solve"
+            result.error = f"the IMDP arm's solve of the same set stopped ({entry['status']})"
+            result.steps["solve"] = {"status": entry["status"], "seconds": 0.0, "gb": math.nan}
+            result.info["solve_reused"] = "IMDP"
+            return result
+        relaxation = method.solver_options.get("relaxation", "ia")
+        step = partial(nature_mdp.solve, gamma=gamma, relaxation=relaxation, choice="worst", V=entry)
+        x = _run_step(result, "solve", step, result.model, limits)
+        if x is None:
+            return result
+        result.solution = x
+        result.info |= {
+            "solve_reused": "IMDP",
+            "solve_iterations": x.iterations,
+            "solve_iteration_s": x.iteration_s,
+        }
         return result
     x = result.model
     for name, step in solver_steps(data, result.method, gamma, seed):
         x = _run_step(result, name, step, x, limits)
         if x is None:
+            if key is not None and method.solver != "worst_mdp_vi" and result.status in STOPPED:
+                shared.setdefault(key, {"status": result.status})  # the worst MDP stops the same way
             return result
         if isinstance(x, offline_q.QTable):
             result.model = x  # what was learned: the Q-table (kept and saved)
     result.solution = x
     if getattr(x, "iterations", None) is not None:  # value iteration: its sweeps and their mean time
         result.info |= {"solve_iterations": x.iterations, "solve_iteration_s": x.iteration_s}
+    if key is not None and method.solver != "worst_mdp_vi" and key not in shared:
+        shared[key] = np.asarray(x.V, dtype=float)  # the robust value, for the worst MDP of this set
     return result
 
 

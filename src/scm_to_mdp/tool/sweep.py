@@ -87,6 +87,7 @@ KEYS = ["experiment", "knob", "policy", "size", "size_label", "n_states", "seed"
 KEYS += ["transitions", "episodes", "method"]  # the dataset: its transitions and the episodes they come from
 METHOD = ["role", "guarantee", "learner", "discovery", "selection", "solver"]
 STATUS = ["status", "failed_step", "error", "solve_limit_s", "solve_iterations", "solve_iteration_s"]
+STATUS += ["solve_reused"]  # "IMDP": a worst MDP that took its IMDP arm's robust value (methods.solve)
 STEP_COLUMNS = [f"{step}_{x}" for step in STEPS for x in ("status", "s", "gb")]
 VALUES = ["V_star_obs", "V_star", "V_star_K", "V_random", "V_random_K", "V_oracle_K"]
 VALUES += ["promise", "true", "regret", "norm_regret"]
@@ -111,6 +112,11 @@ STRUCTURE += ["parents", "action_edges", "action_missing", "action_recall"]
 CERTIFICATE = ["V_opt", "cert_gap", "cert_gap_K", "cert_holds"]  # robust methods (evaluation.certificate)
 SETS = CERTIFICATE + ["s4_width", "s4_coverage", "s4_coverage_seen", "s4_unseen", "s4_rows", "widen"]
 SETS += ["added_parents"]  # S4
+SETS += ["s4_candidates"]  # the post-selection family |F_i| (nbn_intervals.n_candidates)
+# the KWIK learners (discovery/kwik_structure.py, scm_learning/kwik_intervals.py): their parameters, the
+# share of (s, a, factor) where they say "don't know", the S4 hull and its number of tables
+SETS += ["kwik_dont_know", "kwik_k", "kwik_m", "kwik_m_sub", "kwik_eps", "kwik_eps1", "kwik_D", "kwik_delta",
+         "kwik_accuracy", "s4_kwik", "s4_hull", "s4_tables", "s4_dont_know"]  # fmt: skip
 # the promise's robustness checks (robustness.py; methods with a guarantee)
 ROBUSTNESS = ["bracket_holds", "bracket_width", "opt_holds", "cert_residual", "pfail_up", "pfail_true"]
 ROBUSTNESS += ["pfail_holds"]
@@ -285,7 +291,7 @@ def run_point(exp: Experiment, size, seed: int, stopped_from: dict) -> list[dict
             limits = step_limits(exp, method, sweep_s, data.reward)
             # shared: one discovery and selection per dataset for the methods that have the same ones
             learned = learn(data, method, limits, parents, seed=seed, shared=shared, kernel=kernel)
-            result = solve(learned, data, exp.gamma, limits, seed=seed)
+            result = solve(learned, data, exp.gamma, limits, seed=seed, shared=shared)
             if method.learner == "oracle" and result.ok and result.info.get("solve_iteration_s") is not None:
                 sweep_s.append(result.info["solve_iteration_s"])
             if limits is not None and method.learner != "oracle":

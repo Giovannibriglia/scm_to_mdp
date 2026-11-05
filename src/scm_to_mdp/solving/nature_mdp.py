@@ -57,9 +57,42 @@ def nature_kernel(
     return P
 
 
+def kernel_at(bounds: FactorBounds | IntervalMDP, V: np.ndarray, gamma: float, relaxation: str, choice: str):
+    """[S, K, S'] nature's choice for the value V, for every action: one inner problem per (s, a), no
+    iteration. With V the fixed point of the robust (optimistic) iteration of the same relaxation, this is
+    nature_kernel's kernel; with V within tol of it (the last iterate or the sound bound of that solve),
+    the worst MDP's value is within about 3 tol of the robust value, from above (a fixed nature can only
+    help the agent; the contraction bound gamma / (1 - gamma) times the last step, twice, plus value
+    iteration's own tol: badings_claude and kallenberg_claude, 2026-11-05; Meggendorfer et al., AAAI 2025,
+    App. C, Lemma 4, at the exact point)."""
+    nature = "adversarial" if choice == "worst" else "cooperative"
+    W = bounds.reward.backup(V, gamma)
+    if isinstance(bounds, IntervalMDP) or relaxation == "ia":
+        mdp = bounds if isinstance(bounds, IntervalMDP) else product_bounds.compile(bounds)
+        return ia_kernel(mdp, W, nature)
+    if relaxation == "exact":
+        _, P = factored_robust_vi.VertexNature(bounds, nature)(W, kernel=True)
+    else:
+        _, P = factored_robust_vi.McCormickNature(bounds, nature)(W, kernel=True)
+    return P
+
+
 def solve(
-    bounds: FactorBounds | IntervalMDP, gamma: float, relaxation: str = "ia", choice: str = "worst"
+    bounds: FactorBounds | IntervalMDP,
+    gamma: float,
+    relaxation: str = "ia",
+    choice: str = "worst",
+    V: np.ndarray | None = None,
 ) -> Solution:
-    """Value iteration on nature's MDP (module docstring)."""
-    P = nature_kernel(bounds, gamma, relaxation, choice)
+    """Value iteration on nature's MDP (module docstring). V: the value of the robust (or optimistic)
+    solve of the same set, when it is already known (the IMDP arm's: tool/methods.py reuses it), so nature's
+    kernel takes one inner problem per (s, a) instead of the whole robust iteration (kernel_at)."""
+    if relaxation not in RELAXATIONS:
+        raise ValueError(f"relaxation must be one of {RELAXATIONS}, not {relaxation!r}")
+    if choice not in CHOICES:
+        raise ValueError(f"choice must be one of {CHOICES}, not {choice!r}")
+    if V is None:
+        P = nature_kernel(bounds, gamma, relaxation, choice)
+    else:
+        P = kernel_at(bounds, V, gamma, relaxation, choice)
     return value_iteration.solve(P, bounds.reward, gamma)

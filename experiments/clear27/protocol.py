@@ -1,8 +1,18 @@
 """clear27: from the graph to the policy, every graph source through the same compilations (S2-S9).
 
 Data and evaluation as experiments 1 and 2 (experiments/common.py: uniform logger, 10 seeds, the same MDP,
-the nominal start and 20 random starts), with budgets of 1 ... 500k transitions (N_TRANSITIONS) and the
-domains SysAdmin (N = 2..10), Sepsis (2..4 vitals), Drone (side 3..12) and Aircraft (4x3 .. 16x12).
+the nominal start and 20 random starts), with budgets of 10 ... 500k transitions (N_TRANSITIONS) and the
+domains SysAdmin (N = 2..11), Sepsis (2..4 vitals), Drone (side 3..12) and Aircraft (4x3 .. 16x12).
+
+Limits per step (LIMITS, the same for every domain and size; the oracle has the memory limit only):
+discovery / selection / learning / training 600 s, compilation (relax) 300 s, solve 400 s, memory 6 GB
+(PSS on Linux, RSS on macOS: utils/limits.py). Chosen with the timing pilot and the worst-problem
+simulation of 2026-11-04 (laptop and server): McCormick times out on the larger problems and exact runs
+out of memory on Sepsis 4, Drone and Aircraft (its vertex products), by design; everything else fits
+except SL-SPIBB at SysAdmin N >= 10 with 500k and flat at N = 11 with the large budgets.
+
+SMOKE=1 (environment): a tiny grid of the same script (its smallest size, 100 and 1000 transitions,
+seed 0) into results/clear27_smoke, to check every script runs before the real launch.
 
 "Point 2", the compilation block, applied to every graph source (COMPILATIONS):
 
@@ -40,8 +50,10 @@ compilation of it reuses its graph (tool/methods.py: _shared_key). Every script 
     sota            pool 5: DiFaRL, FOCUS, SL-SPIBB, flat SPIBB, offline DQN, offline CQL
 
 A script: experiments/clear27/<domain>_<source>.py; results: results/clear27/<domain>_<source>_<date>_<time>.
+A domain's 11 scripts in sequence: bash experiments/clear27/run_<domain>.sh (run_domain.sh).
 """
 
+import os
 import sys
 from pathlib import Path
 
@@ -51,15 +63,21 @@ import common  # noqa: E402
 from common import main  # noqa: E402, F401
 from domains import DOMAINS  # noqa: E402
 
-from scm_to_mdp.tool import Grid, Method, oracle_methods, standard_methods  # noqa: E402
+from scm_to_mdp.tool import Grid, Limits, Method, oracle_methods, standard_methods  # noqa: E402
 from scm_to_mdp.tool.methods import FIXED_GRAPHS, POINT_ALPHA  # noqa: E402
 
 EXPERIMENT = "clear27"
-N_TRANSITIONS = [1, 2, 5, 10, 20, 50, 100, 200, 500, 1000, 2000, 5000, 10_000, 20_000, 50_000, 100_000,
-                 200_000, 500_000]  # fmt: skip
+N_TRANSITIONS = [10, 20, 50, 100, 200, 500, 1000, 2000, 5000, 10_000, 20_000, 50_000, 100_000, 200_000,
+                 500_000]  # fmt: skip
+LIMITS = Limits(mem_gb=6.0, timeout_s={"discovery": 600.0, "selection": 600.0, "learning": 600.0,
+                                       "relax": 300.0, "training": 600.0, "solve": 400.0})  # fmt: skip
+SOLVE_FLOOR_S = 400.0  # the relative solve limit (3 x the oracle's sweeps) is far below it in every domain
+SAVE_MODELS = "none"  # about 144 arms x 15 budgets: the saved models would fill the disk
+SMOKE = os.environ.get("SMOKE", "0") == "1"
+SMOKE_TRANSITIONS = [100, 1000]
 DELTA = common.DELTA
-SIZES = {  # the domains and their sizes (domains.py's, without SysAdmin N = 11 and Aircraft 18x13)
-    "sysadmin": [2, 3, 4, 5, 6, 7, 8, 9, 10],
+SIZES = {  # the domains and their sizes (domains.py's, without Aircraft 18x13)
+    "sysadmin": [2, 3, 4, 5, 6, 7, 8, 9, 10, 11],
     "sepsis": DOMAINS["sepsis"].sizes,
     "drone": DOMAINS["drone"].sizes,
     "aircraft": [s for s in DOMAINS["aircraft"].sizes if s != "18x13"],
@@ -173,28 +191,29 @@ def source_methods(source: str, domain) -> dict:
 
 def experiment_grid(domain: str, source: str) -> Grid:
     d = DOMAINS[domain]
+    smoke = SMOKE
     return Grid(
         name=d.title,
         make_env=d.make_env,
-        sizes=SIZES[domain],
+        sizes=SIZES[domain][:1] if smoke else SIZES[domain],
         size_name=d.size_name,
         knobs=d.knobs,
         knob_name=d.knob_name,
         constants=d.constants,
         policies=common.POLICIES,
-        n_transitions=N_TRANSITIONS,
-        seeds=common.SEEDS,
+        n_transitions=SMOKE_TRANSITIONS if smoke else N_TRANSITIONS,
+        seeds=[0] if smoke else common.SEEDS,
         horizon=d.horizon,
         failure_horizon=common.FAILURE_HORIZON,
         gamma=d.gamma,
         n_starts=common.N_STARTS,
         methods=source_methods(source, d),
-        limits=common.LIMITS,
+        limits=LIMITS,
         solve_factor=common.SOLVE_FACTOR,
-        solve_floor_s=common.SOLVE_FLOOR_S,
-        save_models=common.SAVE_MODELS,
+        solve_floor_s=SOLVE_FLOOR_S,
+        save_models=SAVE_MODELS,
         workers="auto",
-        out_dir=common.ROOT / "results" / EXPERIMENT / f"{domain}_{source}",
+        out_dir=common.ROOT / "results" / (EXPERIMENT + ("_smoke" if smoke else "")) / f"{domain}_{source}",
         reward_transfer=False,
         reward_family=None,
         shifts=None,
