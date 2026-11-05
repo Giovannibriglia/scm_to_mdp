@@ -17,8 +17,8 @@ Tested on macOS (arm64) and Linux (Ubuntu 20.04, x86_64). Without `uv`: `pip ins
 
 ## Running the experiments
 
-One script per domain (`experiments/clear27/`); the parallel jobs fit the machine by default
-(`SCM_TO_MDP_WORKERS=N` to choose).
+One script per domain (`experiments/clear27/`): its 11 graph sources share one pool of workers, sized to
+the machine by default (`SCM_TO_MDP_WORKERS=N` to choose).
 
 Smoke tests first (a tiny grid of the same scripts, minutes):
 
@@ -38,7 +38,8 @@ bash experiments/clear27/run_sepsis.sh
 bash experiments/clear27/run_aircraft.sh
 ```
 
-Results in `results/clear27/` (smoke: `results/clear27_smoke/`); `RESUME=1` continues a stopped run.
+Or the four in one pool, SysAdmin first (a free worker takes a job of the first domain that has one):
+`bash experiments/clear27/run_all.sh`. Results in `results/clear27/` (smoke: `results/clear27_smoke/`); `RESUME=1` continues a stopped run.
 
 ## The tool in three parts
 

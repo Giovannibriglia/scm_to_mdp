@@ -7,7 +7,10 @@ that breaks the pool twice, or whose fn raises, is reported as {"crashed": True,
 
 run_dynamic keeps the pool busy across several sweeps: after each finished job, `then` may hand in
 new jobs (e.g. the next wave of sizes of the setting that job belonged to), so the workers of a big
-machine are not idle while one setting waits for its slowest seed.
+machine are not idle while one setting waits for its slowest seed. With `priority` (job -> a sortable
+rank), at most `workers` jobs are handed to the pool at a time, and a free worker takes the waiting job
+of the lowest rank (the oldest among equal ranks): e.g. one domain's jobs before another's, while the
+workers that domain cannot fill take the others' jobs.
 
 When the process that started the run is gone (stopped from the IDE, killed, crashed), its workers
 are stopped too: a small guard process notes the run's process tree every half second and kills it
@@ -106,9 +109,11 @@ def run_dynamic(
     workers: int,
     then: Callable[[tuple, object], list[tuple]] | None = None,
     bar: tqdm | None = None,
+    priority: Callable[[tuple], object] | None = None,
 ) -> Iterator[tuple[tuple, object]]:
-    """Yield (job, fn(*job)) as jobs finish; then(job, result) -> new jobs to run (optional).
-    fn must be importable (defined at module level)."""
+    """Yield (job, fn(*job)) as jobs finish; then(job, result) -> new jobs to run (optional);
+    priority(job) -> rank, lowest first (optional; module docstring). fn must be importable (defined at
+    module level)."""
     keys = itertools.count()
     queue = [(next(keys), job) for job in jobs]  # (key, job) not submitted yet
     attempts: dict[int, int] = {}  # key -> times the pool broke while the job ran
@@ -116,21 +121,28 @@ def run_dynamic(
     ctx = multiprocessing.get_context("forkserver")
     guard = start_guard()
     try:
-        yield from _drive(fn, queue, workers, then, bar, keys, attempts, env, ctx)
+        yield from _drive(fn, queue, workers, then, bar, keys, attempts, env, ctx, priority)
     finally:
         guard.terminate()
         guard.wait()
 
 
-def _drive(fn, queue, workers, then, bar, keys, attempts, env, ctx):
+def _next(queue: list, priority) -> int:
+    """The index in queue of the job to submit: the first, or the lowest (rank, key)."""
+    if priority is None:
+        return 0
+    return min(range(len(queue)), key=lambda i: (priority(queue[i][1]), queue[i][0]))
+
+
+def _drive(fn, queue, workers, then, bar, keys, attempts, env, ctx, priority=None):
     while queue:
         pool = ProcessPoolExecutor(max_workers=workers, mp_context=ctx)
         running: dict = {}
         broken = False
         try:
             while queue or running:
-                while queue and not broken:
-                    key, job = queue.pop(0)
+                while queue and not broken and (priority is None or len(running) < workers):
+                    key, job = queue.pop(_next(queue, priority))
                     running[pool.submit(_quiet, fn, job, env)] = key, job
                 if not running:
                     break

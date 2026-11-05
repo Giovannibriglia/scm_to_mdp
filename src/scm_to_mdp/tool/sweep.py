@@ -46,7 +46,7 @@ Rules:
   that every step sees the run's fixed hash seed, utils/compute.py); make_env and collect must be
   functions defined at the top level of a module (not lambdas), because they are sent to the
   workers. Every worker may use up to Limits.mem_gb per step: the sweep refuses to start when
-  workers x mem_gb is more than 80% of the RAM. workers="auto" takes as many as the machine allows
+  workers x mem_gb is more than 95% of the RAM (utils/compute.py, RAM_SHARE). workers="auto" takes as many as the machine allows
   (utils/compute.py); SCM_TO_MDP_WORKERS or the script's --workers N override it.
 - run_sweeps runs several Experiments (the settings of a grid) in one pool: a free worker takes the
   next job of any setting, while each setting keeps its waves (a size starts when the smaller size
@@ -501,12 +501,14 @@ def _git_commit() -> str | None:
 def _check_memory(exp: Experiment, workers: int):
     if exp.limits is None or workers == 1:
         return
+    from scm_to_mdp.utils.compute import RAM_SHARE
+
     ram = psutil.virtual_memory().total / 1e9
     need = workers * exp.limits.mem_gb
-    if need > 0.8 * ram:
+    if need > RAM_SHARE * ram:
         raise ValueError(
-            f"{workers} workers x {exp.limits.mem_gb:g} GB per step = {need:g} GB, more than 80% of the "
-            f"RAM ({ram:.0f} GB): use fewer workers (--workers) or a lower Limits.mem_gb"
+            f"{workers} workers x {exp.limits.mem_gb:g} GB per step = {need:g} GB, more than "
+            f"{RAM_SHARE:.0%} of the RAM ({ram:.0f} GB): use fewer workers (--workers) or a lower Limits.mem_gb"
         )
 
 
@@ -678,7 +680,7 @@ class _Sweep:
 
 def plan_for(exps: list[Experiment], n_jobs: int):
     """The machine plan of a run (utils/compute.py): the script's workers ("auto" or a number),
-    overridden by SCM_TO_MDP_WORKERS / --workers; refuses workers x mem_gb above 80% of the RAM."""
+    overridden by SCM_TO_MDP_WORKERS / --workers; refuses workers x mem_gb above RAM_SHARE of the RAM."""
     from scm_to_mdp.utils import compute
 
     limits = [e.limits for e in exps if e.limits is not None]
@@ -691,9 +693,13 @@ def plan_for(exps: list[Experiment], n_jobs: int):
     return p
 
 
-def run_sweeps(exps: list[Experiment], resume: bool = True, title: str | None = None) -> None:
+def run_sweeps(
+    exps: list[Experiment], resume: bool = True, title: str | None = None, ranks: list[int] | None = None
+) -> None:
     """Run several Experiments in one pool of workers: a worker that frees up takes a job of any
-    setting, so a large machine stays busy (each setting still runs its sizes in waves)."""
+    setting, so a large machine stays busy (each setting still runs its sizes in waves). ranks (one per
+    Experiment, optional): a free worker takes a waiting job of the lowest rank first (e.g. 0 for one
+    domain's settings, 1 for the others: the first domain finishes first, its idle workers serve the rest)."""
     from scm_to_mdp.utils import compute
 
     todo = sum(len(e.sizes) * len(e.seeds) for e in exps)  # an upper bound before the folders are read
@@ -712,7 +718,16 @@ def run_sweeps(exps: list[Experiment], resume: bool = True, title: str | None = 
     def then(job, rows):
         return owner[id(job[0])].record(job, rows)
 
-    for _ in run_dynamic(run_point, first, p.workers, then=then, bar=bar):
+    rank = None
+    if ranks is not None:
+        if len(ranks) != len(exps):
+            raise ValueError(f"ranks: one per Experiment ({len(exps)}), not {len(ranks)}")
+        of = {id(e): r for e, r in zip(exps, ranks, strict=True)}
+
+        def rank(job):
+            return of[id(job[0])]
+
+    for _ in run_dynamic(run_point, first, p.workers, then=then, bar=bar, priority=rank):
         pass
     bar.close()
 

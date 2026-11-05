@@ -55,7 +55,8 @@ compilation of it reuses its graph (tool/methods.py: _shared_key). Every script 
     sota            pool 5: DiFaRL, FOCUS, SL-SPIBB, flat SPIBB, offline DQN, offline CQL
 
 A script: experiments/clear27/<domain>_<source>.py; results: results/clear27/<domain>_<source>_<date>_<time>.
-A domain's 11 scripts in sequence: bash experiments/clear27/run_<domain>.sh (run_domain.sh).
+A domain's 11 sources in one pool of workers: bash experiments/clear27/run_<domain>.sh (run_domain.sh ->
+run_pool.py: a free worker takes the next job of any source).
 """
 
 import os

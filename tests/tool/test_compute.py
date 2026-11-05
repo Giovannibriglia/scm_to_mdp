@@ -20,7 +20,8 @@ ROOT = Path(__file__).resolve().parents[1]
 
 # ---- the plan --------------------------------------------------------------------------------
 def test_workers_follow_cores_and_the_ram_rule():
-    assert compute._workers("auto", 8.0, cores=10, ram_gb=34)[0] == 3  # 0.8 x 34 / 8 = 3.4
+    assert compute._workers("auto", 8.0, cores=10, ram_gb=34)[0] == 4  # 0.95 x 34 / 8 = 4.04
+    assert compute._workers("auto", 6.0, cores=40, ram_gb=135)[0] == 21  # the server: 0.95 x 135 / 6 = 21.4
     assert compute._workers("auto", 8.0, cores=10, ram_gb=135)[0] == 10  # the cores bind
     assert compute._workers(None, None, cores=6, ram_gb=8)[0] == 6  # no memory limit
     assert compute._workers("auto", 64.0, cores=4, ram_gb=16)[0] == 1  # at least one
@@ -202,3 +203,18 @@ def test_workers_hash_strings_with_the_fixed_seed(tmp_path):
         env=env | {"PYTHONHASHSEED": compute.HASH_SEED}, capture_output=True, text=True, check=True,
     ).stdout.strip()  # fmt: skip
     assert seen[0] == seen[1] == f"[{fixed}]"
+
+
+def test_a_free_worker_takes_the_waiting_job_of_the_lowest_rank():
+    import math
+
+    from scm_to_mdp.utils.parallel import run_dynamic
+
+    def then(job, result):  # the first finished job hands in an urgent one (rank 0)
+        return [(0.0,)] if job == (4.0,) else []
+
+    jobs = [(4.0,), (9.0,), (16.0,)]
+    order = [job[0] for job, _ in run_dynamic(math.sqrt, jobs, workers=1, then=then, priority=lambda j: j[0] > 0)]
+    assert order == [4.0, 0.0, 9.0, 16.0]  # the new rank-0 job jumps the queue; equal ranks stay in order
+    fifo = [job[0] for job, _ in run_dynamic(math.sqrt, jobs, workers=1, then=then)]
+    assert fifo == [4.0, 9.0, 16.0, 0.0]

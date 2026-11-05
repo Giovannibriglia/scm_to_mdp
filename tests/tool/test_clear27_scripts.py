@@ -1,6 +1,7 @@
 """The clear27 scripts (experiments/clear27): one per (domain, graph source), each with the oracle and the
 same data protocol; every graph source gets the same compilations (point 2)."""
 
+import dataclasses
 import importlib
 import sys
 from pathlib import Path
@@ -89,3 +90,24 @@ def test_learned_graphs_pay_the_union_bound_and_lagged_drops_same_step():
     sparse = protocol.experiment_grid("sysadmin", "sparse").methods
     assert sparse["sparse -> IMDP (IA)"].learning_options["n_candidates"] == 1  # fixed in advance
     assert {m.role for n, m in sparse.items() if n != "oracle -> MDP"} == {"baseline"}
+
+
+def test_the_pool_runs_every_source_in_its_own_folder(tmp_path, monkeypatch):
+    pool = importlib.import_module("run_pool") if "run_pool" in sys.modules else None
+    if pool is None:
+        sys.path.insert(0, str(ROOT / "experiments" / "clear27"))
+        pool = importlib.import_module("run_pool")
+        sys.path.pop(0)
+    real = protocol.experiment_grid
+    monkeypatch.setattr(protocol, "experiment_grid",
+                        lambda d, s: dataclasses.replace(real(d, s), out_dir=tmp_path / f"{d}_{s}"))  # fmt: skip
+    grids = pool.pool_grids(["sysadmin", "drone"], ["flat", "pcmci"], resume=True)  # nothing yet: new folders
+    assert [n for n, _ in grids] == ["sysadmin_flat", "sysadmin_pcmci", "drone_flat", "drone_pcmci"]
+    assert len({g.out_dir for _, g in grids}) == 4
+    old = tmp_path / "sysadmin_flat_2026-11-05_12-20-54"
+    old.mkdir()
+    again = dict(pool.pool_grids(["sysadmin"], ["flat"], resume=True))
+    assert again["sysadmin_flat"].out_dir == old  # a resume continues the latest run of each source
+    assert dict(pool.pool_grids(["sysadmin"], ["flat"], resume=False))["sysadmin_flat"].out_dir != old
+    runner = (ROOT / "experiments" / "clear27" / "run_domain.sh").read_text()
+    assert "run_pool.py" in runner
