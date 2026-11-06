@@ -123,6 +123,11 @@ SOLVERS_FOR = {
     "factored_spibb": ("spibb",),
     "oracle": ("vi", "robust_vi"),
 }
+# "seen pairs only" (solver_options seen_only=True): the max over actions only over the pairs (s, a) whose
+# every factor's parent row has data (the model's `seen`, S4), a state with none at the value floor
+# (solving/stopping.greedy: the promise stays a sound lower bound)
+SEEN_ONLY_SOLVERS = ("box_robust_vi", "mccormick_robust_vi", "exact_robust_vi", "robust_vi", "vi")
+SEEN_ONLY_LEARNERS = ("causal", "flat_rmdp", "flat_mdp")
 ROBUST_SOLVERS = ("box_robust_vi", "vertex_robust_vi", "mccormick_robust_vi", "exact_robust_vi", "robust_vi")
 STEPS = ("discovery", "selection", "learning", "relax", "training", "solve")  # every step a method can have
 STOPPED = ("timeout", "memout")
@@ -279,6 +284,15 @@ class Method:
                 raise ValueError(
                     "the oracle is solved with 'vi' when tol = 0 and with 'robust_vi' when tol > 0"
                 )
+        if "seen_only" in self.solver_options:
+            if self.solver not in SEEN_ONLY_SOLVERS or self.learner not in SEEN_ONLY_LEARNERS:
+                raise ValueError(
+                    f"seen_only: solvers {SEEN_ONLY_SOLVERS} of the learners {SEEN_ONLY_LEARNERS}, not "
+                    f"{self.learner!r} with {self.solver!r}"
+                )
+        if "allowed" in self.solver_options:
+            raise ValueError("the allowed actions come from the data: use solver_options seen_only=True")
+        solver_options = {k: v for k, v in self.solver_options.items() if k != "seen_only"}
         solver_fn = {
             "box_robust_vi": robust_vi.solve,
             "vertex_robust_vi": vertex_robust_vi.solve,
@@ -286,21 +300,21 @@ class Method:
             "vi": value_iteration.solve,
         }.get(self.solver)
         if solver_fn is not None:
-            _check_options(solver_fn, self.solver_options, 3 if self.solver == "vi" else 2, "solver")
+            _check_options(solver_fn, solver_options, 3 if self.solver == "vi" else 2, "solver")
         elif self.solver in ("mccormick_robust_vi", "exact_robust_vi"):
-            _check_options(factored_robust_vi.solve, self.solver_options, 4, "solver (Schnitzer et al.)")
+            _check_options(factored_robust_vi.solve, solver_options, 4, "solver (Schnitzer et al.)")
         elif self.solver in ("worst_mdp_vi", "best_mdp_vi"):
-            _check_options(nature_mdp.solve, self.solver_options, 2, "solver (nature's MDP)")
-            if "choice" in self.solver_options:
+            _check_options(nature_mdp.solve, solver_options, 2, "solver (nature's MDP)")
+            if "choice" in solver_options:
                 raise ValueError("the choice is the solver's name: worst_mdp_vi or best_mdp_vi")
         elif self.solver == "spibb":
-            _check_options(spibb.solve, self.solver_options, 2, "solver (SPIBB)")
+            _check_options(spibb.solve, solver_options, 2, "solver (SPIBB)")
         elif self.solver == "greedy_q":
-            _check_options(offline_q.learn, self.solver_options, 2, "solver (offline Q-learning)")
-            if self.learner == "offline_dqn" and "cql_alpha" in self.solver_options:
+            _check_options(offline_q.learn, solver_options, 2, "solver (offline Q-learning)")
+            if self.learner == "offline_dqn" and "cql_alpha" in solver_options:
                 raise ValueError("offline DQN has no CQL penalty (use learner 'offline_cql')")
         else:
-            _check_options(difarl.fqi, self.solver_options, 3, "solver (FQI)")
+            _check_options(difarl.fqi, solver_options, 3, "solver (FQI)")
 
     @property
     def role(self) -> str:
@@ -522,25 +536,39 @@ def learning_steps(
 def solver_steps(data: Dataset, method: Method, gamma: float, seed: int = 0) -> list:
     """The steps of method's solver as (name, function of the learned model). seed: the run's seed,
     for the solvers that draw random numbers (offline DQN / CQL) unless an option sets it."""
-    opts = method.solver_options
+    opts = {k: v for k, v in method.solver_options.items() if k != "seen_only"}
+    if method.solver_options.get("seen_only"):  # the max only over the pairs with data (SEEN_ONLY_SOLVERS)
+
+        def allowed(model):
+            if model.seen is None:
+                raise ValueError("seen_only needs a model that records its seen pairs (S4)")
+            return {"allowed": model.seen}
+    else:
+
+        def allowed(model):
+            return {}
+
     if method.solver == "box_robust_vi":
-        return [("relax", product_bounds.compile), ("solve", lambda mdp: robust_vi.solve(mdp, gamma, **opts))]
+        return [
+            ("relax", product_bounds.compile),
+            ("solve", lambda mdp: robust_vi.solve(mdp, gamma, **opts, **allowed(mdp))),
+        ]
     if method.solver == "vertex_robust_vi":
         return [("solve", lambda bounds: vertex_robust_vi.solve(bounds, gamma, **opts))]
     if method.solver in ("mccormick_robust_vi", "exact_robust_vi"):
         how = "mccormick" if method.solver == "mccormick_robust_vi" else "vertex"
-        return [("solve", lambda bounds: factored_robust_vi.solve(bounds, gamma, how, **opts))]
+        return [("solve", lambda bounds: factored_robust_vi.solve(bounds, gamma, how, **opts, **allowed(bounds)))]
     if method.solver in ("worst_mdp_vi", "best_mdp_vi"):
         choice = "worst" if method.solver == "worst_mdp_vi" else "best"
         return [("solve", lambda bounds: nature_mdp.solve(bounds, gamma, choice=choice, **opts))]
     if method.solver == "robust_vi":
-        return [("solve", lambda mdp: robust_vi.solve(mdp, gamma, **opts))]
+        return [("solve", lambda mdp: robust_vi.solve(mdp, gamma, **opts, **allowed(mdp)))]
     if method.solver == "vi":
 
         def vi(mdp):
             if not np.array_equal(mdp.L, mdp.U):
                 raise ValueError("solver 'vi' needs an exact MDP (L == U)")
-            return value_iteration.solve(mdp.L, mdp.reward, gamma, **opts)
+            return value_iteration.solve(mdp.L, mdp.reward, gamma, **opts, **allowed(mdp))
 
         compile_first = [("relax", product_bounds.exact)] if method.learner == "causal" else []
         if method.learner == "kwik":  # the KWIK predictions' product, HALT for "don't know"
@@ -654,6 +682,8 @@ def learn(
             result.info["groups"] = len(x.groups)
         if isinstance(x, FactorBounds):
             result.info.update({k: v for k, v in x.info.items() if not k.startswith("_")})  # "_": internal
+        if isinstance(x, IntervalMDP):  # flat: only its seen-pairs shares (its info may hold arrays: FOCUS)
+            result.info.update({k: x.info[k] for k in ("seen_pairs", "states_no_seen") if k in x.info})
     result.model = x
     return result
 
@@ -679,7 +709,8 @@ def _robust_key(method: Method):
         relaxation = "ia"  # one factor: the three relaxations are the same set
     options = lambda d: tuple(sorted((k, repr(v)) for k, v in d.items()))  # noqa: E731
     return ("robust V", method.learner, method.discovery, options(method.discovery_options), method.selection,
-            options(method.learning_options), relaxation)  # fmt: skip
+            options(method.learning_options), relaxation,
+            bool(method.solver_options.get("seen_only")))  # fmt: skip
 
 
 def solve(

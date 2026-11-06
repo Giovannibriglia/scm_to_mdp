@@ -47,7 +47,7 @@ from scipy.sparse import csr_array, vstack
 
 from scm_to_mdp.compilation.product_bounds import tighten
 from scm_to_mdp.core import FactorBounds, NotApplicable, Solution
-from scm_to_mdp.solving.stopping import sound_lower_bound, stop_at
+from scm_to_mdp.solving.stopping import greedy, sound_lower_bound, stop_at, value_floor
 
 METHODS = ("vertex", "mccormick")
 NATURES = ("adversarial", "cooperative")
@@ -290,11 +290,13 @@ def solve(
     tol: float = 1e-7,
     kernel: bool = False,
     marginal_simplex: bool = True,
+    allowed: np.ndarray | None = None,
 ):
     """Robust value iteration with the exact (vertex) or McCormick inner problem (module docstring). Returns
     a Solution (V: a sound lower bound for "adversarial", a sound upper bound V_k + gamma / (1 - gamma) step
     for "cooperative", as robust_vi; stopping.py), and with kernel=True also nature's [S, K, S'] kernel at the
-    fixed point. marginal_simplex: McCormick only (module docstring)."""
+    fixed point. marginal_simplex: McCormick only (module docstring). allowed [S, K] (optional): the max only
+    over these actions, a state with none at the value floor (stopping.greedy)."""
     if method not in METHODS:
         raise ValueError(f"method must be one of {METHODS}, not {method!r}")
     if nature not in NATURES:
@@ -304,11 +306,12 @@ def solve(
     else:
         inner = McCormickNature(bounds, nature, marginal_simplex)
     reward = bounds.reward
+    floor = value_floor(reward, gamma) if allowed is not None else None
     V, start, sweeps = np.zeros(bounds.B.shape[0]), time.perf_counter(), 0
     while True:
         sweeps += 1
         Q = reward.R + inner(reward.backup(V, gamma))
-        V_new = Q.max(1)
+        V_new, pi = greedy(Q, allowed, floor)
         step = np.abs(V_new - V).max()
         if step < stop_at(tol, gamma):
             seconds = (time.perf_counter() - start) / sweeps
@@ -316,7 +319,7 @@ def solve(
                 bound = sound_lower_bound(V_new, step, gamma)
             else:
                 bound = V_new + gamma / (1 - gamma) * step
-            sol = Solution(bound, Q.argmax(1), iterations=sweeps, iteration_s=seconds)
+            sol = Solution(bound, pi, iterations=sweeps, iteration_s=seconds)
             if not kernel:
                 return sol
             _, P = inner(reward.backup(V_new, gamma), kernel=True)

@@ -7,6 +7,7 @@ solving/value_iteration.py. Its "promise" is the value under P_hat, which can be
 import numpy as np
 
 from scm_to_mdp.core import Dataset, IntervalMDP
+from scm_to_mdp.scm_learning.families import seen_info
 
 
 def flat_counts(dataset: Dataset) -> np.ndarray:
@@ -24,4 +25,5 @@ def learn(dataset: Dataset) -> IntervalMDP:
     counts = flat_counts(dataset)
     n = counts.sum(-1, keepdims=True)
     P_hat = np.where(n > 0, counts / np.maximum(n, 1), 1.0 / counts.shape[-1])
-    return IntervalMDP(P_hat, P_hat, dataset.reward)
+    seen = n[..., 0] > 0
+    return IntervalMDP(P_hat, P_hat, dataset.reward, info=seen_info(seen), seen=seen)

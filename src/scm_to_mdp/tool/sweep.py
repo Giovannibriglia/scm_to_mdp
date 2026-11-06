@@ -113,6 +113,7 @@ CERTIFICATE = ["V_opt", "cert_gap", "cert_gap_K", "cert_holds"]  # robust method
 SETS = CERTIFICATE + ["s4_width", "s4_coverage", "s4_coverage_seen", "s4_unseen", "s4_rows", "widen"]
 SETS += ["added_parents"]  # S4
 SETS += ["s4_candidates"]  # the post-selection family |F_i| (nbn_intervals.n_candidates)
+SETS += ["seen_pairs", "states_no_seen"]  # pairs (s, a) with data in every factor's row, states with none (S4)
 # the KWIK learners (discovery/kwik_structure.py, scm_learning/kwik_intervals.py): their parameters, the
 # share of (s, a, factor) where they say "don't know", the S4 hull and its number of tables
 SETS += ["kwik_dont_know", "kwik_k", "kwik_m", "kwik_m_sub", "kwik_eps", "kwik_eps1", "kwik_D", "kwik_delta",

@@ -37,3 +37,22 @@ def rows(dataset: Dataset, parents: tuple[str, ...], X: np.ndarray) -> np.ndarra
     )
     R = int(np.prod([dataset.cards[dataset.state_vars[j]] for j in same_step(dataset, parents)]))
     return code[..., None] * R + np.arange(R)[None, None, :]
+
+
+def seen_pairs(dataset, families: dict, counts, X) -> np.ndarray:
+    """[S, K] bool: the pairs (s, a_k) at which every factor's parent row has data (for every family of a
+    factor, and every row of its same-step parents). families: state var -> list of parent tuples; counts:
+    NBN HypothesisSet.counts; X: slice_inputs(dataset). A pair outside it has a factor with interval [0, 1]
+    (the "seen pairs only" option of the solvers, tool/methods.py)."""
+    S, K = X.shape[:2]
+    seen = np.ones((S, K), dtype=bool)
+    for v, v_next in zip(dataset.state_vars, dataset.next_vars, strict=True):
+        for parents in families[v]:
+            has = (counts[(v_next, parents)].sum(-1) > 0).numpy()  # [parent rows]
+            seen &= has[rows(dataset, parents, X)].all(-1)  # rows: [S, K, R]
+    return seen
+
+
+def seen_info(seen: np.ndarray) -> dict:
+    """The row columns of a seen mask: the share of pairs with data, and of states with no such action."""
+    return {"seen_pairs": float(seen.mean()), "states_no_seen": float((~seen.any(1)).mean())}

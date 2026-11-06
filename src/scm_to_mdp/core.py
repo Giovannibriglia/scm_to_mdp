@@ -173,6 +173,7 @@ class FactorBounds:
     reward: Reward
     info: dict = field(default_factory=dict)  # how they were learned (e.g. widened parents), for the rows
     conditional: dict = field(default_factory=dict)  # {i: (js, lo_i, hi_i)}, see the docstring
+    seen: np.ndarray | None = None  # [S, K] bool: every factor's parent row at (s, a_k) has data (S4)
 
 
 @dataclass(frozen=True)
@@ -185,6 +186,7 @@ class IntervalMDP:
     # a reward-independent part of the method's objective, e.g. FOCUS's uncertainty penalty (lam * u,
     # scaled by the reward's range): kept so that the model can be re-planned with another reward
     info: dict = field(default_factory=dict)
+    seen: np.ndarray | None = None  # [S, K] bool: the pair (s, a_k) has data (flat) / all its rows (factored)
 
 
 @dataclass(frozen=True)

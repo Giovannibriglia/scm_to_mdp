@@ -53,7 +53,7 @@ from scm_to_mdp.data import slice_inputs
 from scm_to_mdp.discovery.bic_search import bic, feasible_rows
 from scm_to_mdp.scm_learning.families import family as _family
 from scm_to_mdp.scm_learning.families import rows as family_rows
-from scm_to_mdp.scm_learning.families import same_step
+from scm_to_mdp.scm_learning.families import same_step, seen_info, seen_pairs
 
 WIDEN = (None, "pad", "hull")
 
@@ -152,9 +152,11 @@ def learn(
         for parents in families[v]:
             rows += feasible_rows(parents, dataset.cards, dataset.action_vars, dataset.actions)
             seen += int((counts[(v_next, parents)].sum(-1) > 0).sum())
-    info = {"s4_rows": rows, "s4_unseen": 1 - seen / rows, "s4_candidates": n_family}
+    pairs_seen = seen_pairs(dataset, families, counts, X)
+    info = {"s4_rows": rows, "s4_unseen": 1 - seen / rows, "s4_candidates": n_family, **seen_info(pairs_seen)}
     if widen:
         info |= {"widen": widen, "added_parents": json.dumps(added)}
     return FactorBounds(
-        lo, hi, dataset.state_cards, dataset.B, dataset.reward, info=info, conditional=conditional
+        lo, hi, dataset.state_cards, dataset.B, dataset.reward, info=info, conditional=conditional,
+        seen=pairs_seen,
     )

@@ -53,7 +53,7 @@ def compile(bounds: FactorBounds) -> IntervalMDP:  # noqa: A001 - the name of th
             lo, hi = tighten(bounds.lo[:, :, i, :card], bounds.hi[:, :, i, :card])  # [S, K, card]
         L *= factor_at_next(bounds, i, lo)  # factor i at the value of x_i in every next state s'
         U *= factor_at_next(bounds, i, hi)
-    return IntervalMDP(L, np.minimum(U, 1.0), bounds.reward)
+    return IntervalMDP(L, np.minimum(U, 1.0), bounds.reward, seen=bounds.seen)
 
 
 def exact(bounds: FactorBounds) -> IntervalMDP:
@@ -69,4 +69,4 @@ def exact(bounds: FactorBounds) -> IntervalMDP:
         card = bounds.cards[i]
         table = bounds.conditional[i][1][..., :card] if i in bounds.conditional else bounds.lo[:, :, i, :card]
         P *= factor_at_next(bounds, i, table)
-    return IntervalMDP(P, P.copy(), bounds.reward)
+    return IntervalMDP(P, P.copy(), bounds.reward, seen=bounds.seen)

@@ -34,7 +34,7 @@ import time
 import numpy as np
 
 from scm_to_mdp.core import IntervalMDP, Solution
-from scm_to_mdp.solving.stopping import sound_lower_bound, stop_at
+from scm_to_mdp.solving.stopping import greedy, sound_lower_bound, stop_at, value_floor
 
 NATURES = ("adversarial", "cooperative")
 
@@ -111,21 +111,25 @@ def solve(
     tol: float = 1e-7,
     nature: str = "adversarial",
     V0: np.ndarray | None = None,
+    allowed: np.ndarray | None = None,
 ) -> Solution:
     """The best policy against nature. nature: "adversarial" (the promise: a lower bound) or
-    "cooperative" (an upper bound on the best value over policies and kernels). V0: the start."""
+    "cooperative" (an upper bound on the best value over policies and kernels). V0: the start. allowed
+    [S, K] (optional): the max only over these actions, a state with none at the value floor
+    (stopping.greedy: still a sound lower bound)."""
     inner = Nature(mdp, nature)
     V = np.zeros(mdp.L.shape[0]) if V0 is None else np.asarray(V0, dtype=float)
+    floor = value_floor(mdp.reward, gamma) if allowed is not None else None
     start, sweeps = time.perf_counter(), 0
     while True:
         sweeps += 1
         Q = mdp.reward.R + inner.expectation(mdp.reward.backup(V, gamma))  # [S, K]
-        V_new = Q.max(1)
+        V_new, pi = greedy(Q, allowed, floor)
         step = np.abs(V_new - V).max()
         if step < stop_at(tol, gamma):
             seconds = (time.perf_counter() - start) / sweeps
             bound = _bound(V_new, step, gamma, inner.adversarial)
-            return Solution(bound, Q.argmax(1), iterations=sweeps, iteration_s=seconds)
+            return Solution(bound, pi, iterations=sweeps, iteration_s=seconds)
         V = V_new
 
 

@@ -18,7 +18,7 @@ from nbn.structure import HypothesisSet
 
 from scm_to_mdp.core import Dataset, FactorBounds, Graph
 from scm_to_mdp.data import slice_inputs
-from scm_to_mdp.scm_learning.families import family, rows, same_step
+from scm_to_mdp.scm_learning.families import family, rows, same_step, seen_info, seen_pairs
 
 
 def learn(dataset: Dataset, graph: Graph, alpha: float = 1.0) -> FactorBounds:
@@ -47,7 +47,9 @@ def learn(dataset: Dataset, graph: Graph, alpha: float = 1.0) -> FactorBounds:
         lo[:, :, i], hi[:, :, i] = P_i.min(2), P_i.max(2)  # = the estimate without same-step parents
         if row.shape[2] > 1:
             conditional[i] = (same_step(dataset, parents), P_i, P_i.copy())
-    info = {"alpha": alpha}
+    pairs_seen = seen_pairs(dataset, {v: [p] for v, p in families.items()}, counts, X)
+    info = {"alpha": alpha, **seen_info(pairs_seen)}
     return FactorBounds(
-        lo, hi, dataset.state_cards, dataset.B, dataset.reward, info=info, conditional=conditional
+        lo, hi, dataset.state_cards, dataset.B, dataset.reward, info=info, conditional=conditional,
+        seen=pairs_seen,
     )

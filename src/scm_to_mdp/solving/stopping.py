@@ -42,6 +42,38 @@ def stop_at(tol: float, gamma: float) -> float:
     return tol * (1 - gamma) / max(gamma, 1e-12)
 
 
+def value_floor(reward, gamma: float) -> float:
+    """A lower bound on every discounted value: r_min / (1 - gamma), r_min = min R + min r_next the smallest
+    one-step reward (with terminal states min(r_min, 0), since an episode may end)."""
+    r_min = float(reward.R.min() + (reward.r_next.min() if reward.r_next.size else 0.0))
+    if reward.terminal.any():
+        r_min = min(r_min, 0.0)
+    return r_min / (1 - gamma)
+
+
+def greedy(Q: np.ndarray, allowed: np.ndarray | None = None, floor: float | None = None):
+    """(V, pi) of one value-iteration step: the max of Q [S, K] over the actions. allowed [S, K] (bool,
+    optional): only over the allowed actions ("seen pairs only", tool/methods.py); a state with none gets
+    the constant floor (value_floor), and its action is the best of all (any action would do).
+
+    Soundness (adversarial nature): restricted to the allowed actions, with the floor at the states that
+    have none, the robust update is still a gamma-contraction (a max over fewer actions; a constant), and
+    it maps {V >= floor} into itself (an allowed backup is >= r_min + gamma floor = floor), so its fixed
+    point V' is >= floor. For the greedy policy pi' and every kernel P in the set: at an allowed state
+    V'(s) = R + gamma min_P P V' <= T^pi'_P V'(s); at a state with none, V'(s) = floor <= r_min + gamma
+    floor <= T^pi'_P V'(s). By monotonicity V' <= V^pi'_P: a lower bound, and the stopping rule above
+    still applies (the update is a contraction). Only the allowed pairs need P in [L, U] (the others may be
+    [0, 1]). A max over fewer actions can only lower the value. (badings_claude, 2026-11-06: the proof
+    is general knowledge, not in its references; closest: actions enabled by data, Nazeri et al. 2025,
+    Sec. IV.A and Thm 1; enabled actions A(s), Suilen et al. 2024, Def. 1, p. 3 ⚠ pages not re-checked.)"""
+    if allowed is None:
+        return Q.max(1), Q.argmax(1)
+    masked = np.where(allowed, Q, -np.inf)
+    empty = ~allowed.any(1)
+    V = np.where(empty, floor, masked.max(1))
+    return V, np.where(empty, Q.argmax(1), masked.argmax(1))
+
+
 def sound_lower_bound(V_new, step: float, gamma: float):
     """A lower bound on the robust value of the greedy policy of the last update (see above)."""
     return V_new - gamma / (1 - gamma) * step

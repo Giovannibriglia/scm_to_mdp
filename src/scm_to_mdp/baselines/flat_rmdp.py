@@ -11,6 +11,7 @@ from nbn.uncertainty.builders import interval_set_from_counts
 
 from scm_to_mdp.baselines.flat_mdp import flat_counts
 from scm_to_mdp.core import Dataset, IntervalMDP
+from scm_to_mdp.scm_learning.families import seen_info
 
 
 def learn(dataset: Dataset, delta: float = 0.05) -> IntervalMDP:
@@ -22,4 +23,4 @@ def learn(dataset: Dataset, delta: float = 0.05) -> IntervalMDP:
     L, U = (b.double().numpy().reshape(S, K, S) for b in sets.bounds())
     unseen = counts.sum(-1) == 0
     L[unseen], U[unseen] = 0.0, 1.0
-    return IntervalMDP(L, U, dataset.reward)
+    return IntervalMDP(L, U, dataset.reward, info=seen_info(~unseen), seen=~unseen)
