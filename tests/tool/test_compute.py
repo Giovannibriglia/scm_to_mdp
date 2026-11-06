@@ -19,7 +19,19 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 # ---- the plan --------------------------------------------------------------------------------
-def test_workers_follow_cores_and_the_ram_rule():
+def test_a_mac_keeps_a_margin_for_its_applications(monkeypatch):
+    monkeypatch.setattr(compute, "RAM_SHARE", 0.8)  # sys.platform == "darwin"
+    workers, why = compute._workers("auto", 6.0, cores=10, ram_gb=34)
+    assert workers == 4 and "0.8 x 34 GB" in why  # 5 workers at 95%: the laptop's panic of 2026-11-06
+    assert compute.RAM_SHARE * 34 < 5 * 6.0  # so sweep._check_memory refuses --workers 5
+
+
+def test_the_share_of_the_ram_depends_on_the_machine():
+    assert compute.RAM_SHARE == (0.8 if sys.platform == "darwin" else 0.95)
+
+
+def test_workers_follow_cores_and_the_ram_rule(monkeypatch):
+    monkeypatch.setattr(compute, "RAM_SHARE", 0.95)  # a server
     assert compute._workers("auto", 8.0, cores=10, ram_gb=34)[0] == 4  # 0.95 x 34 / 8 = 4.04
     assert compute._workers("auto", 6.0, cores=40, ram_gb=135)[0] == 21  # the server: 0.95 x 135 / 6 = 21.4
     assert compute._workers("auto", 8.0, cores=10, ram_gb=135)[0] == 10  # the cores bind

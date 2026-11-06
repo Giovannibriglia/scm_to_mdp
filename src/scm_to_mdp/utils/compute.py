@@ -4,10 +4,12 @@ An experiment script runs as is on a laptop or a server: at start the runner loo
 and chooses, then prints the choices and saves them in meta.json (key "machine").
 
     workers   parallel (size, seed) jobs = min(physical cores, RAM rule), at least 1.
-              RAM rule: workers x Limits.mem_gb <= 95% of the RAM (RAM_SHARE), so that a step is never
-              killed because other steps took the memory; a "memout" then means the same on every
-              machine. 5% stays for the system and the parent processes (Linux server, 135 GB: 21
-              workers of 6 GB; at N=11 of SysAdmin 17 workers used about 70 GB in all).
+              RAM rule: workers x Limits.mem_gb <= RAM_SHARE of the RAM, so that a step is never killed
+              because other steps took the memory; a "memout" then means the same on every machine.
+              A server: 95%, 5% stays for the system and the parent processes (Linux server, 135 GB: 21
+              workers of 6 GB; at N=11 of SysAdmin 17 workers used about 70 GB in all). A Mac: 80%, as
+              it also runs the owner's applications (34 GB: 4 workers of 6 GB; at 95%, 5 workers took
+              30 GB next to about 14 GB of applications when the laptop panicked on 2026-11-06).
     hashing   PYTHONHASHSEED=0 in every process the run starts (HASH_SEED): set orders, and so
               results, do not change from one run to the next.
     threads   one per process (torch and the BLAS libraries of numpy / scipy): more threads made a
@@ -43,7 +45,7 @@ ENV_WORKERS = "SCM_TO_MDP_WORKERS"
 ENV_DEVICE = "SCM_TO_MDP_DEVICE"
 ENV_THREADS = "SCM_TO_MDP_THREADS"
 BLAS_VARS = ("OMP_NUM_THREADS", "OPENBLAS_NUM_THREADS", "MKL_NUM_THREADS", "VECLIB_MAXIMUM_THREADS")
-RAM_SHARE = 0.95  # of the RAM for workers x Limits.mem_gb (the plan and sweep._check_memory)
+RAM_SHARE = 0.8 if sys.platform == "darwin" else 0.95  # of the RAM for workers x Limits.mem_gb (docstring)
 # String hashing is randomised per Python process, so the order of a set of names changes between
 # runs, and a library that breaks ties by that order gives different results (pgmpy's GES did,
 # discovery/ges.py). Every process a run starts gets this fixed seed (the runner's own hash is set when

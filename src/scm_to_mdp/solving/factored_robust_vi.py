@@ -38,6 +38,7 @@ looser than the product set it is not a product of factor distributions (a valid
 """
 
 import itertools
+import math
 import time
 
 import highspy
@@ -48,10 +49,12 @@ from scipy.sparse import csr_array, vstack
 from scm_to_mdp.compilation.product_bounds import tighten
 from scm_to_mdp.core import FactorBounds, NotApplicable, Solution
 from scm_to_mdp.solving.stopping import greedy, sound_lower_bound, stop_at, value_floor
+from scm_to_mdp.utils.limits import require_memory
 
 METHODS = ("vertex", "mccormick")
 NATURES = ("adversarial", "cooperative")
 MAX_VERTICES = 4096  # per factor and (s, a): above it the vertex method stops, as a memout (App. C)
+FLOAT_BYTES = 8
 
 LP_METHODS = ("highs", "highs-ds", "highs-ipm")  # McCormick's last resort: scipy's linprog, each method
 # McCormick: the LP of every (s, a) is kept as a HiGHS model (only its cost changes between sweeps, so each
@@ -60,6 +63,17 @@ LP_METHODS = ("highs", "highs-ds", "highs-ipm")  # McCormick's last resort: scip
 # the clear27 pilot hit 8 GB on Drone 7-1 with 20M); beyond it, a model is rebuilt each sweep from its
 # kept basis (about 3x slower)
 MODEL_NNZ_BUDGET = 5_000_000
+
+
+def vertex_memory_bytes(n_states: int, n_actions: int, cards: list[int]) -> int:
+    """A lower bound on the memory of one inner problem of VertexNature, known before allocating: its table of
+    all vertex products [S, K, V_1..V_n] exists twice at the end of the contraction (the table and its signed
+    copy), next to the vertices [S, K, V_k, c_k] of every factor. Any allocation above the step's limit would
+    only be stopped later by the monitor, so asking first changes when a memout comes, not whether."""
+    counts = [2 if c == 2 else c * 2 ** (c - 1) for c in cards]  # factor_vertices' candidates
+    table = n_states * n_actions * math.prod(counts)
+    vertices = n_states * n_actions * sum(v * c for v, c in zip(counts, cards, strict=True))
+    return FLOAT_BYTES * (2 * table + vertices)
 
 
 def factor_vertices(lo: np.ndarray, hi: np.ndarray) -> np.ndarray:
@@ -107,7 +121,10 @@ class VertexNature:
 
     def __init__(self, bounds: FactorBounds, nature: str):
         self.cards = bounds.cards
-        self.vertices = [factor_vertices(lo, hi) for lo, hi in _boxes(bounds)]  # [S, K, V_k, c_k]
+        boxes = _boxes(bounds)
+        S, K = boxes[0][0].shape[:2]
+        require_memory(vertex_memory_bytes(S, K, list(self.cards)), "the exact vertex products")
+        self.vertices = [factor_vertices(lo, hi) for lo, hi in boxes]  # [S, K, V_k, c_k]
         self.sign = 1.0 if nature == "adversarial" else -1.0
 
     def __call__(self, W: np.ndarray, kernel: bool = False):

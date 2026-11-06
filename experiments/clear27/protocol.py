@@ -6,7 +6,7 @@ domains SysAdmin (N = 2..11), Sepsis (2..4 vitals), Drone (side 3..12) and Aircr
 
 Limits per step (LIMITS, the same for every domain and size; the oracle has the memory limit only):
 discovery / selection / learning / training 600 s, compilation (relax) 300 s, solve 400 s, memory 6 GB
-(PSS on Linux, RSS on macOS: utils/limits.py). Chosen with the timing pilot and the worst-problem
+(PSS on Linux, physical footprint on macOS: utils/limits.py). Chosen with the timing pilot and the worst-problem
 simulation of 2026-11-04 (laptop and server): McCormick times out on the larger problems and exact runs
 out of memory on Sepsis 4, Drone and Aircraft (its vertex products), by design; everything else fits
 except SL-SPIBB at SysAdmin N >= 10 with 500k and flat at N = 11 with the large budgets.

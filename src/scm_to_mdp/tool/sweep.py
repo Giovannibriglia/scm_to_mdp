@@ -46,8 +46,9 @@ Rules:
   that every step sees the run's fixed hash seed, utils/compute.py); make_env and collect must be
   functions defined at the top level of a module (not lambdas), because they are sent to the
   workers. Every worker may use up to Limits.mem_gb per step: the sweep refuses to start when
-  workers x mem_gb is more than 95% of the RAM (utils/compute.py, RAM_SHARE). workers="auto" takes as many as the machine allows
-  (utils/compute.py); SCM_TO_MDP_WORKERS or the script's --workers N override it.
+  workers x mem_gb is more than RAM_SHARE of the RAM (utils/compute.py: 95%, 80% on a Mac). workers="auto"
+  takes as many as the machine allows (utils/compute.py); SCM_TO_MDP_WORKERS or the script's --workers N
+  override it.
 - run_sweeps runs several Experiments (the settings of a grid) in one pool: a free worker takes the
   next job of any setting, while each setting keeps its waves (a size starts when the smaller size
   of that setting is finished, so the limits' stops above still apply).

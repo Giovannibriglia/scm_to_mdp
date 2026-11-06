@@ -113,7 +113,7 @@ returns only the promise.
 
 **3. Report.** An `Experiment` sweeps problem sizes × numbers of rollouts × seeds (with nested
 datasets: smaller budgets use the first rollouts of one table). Each step runs in its own process
-with a memory limit (PSS on Linux, RSS on macOS) and a time limit per step (discovery, selection,
+with a memory limit (PSS on Linux, physical footprint on macOS) and a time limit per step (discovery, selection,
 learning, compilation, training, solving); a step over its limit is a `timeout` / `memout` and the
 larger budgets of that size are skipped. Rows are written to `results.csv` as each (size, seed)
 finishes, and a second run resumes. `report(out_dir)` writes:
