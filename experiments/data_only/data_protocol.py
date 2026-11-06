@@ -6,7 +6,9 @@ only value iteration. Values never seen and states never left are sinks at V_min
 an unseen parent row sends its pair to a sink, a value not observed at a seen row gets only the residual mass;
 the promise stays a lower bound (badings_claude, agarwal_claude, 2026-11-06). The same rules for every graph:
 
-    true graph (reference), full-fact, sparse (fixed in advance), DYNOTEARS (lagged), PCMCI+ (lagged), flat
+    true graph (reference), full-fact, sparse (fixed in advance), DYNOTEARS (lagged), PCMCI+ (lagged), flat,
+    Strehl et al. (2007) and Met-Rmax with our S4 (fixed and accepted hulls; their own KWIK modes need the
+    value domains, as in their papers, and are left out)
 
 Arms per graph: IMDP (IA), IMDP (exact), MDP (plug-in), each as in clear27 and "(..., data-only)"; flat: its
 IMDP and plug-in MDP. Data, limits and evaluation: clear27 (experiments/clear27/protocol.py), on SysAdmin
@@ -28,7 +30,7 @@ DOMAIN = "sysadmin"
 SIZES = [2, 3, 4, 5, 6, 7, 8]
 SEEDS = list(range(10))
 N_TRANSITIONS = [10, 20, 50, 100, 200, 500, 1000, 2000, 5000, 10_000, 20_000, 50_000, 100_000]
-SOURCES = ("dynotears_lagged", "pcmci_lagged", "fullfact", "sparse", "flat", "truegraph")
+SOURCES = ("dynotears_lagged", "pcmci_lagged", "fullfact", "sparse", "flat", "truegraph", "strehl", "met")
 KEEP = ("IMDP (IA)", "IMDP (exact)", "MDP (plug-in)")
 FLAT_KEEP = ("flat IMDP", "flat -> MDP (plug-in)")
 LABEL = "data-only"
@@ -45,7 +47,7 @@ def methods(source: str) -> dict:
     if source == "flat":
         kept = {n: every[n] for n in FLAT_KEEP}
     else:
-        kept = {n: m for n, m in every.items() if any(n.endswith(f"-> {k}") for k in KEEP)}
+        kept = {n: m for n, m in every.items() if any(n.endswith(f"-> {k}") for k in KEEP) and "-KWIK" not in n}
     out = {"oracle -> MDP": every["oracle -> MDP"]}
     for name, m in kept.items():
         out[name] = m

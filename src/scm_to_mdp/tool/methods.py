@@ -441,15 +441,17 @@ def _run_step(result: Result, name: str, fn, x, limits: Limits | None):
 # Learning (S2-S7) and solving (S8)
 # ==========================================================================================
 def kwik_learn(data: Dataset, structure, mode: str = "s4", hull: str = "accepted", delta: float = 0.05,
-               behaviour: str = "mle"):  # fmt: skip
+               behaviour: str = "mle", data_only: bool = False):  # fmt: skip
     """S4 of the kwik learner (scm_learning/kwik_intervals.py, baselines/spibb.kwik_model): "s4" our
     Clopper-Pearson sets with a hull over the candidates; "kwik" the learner's own predictions +- its
     accuracy; "point" its predictions with HALT for "don't know" (value iteration); "spibb" Factored
     Pi_b-SPIBB with the "don't know" pairs bootstrapped."""
     from scm_to_mdp.scm_learning import kwik_intervals
 
+    if data_only and mode != "s4":
+        raise ValueError("data_only: the kwik learner's S4 mode only (its own modes need the value domains)")
     if mode == "s4":
-        return kwik_intervals.learn(data, structure, delta, hull)
+        return kwik_intervals.learn(data, structure, delta, hull, data_only)
     if mode == "kwik":
         return kwik_intervals.kwik_bounds(data, structure)
     if mode == "point":

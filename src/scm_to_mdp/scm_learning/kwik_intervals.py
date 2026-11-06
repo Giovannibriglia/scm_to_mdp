@@ -43,6 +43,7 @@ from nbn.uncertainty import interval_set_from_counts
 from scm_to_mdp.compilation import product_bounds
 from scm_to_mdp.core import Dataset, FactorBounds, IntervalMDP, Reward, encode
 from scm_to_mdp.discovery.kwik_structure import KwikStructure
+from scm_to_mdp.scm_learning import data_only as rules
 
 HULLS = ("fixed", "accepted")
 
@@ -54,21 +55,30 @@ def _per_action(dataset: Dataset):
     return {a: (states[k == a], nxt[k == a]) for a in range(len(dataset.actions))}
 
 
-def _cp_at_states(B, rows, values, U, cards, card, delta):
+def _cp_at_states(B, rows, values, U, cards, card, delta, data_only=False):
     """Clopper-Pearson intervals [S, card] of P(x_i' = v | s[U], a) at every state, from ALL the samples of
-    the action (rows, values), at level delta for the table (NBN splits it over its entries and counts)."""
+    the action (rows, values), at level delta for the table (NBN splits it over its entries and counts), and
+    [S] whether the state's row has no data. data_only: scm_learning/data_only.py's intervals (the level split
+    over the rows' and values' codes, the values not observed at a row free)."""
     cu = [cards[u] for u in U]
     table = np.zeros((int(np.prod(cu)), card))
     np.add.at(table, (encode(rows[:, list(U)], cu), values), 1)
-    sets = interval_set_from_counts(torch.as_tensor(table), delta, "clopper_pearson", "trajectory")
     at = encode(B[:, list(U)], cu)
-    return sets.lower.double().numpy()[at], sets.upper.double().numpy()[at]
+    unseen = table.sum(1)[at] == 0
+    if data_only:
+        codes = np.stack(np.unravel_index(np.arange(len(table)), cu), axis=1) if U else np.zeros((1, 0), int)
+        lower, upper = rules.intervals(table, rules.code_weight(codes), rules.value_weight(np.arange(card)), delta)
+        return lower[at], upper[at], unseen
+    sets = interval_set_from_counts(torch.as_tensor(table), delta, "clopper_pearson", "trajectory")
+    return sets.lower.double().numpy()[at], sets.upper.double().numpy()[at], unseen
 
 
 def learn(
-    dataset: Dataset, structure: KwikStructure, delta: float = 0.05, hull: str = "accepted"
+    dataset: Dataset, structure: KwikStructure, delta: float = 0.05, hull: str = "accepted", data_only: bool = False
 ) -> FactorBounds:
-    """lo, hi [S, K, n, C] (module docstring)."""
+    """lo, hi [S, K, n, C] (module docstring). data_only (scm_learning/data_only.py): the level of an action's
+    tables is weighted by the action's value codes instead of 1 / K, a pair whose hull uses a row without data
+    (or Strehl's "don't know") is sent to a sink, and the sinks of data_only.py."""
     if hull not in HULLS:
         raise ValueError(f"hull must be one of {HULLS}, not {hull!r}")
     B, cards = dataset.B, dataset.state_cards
@@ -76,6 +86,9 @@ def learn(
     lo, hi = np.zeros((S, K, n, C)), np.zeros((S, K, n, C))
     data = _per_action(dataset)
     tables = 0
+    doomed = np.zeros((S, K), dtype=bool)
+    # the share of delta of an action's tables: 1 / K, or (data-only) the weight of its value codes
+    share = rules.code_weight(dataset.actions) if data_only else np.full(K, 1.0 / K)
     for (i, k), f in structure.factors.items():
         rows, nxt = data[k]
         card, values = cards[i], nxt[:, i]
@@ -85,27 +98,33 @@ def learn(
             # fixed: every candidate, level per (factor, action) table; Met-Rmax: the survivors, level per
             # candidate table (any candidate could survive)
             use = range(H) if hull == "fixed" else f.survivors
-            d = delta / (n * K) if hull == "fixed" else delta / (n * K * H)
+            d = delta * share[k] / n if hull == "fixed" else delta * share[k] / (n * H)
             for h in use:
-                lower, upper = _cp_at_states(B, rows, values, f.candidates[h], cards, card, d)
+                lower, upper, unseen = _cp_at_states(B, rows, values, f.candidates[h], cards, card, d, data_only)
                 lo_i, hi_i = np.minimum(lo_i, lower), np.maximum(hi_i, upper)
+                doomed[:, k] |= unseen
             tables += len(use)
         else:  # Strehl, accepted: the pair unions of the accepted candidate; "don't know" -> [0, 1]
             pairs = list(itertools.combinations(range(H), 2)) or [(0, 0)]
-            d = delta / (n * K * len(pairs))
+            d = delta * share[k] / (n * len(pairs))
             lo_i[:], hi_i[:] = 0.0, 1.0
+            doomed[:, k] |= ~f.known  # "don't know": nothing is known there
             for a in sorted(set(f.accepted[f.known].tolist())):
                 states = np.flatnonzero(f.accepted == a)
                 l_a, u_a = np.ones((len(states), card)), np.zeros((len(states), card))
                 for j in [j for j in range(H) if j != a] or [a]:
                     U = tuple(sorted(set(f.candidates[a]) | set(f.candidates[j])))
-                    lower, upper = _cp_at_states(B[states], rows, values, U, cards, card, d)
+                    lower, upper, unseen = _cp_at_states(B[states], rows, values, U, cards, card, d, data_only)
                     l_a, u_a = np.minimum(l_a, lower), np.maximum(u_a, upper)
+                    doomed[states, k] |= unseen
                     tables += 1
                 lo_i[states], hi_i[states] = l_a, u_a
         lo[:, k, i, :card], hi[:, k, i, :card] = lo_i, hi_i
     info = {"s4_hull": hull, "s4_kwik": structure.method, "s4_tables": tables}
-    return FactorBounds(lo, hi, cards, B, dataset.reward, info=info)
+    if not data_only:
+        return FactorBounds(lo, hi, cards, B, dataset.reward, info=info)
+    masks, extra = rules.description(dataset, doomed)
+    return FactorBounds(lo, hi, cards, B, rules.model_reward(dataset), info=info | extra, data_only=masks)
 
 
 def kwik_bounds(dataset: Dataset, structure: KwikStructure) -> FactorBounds:

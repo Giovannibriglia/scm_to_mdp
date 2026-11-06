@@ -76,7 +76,13 @@ ARMS = {
     "full ia": Method("causal", "box_robust_vi", discovery="full", selection="given", learning_options=DATA_ONLY),
     "flat": Method("flat_rmdp", "robust_vi", learning_options=DATA_ONLY),
     "flat plug-in": Method("flat_mdp", "vi", learning_options=DATA_ONLY),
-}
+    "strehl fixed": Method("kwik", "box_robust_vi", discovery="strehl", discovery_options={"k": 2, "m": 20},
+                           learning_options={"hull": "fixed", **DATA_ONLY}),
+    "strehl accepted": Method("kwik", "exact_robust_vi", discovery="strehl", discovery_options={"k": 2, "m": 20},
+                              learning_options=DATA_ONLY),
+    "met accepted": Method("kwik", "box_robust_vi", discovery="met_rmax", discovery_options={"D": 2, "m": 7},
+                           learning_options=DATA_ONLY),
+}  # fmt: skip
 
 
 @pytest.mark.parametrize("name", list(ARMS))
@@ -105,3 +111,10 @@ def test_data_only_is_off_by_default_and_checked():
         Method("causal", "worst_mdp_vi", learning_options=DATA_ONLY, **TRUE)
     with pytest.raises(ValueError):
         Method("causal", "box_robust_vi", solver_options={"fixed_v": None}, **TRUE)
+
+
+def test_the_kwik_own_modes_refuse_data_only(dataset):
+    m = Method("kwik", "box_robust_vi", discovery="strehl", discovery_options={"k": 2, "m": 20},
+               learning_options={"mode": "kwik", **DATA_ONLY})  # fmt: skip
+    result = learn(dataset, m)
+    assert not result.ok and "data_only" in (result.error or "")
