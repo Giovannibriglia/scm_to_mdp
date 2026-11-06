@@ -7,6 +7,7 @@ solving/value_iteration.py. Its "promise" is the value under P_hat, which can be
 import numpy as np
 
 from scm_to_mdp.core import Dataset, IntervalMDP
+from scm_to_mdp.scm_learning import data_only as rules
 from scm_to_mdp.scm_learning.families import seen_info
 
 
@@ -20,10 +21,15 @@ def flat_counts(dataset: Dataset) -> np.ndarray:
     return counts
 
 
-def learn(dataset: Dataset) -> IntervalMDP:
-    """The plug-in MDP, as an interval MDP with L == U."""
+def learn(dataset: Dataset, data_only: bool = False) -> IntervalMDP:
+    """The plug-in MDP, as an interval MDP with L == U. data_only: an unseen pair goes to a sink instead of a
+    uniform row, and the sinks of scm_learning/data_only.py."""
     counts = flat_counts(dataset)
     n = counts.sum(-1, keepdims=True)
     P_hat = np.where(n > 0, counts / np.maximum(n, 1), 1.0 / counts.shape[-1])
     seen = n[..., 0] > 0
+    if data_only:
+        masks, extra = rules.description(dataset, ~seen)
+        return IntervalMDP(P_hat, P_hat, rules.model_reward(dataset), info=seen_info(seen) | extra, seen=seen,
+                           data_only=masks)  # fmt: skip
     return IntervalMDP(P_hat, P_hat, dataset.reward, info=seen_info(seen), seen=seen)

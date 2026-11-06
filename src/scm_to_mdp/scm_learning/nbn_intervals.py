@@ -53,6 +53,7 @@ from scm_to_mdp.data import slice_inputs
 from scm_to_mdp.discovery.bic_search import bic, feasible_rows
 from scm_to_mdp.scm_learning.families import family as _family
 from scm_to_mdp.scm_learning.families import rows as family_rows
+from scm_to_mdp.scm_learning import data_only as data_only_rules
 from scm_to_mdp.scm_learning.families import same_step, seen_info, seen_pairs
 
 WIDEN = (None, "pad", "hull")
@@ -99,12 +100,14 @@ def learn(
     widen: str | None = None,
     k: int = 2,
     n_candidates: int | str = 1,
+    data_only: bool = False,
 ) -> FactorBounds:
     """lo, hi [S, K, n, C]: interval of P(x_i' = v | parents) at every state s and action k; a factor
     with same-step parents is a conditional (FactorBounds.conditional), and lo, hi hold its hull.
     widen: None (the parents of graph), "pad" or "hull" (see the module docstring), with k slice-t
     inputs added (the same-step parents stay those of graph). n_candidates: the union bound over the
-    candidate parent sets when graph was chosen from the data (module docstring)."""
+    candidate parent sets when graph was chosen from the data (module docstring). data_only: the intervals and
+    the sinks of scm_learning/data_only.py (no value domains, support or terminal states given)."""
     if widen not in WIDEN:
         raise ValueError(f"widen must be one of {WIDEN}, not {widen!r}")
     if widen is not None and k < 1:
@@ -121,13 +124,30 @@ def learn(
     hs = HypothesisSet(dataset.variables, {v_next: families[v] for v, v_next in pairs})
     counts = hs.counts(dataset.tensors())
     n_family = candidate_count(dataset, n_candidates)
-    sets = hs.factor_sets(
-        counts,
-        builder="interval",
-        delta=delta / n_family,
-        sampling="trajectory",
-        method="clopper_pearson",
-    )
+    if data_only:
+        if widen is not None or any(same_step(dataset, f) for fs in families.values() for f in fs):
+            raise ValueError("data_only: one family per variable and no same-step parents")
+        level = delta / (n_family * len(pairs))  # the factors and the candidate family (data_only.py)
+
+        def bounds_of(v_next, parents, card):
+            lo_t, hi_t = data_only_rules.intervals(
+                counts[(v_next, parents)].double().numpy(),
+                data_only_rules.code_weight(data_only_rules.row_values(parents, dataset)),
+                data_only_rules.value_weight(np.arange(card)), level,
+            )  # fmt: skip
+            return lo_t, hi_t
+    else:
+        sets = hs.factor_sets(
+            counts,
+            builder="interval",
+            delta=delta / n_family,
+            sampling="trajectory",
+            method="clopper_pearson",
+        )
+
+        def bounds_of(v_next, parents, card):
+            lower, upper = sets[(v_next, parents)].bounds()  # [parent rows, card], rows in C order
+            return lower.double().numpy(), upper.double().numpy()
     X = slice_inputs(dataset)  # [S, K, n_inputs]
     S, K = X.shape[:2]
     C = max(dataset.state_cards)
@@ -139,10 +159,10 @@ def learn(
         R = int(np.prod([dataset.state_cards[j] for j in js]))
         lo_i, hi_i = np.ones((S, K, R, C)), np.zeros((S, K, R, C))
         for parents in families[v]:  # the hull over the families (one family: its intervals)
-            lower, upper = sets[(v_next, parents)].bounds()  # [parent rows, card], rows in C order
+            lower, upper = bounds_of(v_next, parents, card)  # [parent rows, card], rows in C order
             row = family_rows(dataset, parents, X)  # [S, K, R]
-            lo_i[..., :card] = np.minimum(lo_i[..., :card], lower.double().numpy()[row])
-            hi_i[..., :card] = np.maximum(hi_i[..., :card], upper.double().numpy()[row])
+            lo_i[..., :card] = np.minimum(lo_i[..., :card], lower[row])
+            hi_i[..., :card] = np.maximum(hi_i[..., :card], upper[row])
         lo_i[..., card:] = 0.0  # padding values
         lo[:, :, i], hi[:, :, i] = lo_i.min(2), hi_i.max(2)  # a valid interval of the marginal
         if js:
@@ -156,7 +176,12 @@ def learn(
     info = {"s4_rows": rows, "s4_unseen": 1 - seen / rows, "s4_candidates": n_family, **seen_info(pairs_seen)}
     if widen:
         info |= {"widen": widen, "added_parents": json.dumps(added)}
+    masks, reward = None, dataset.reward
+    if data_only:
+        masks, extra = data_only_rules.description(dataset, ~pairs_seen)
+        info |= extra
+        reward = data_only_rules.model_reward(dataset)
     return FactorBounds(
-        lo, hi, dataset.state_cards, dataset.B, dataset.reward, info=info, conditional=conditional,
-        seen=pairs_seen,
+        lo, hi, dataset.state_cards, dataset.B, reward, info=info, conditional=conditional,
+        seen=pairs_seen, data_only=masks,
     )

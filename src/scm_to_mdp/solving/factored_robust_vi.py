@@ -291,12 +291,15 @@ def solve(
     kernel: bool = False,
     marginal_simplex: bool = True,
     allowed: np.ndarray | None = None,
+    fixed_v: np.ndarray | None = None,
+    fixed_q: np.ndarray | None = None,
 ):
     """Robust value iteration with the exact (vertex) or McCormick inner problem (module docstring). Returns
     a Solution (V: a sound lower bound for "adversarial", a sound upper bound V_k + gamma / (1 - gamma) step
     for "cooperative", as robust_vi; stopping.py), and with kernel=True also nature's [S, K, S'] kernel at the
     fixed point. marginal_simplex: McCormick only (module docstring). allowed [S, K] (optional): the max only
-    over these actions, a state with none at the value floor (stopping.greedy)."""
+    over these actions, a state with none at the value floor (stopping.greedy). fixed_v, fixed_q (optional): the
+    data-only sinks (stopping.data_only_values)."""
     if method not in METHODS:
         raise ValueError(f"method must be one of {METHODS}, not {method!r}")
     if nature not in NATURES:
@@ -311,7 +314,7 @@ def solve(
     while True:
         sweeps += 1
         Q = reward.R + inner(reward.backup(V, gamma))
-        V_new, pi = greedy(Q, allowed, floor)
+        V_new, pi = greedy(Q, allowed, floor, fixed_v, fixed_q)
         step = np.abs(V_new - V).max()
         if step < stop_at(tol, gamma):
             seconds = (time.perf_counter() - start) / sweeps

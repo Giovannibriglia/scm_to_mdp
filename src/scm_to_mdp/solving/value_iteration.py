@@ -9,15 +9,22 @@ from scm_to_mdp.solving.stopping import greedy, stop_at, value_floor
 
 
 def solve(
-    P: np.ndarray, reward: Reward, gamma: float, tol: float = 1e-8, allowed: np.ndarray | None = None
+    P: np.ndarray,
+    reward: Reward,
+    gamma: float,
+    tol: float = 1e-8,
+    allowed: np.ndarray | None = None,
+    fixed_v: np.ndarray | None = None,
+    fixed_q: np.ndarray | None = None,
 ) -> Solution:
     """P [S, A, S']. Q(s, a) = R(s, a) + sum_s' P(s' | s, a) (r_next(s') + gamma V(s')). allowed [S, A]
-    (optional): the max only over these actions, a state with none at the value floor (stopping.greedy)."""
+    (optional): the max only over these actions, a state with none at the value floor (stopping.greedy).
+    fixed_v, fixed_q (optional): the data-only sinks (stopping.data_only_values)."""
     V, start, sweeps = np.zeros(P.shape[0]), time.perf_counter(), 0
     floor = value_floor(reward, gamma) if allowed is not None else None
     while True:
         Q = reward.R + P @ reward.backup(V, gamma)  # [S, A]
-        V_new, pi = greedy(Q, allowed, floor)
+        V_new, pi = greedy(Q, allowed, floor, fixed_v, fixed_q)
         sweeps += 1
         if np.abs(V_new - V).max() < stop_at(tol, gamma):
             seconds = (time.perf_counter() - start) / sweeps

@@ -18,13 +18,15 @@ from nbn.structure import HypothesisSet
 
 from scm_to_mdp.core import Dataset, FactorBounds, Graph
 from scm_to_mdp.data import slice_inputs
+from scm_to_mdp.scm_learning import data_only as data_only_rules
 from scm_to_mdp.scm_learning.families import family, rows, same_step, seen_info, seen_pairs
 
 
-def learn(dataset: Dataset, graph: Graph, alpha: float = 1.0) -> FactorBounds:
+def learn(dataset: Dataset, graph: Graph, alpha: float = 1.0, data_only: bool = False) -> FactorBounds:
     """lo = hi [S, K, n, C]: the Dirichlet(alpha) posterior mean of P(x_i' = v | parents) at every
     state s and action k (a factor with same-step parents: FactorBounds.conditional, and lo = hi the
-    hull over their values)."""
+    hull over their values). data_only (scm_learning/data_only.py): the frequencies of a seen row (no prior:
+    a prior spreads mass over values never seen), an unseen row sends its pair to a sink."""
     if alpha < 0:
         raise ValueError(f"alpha must be >= 0, not {alpha}")
     pairs = list(zip(dataset.state_vars, dataset.next_vars, strict=True))
@@ -39,8 +41,9 @@ def learn(dataset: Dataset, graph: Graph, alpha: float = 1.0) -> FactorBounds:
         parents, card = families[v], dataset.cards[v]
         table = counts[(v_next, parents)].double().numpy()  # [parent rows, card], rows in C order
         n = table.sum(1, keepdims=True)
+        a = 0.0 if data_only else alpha
         with np.errstate(invalid="ignore", divide="ignore"):
-            prob = np.where(n + alpha * card > 0, (table + alpha) / (n + alpha * card), 1.0 / card)
+            prob = np.where(n + a * card > 0, (table + a) / (n + a * card), 1.0 / card)
         row = rows(dataset, parents, X)  # [S, K, R]
         P_i = np.zeros((*row.shape, C))
         P_i[..., :card] = prob[row]
@@ -48,8 +51,15 @@ def learn(dataset: Dataset, graph: Graph, alpha: float = 1.0) -> FactorBounds:
         if row.shape[2] > 1:
             conditional[i] = (same_step(dataset, parents), P_i, P_i.copy())
     pairs_seen = seen_pairs(dataset, {v: [p] for v, p in families.items()}, counts, X)
-    info = {"alpha": alpha, **seen_info(pairs_seen)}
+    info = {"alpha": 0.0 if data_only else alpha, **seen_info(pairs_seen)}
+    masks, reward = None, dataset.reward
+    if data_only:
+        if conditional:
+            raise ValueError("data_only: no same-step parents")
+        masks, extra = data_only_rules.description(dataset, ~pairs_seen)
+        info |= extra
+        reward = data_only_rules.model_reward(dataset)
     return FactorBounds(
-        lo, hi, dataset.state_cards, dataset.B, dataset.reward, info=info, conditional=conditional,
-        seen=pairs_seen,
+        lo, hi, dataset.state_cards, dataset.B, reward, info=info, conditional=conditional,
+        seen=pairs_seen, data_only=masks,
     )

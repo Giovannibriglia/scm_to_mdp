@@ -112,11 +112,14 @@ def solve(
     nature: str = "adversarial",
     V0: np.ndarray | None = None,
     allowed: np.ndarray | None = None,
+    fixed_v: np.ndarray | None = None,
+    fixed_q: np.ndarray | None = None,
 ) -> Solution:
     """The best policy against nature. nature: "adversarial" (the promise: a lower bound) or
     "cooperative" (an upper bound on the best value over policies and kernels). V0: the start. allowed
     [S, K] (optional): the max only over these actions, a state with none at the value floor
-    (stopping.greedy: still a sound lower bound)."""
+    (stopping.greedy: still a sound lower bound). fixed_v, fixed_q (optional): the data-only sinks
+    (stopping.data_only_values)."""
     inner = Nature(mdp, nature)
     V = np.zeros(mdp.L.shape[0]) if V0 is None else np.asarray(V0, dtype=float)
     floor = value_floor(mdp.reward, gamma) if allowed is not None else None
@@ -124,7 +127,7 @@ def solve(
     while True:
         sweeps += 1
         Q = mdp.reward.R + inner.expectation(mdp.reward.backup(V, gamma))  # [S, K]
-        V_new, pi = greedy(Q, allowed, floor)
+        V_new, pi = greedy(Q, allowed, floor, fixed_v, fixed_q)
         step = np.abs(V_new - V).max()
         if step < stop_at(tol, gamma):
             seconds = (time.perf_counter() - start) / sweeps

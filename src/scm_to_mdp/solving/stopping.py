@@ -51,10 +51,39 @@ def value_floor(reward, gamma: float) -> float:
     return r_min / (1 - gamma)
 
 
-def greedy(Q: np.ndarray, allowed: np.ndarray | None = None, floor: float | None = None):
+def data_only_values(reward, gamma: float, masks: dict | None):
+    """(fixed_v [S], fixed_q [S, K]) of a data-only model (scm_learning/data_only.py), NaN where not fixed.
+    V_min = min(r_min, 0) / (1 - gamma), r_min the smallest one-step reward (0: an episode may end). A state never
+    seen as a source is a known state: V_min after its own arrival reward. A state holding a value never seen is
+    unknown: it is entered with the smallest arrival reward, so its value is set to make
+    r_next(s) + gamma V(s) = min r_next + gamma V_min. A pair with an unseen row sends all its mass to an
+    unknown sink: Q = R + min r_next + gamma V_min. Every fixed value is below the true one, so the robust
+    update keeps a lower bound (badings_claude, 2026-11-06)."""
+    S, K = reward.R.shape
+    fixed_v, fixed_q = np.full(S, np.nan), np.full((S, K), np.nan)
+    if masks is None:
+        return None, None
+    r_next_min = float(reward.r_next.min()) if reward.r_next.size else 0.0
+    v_min = min(float(reward.R.min()) + r_next_min, 0.0) / (1 - gamma)
+    fixed_v[masks["never_source"]] = v_min
+    unknown = masks["unknown"]
+    fixed_v[unknown] = v_min + (r_next_min - reward.r_next[unknown]) / max(gamma, 1e-12)
+    doomed = masks["doomed"] & np.isnan(fixed_v)[:, None]
+    fixed_q[doomed] = (reward.R + r_next_min + gamma * v_min)[doomed]
+    return fixed_v, fixed_q
+
+
+def greedy(
+    Q: np.ndarray,
+    allowed: np.ndarray | None = None,
+    floor: float | None = None,
+    fixed_v: np.ndarray | None = None,
+    fixed_q: np.ndarray | None = None,
+):
     """(V, pi) of one value-iteration step: the max of Q [S, K] over the actions. allowed [S, K] (bool,
     optional): only over the allowed actions ("seen pairs only", tool/methods.py); a state with none gets
-    the constant floor (value_floor), and its action is the best of all (any action would do).
+    the constant floor (value_floor), and its action is the best of all (any action would do). fixed_q, fixed_v
+    (optional, NaN where free): the data-only sinks (data_only_values), applied before / after the max.
 
     Soundness (adversarial nature): restricted to the allowed actions, with the floor at the states that
     have none, the robust update is still a gamma-contraction (a max over fewer actions; a constant), and
@@ -66,12 +95,18 @@ def greedy(Q: np.ndarray, allowed: np.ndarray | None = None, floor: float | None
     [0, 1]). A max over fewer actions can only lower the value. (badings_claude, 2026-11-06: the proof
     is general knowledge, not in its references; closest: actions enabled by data, Nazeri et al. 2025,
     Sec. IV.A and Thm 1; enabled actions A(s), Suilen et al. 2024, Def. 1, p. 3 ⚠ pages not re-checked.)"""
+    if fixed_q is not None:  # data-only: the pairs sent to a sink (data_only_values)
+        Q = np.where(np.isnan(fixed_q), Q, fixed_q)
     if allowed is None:
-        return Q.max(1), Q.argmax(1)
-    masked = np.where(allowed, Q, -np.inf)
-    empty = ~allowed.any(1)
-    V = np.where(empty, floor, masked.max(1))
-    return V, np.where(empty, Q.argmax(1), masked.argmax(1))
+        V, pi = Q.max(1), Q.argmax(1)
+    else:
+        masked = np.where(allowed, Q, -np.inf)
+        empty = ~allowed.any(1)
+        V = np.where(empty, floor, masked.max(1))
+        pi = np.where(empty, Q.argmax(1), masked.argmax(1))
+    if fixed_v is not None:  # data-only: the sinks
+        V = np.where(np.isnan(fixed_v), V, fixed_v)
+    return V, pi
 
 
 def sound_lower_bound(V_new, step: float, gamma: float):

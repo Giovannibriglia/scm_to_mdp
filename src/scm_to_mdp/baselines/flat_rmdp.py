@@ -11,12 +11,23 @@ from nbn.uncertainty.builders import interval_set_from_counts
 
 from scm_to_mdp.baselines.flat_mdp import flat_counts
 from scm_to_mdp.core import Dataset, IntervalMDP
+from scm_to_mdp.scm_learning import data_only as rules
 from scm_to_mdp.scm_learning.families import seen_info
 
 
-def learn(dataset: Dataset, delta: float = 0.05) -> IntervalMDP:
+def learn(dataset: Dataset, delta: float = 0.05, data_only: bool = False) -> IntervalMDP:
+    """data_only: the intervals and the sinks of scm_learning/data_only.py (one factor: the joint next state;
+    a row is the pair (s, a), its weight the product over the state's and the action's value codes)."""
     counts = flat_counts(dataset)  # [S, K, S']
     S, K, _ = counts.shape
+    if data_only:
+        rows_w = rules.code_weight(dataset.B)[:, None] * rules.code_weight(dataset.actions)[None, :]  # [S, K]
+        L, U = rules.intervals(counts.reshape(S * K, S), rows_w.reshape(-1), rules.code_weight(dataset.B), delta)
+        L, U = L.reshape(S, K, S), U.reshape(S, K, S)
+        seen = counts.sum(-1) > 0
+        masks, extra = rules.description(dataset, ~seen)
+        return IntervalMDP(L, U, rules.model_reward(dataset), info=seen_info(seen) | extra, seen=seen,
+                           data_only=masks)  # fmt: skip
     sets = interval_set_from_counts(
         torch.tensor(counts.reshape(S * K, S)), delta=delta, method="clopper_pearson", sampling="trajectory"
     )

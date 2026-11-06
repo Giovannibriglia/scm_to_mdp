@@ -71,6 +71,7 @@ from scm_to_mdp.core import (
 from scm_to_mdp.scm_learning import nbn_intervals, nbn_point
 from scm_to_mdp.selection import bic_best, given
 from scm_to_mdp.solving import factored_robust_vi, nature_mdp, robust_vi, value_iteration, vertex_robust_vi
+from scm_to_mdp.solving.stopping import data_only_values
 from scm_to_mdp.utils.limits import run_limited
 
 LEARNERS = (
@@ -128,6 +129,9 @@ SOLVERS_FOR = {
 # (solving/stopping.greedy: the promise stays a sound lower bound)
 SEEN_ONLY_SOLVERS = ("box_robust_vi", "mccormick_robust_vi", "exact_robust_vi", "robust_vi", "vi")
 SEEN_ONLY_LEARNERS = ("causal", "flat_rmdp", "flat_mdp")
+# "data-only" (learning_options data_only=True; scm_learning/data_only.py): no value domains, support or terminal
+# states given; the sinks' values reach the solver (stopping.data_only_values)
+DATA_ONLY_SOLVERS = SEEN_ONLY_SOLVERS
 ROBUST_SOLVERS = ("box_robust_vi", "vertex_robust_vi", "mccormick_robust_vi", "exact_robust_vi", "robust_vi")
 STEPS = ("discovery", "selection", "learning", "relax", "training", "solve")  # every step a method can have
 STOPPED = ("timeout", "memout")
@@ -292,6 +296,10 @@ class Method:
                 )
         if "allowed" in self.solver_options:
             raise ValueError("the allowed actions come from the data: use solver_options seen_only=True")
+        if any(k in self.solver_options for k in ("fixed_v", "fixed_q")):
+            raise ValueError("the data-only sinks come from the model: use learning_options data_only=True")
+        if self.learning_options.get("data_only") and self.solver not in DATA_ONLY_SOLVERS:
+            raise ValueError(f"data_only: solvers {DATA_ONLY_SOLVERS}, not {self.solver!r}")
         solver_options = {k: v for k, v in self.solver_options.items() if k != "seen_only"}
         solver_fn = {
             "box_robust_vi": robust_vi.solve,
@@ -537,16 +545,19 @@ def solver_steps(data: Dataset, method: Method, gamma: float, seed: int = 0) -> 
     """The steps of method's solver as (name, function of the learned model). seed: the run's seed,
     for the solvers that draw random numbers (offline DQN / CQL) unless an option sets it."""
     opts = {k: v for k, v in method.solver_options.items() if k != "seen_only"}
-    if method.solver_options.get("seen_only"):  # the max only over the pairs with data (SEEN_ONLY_SOLVERS)
+    seen_only = bool(method.solver_options.get("seen_only"))
 
-        def allowed(model):
+    def allowed(model):
+        """The solver's extra inputs from the model: the seen pairs (seen_only, SEEN_ONLY_SOLVERS) and the
+        data-only sinks (learning option data_only: stopping.data_only_values)."""
+        out = {}
+        if seen_only:
             if model.seen is None:
                 raise ValueError("seen_only needs a model that records its seen pairs (S4)")
-            return {"allowed": model.seen}
-    else:
-
-        def allowed(model):
-            return {}
+            out["allowed"] = model.seen
+        if getattr(model, "data_only", None) is not None:
+            out["fixed_v"], out["fixed_q"] = data_only_values(model.reward, gamma, model.data_only)
+        return out
 
     if method.solver == "box_robust_vi":
         return [
@@ -683,7 +694,8 @@ def learn(
         if isinstance(x, FactorBounds):
             result.info.update({k: v for k, v in x.info.items() if not k.startswith("_")})  # "_": internal
         if isinstance(x, IntervalMDP):  # flat: only its seen-pairs shares (its info may hold arrays: FOCUS)
-            result.info.update({k: x.info[k] for k in ("seen_pairs", "states_no_seen") if k in x.info})
+            keys = ("seen_pairs", "states_no_seen", "sink_states", "doomed_pairs")
+            result.info.update({k: x.info[k] for k in keys if k in x.info})
     result.model = x
     return result
 
