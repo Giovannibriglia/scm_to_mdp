@@ -38,6 +38,33 @@ def test_the_bracket_contains_the_promise_of_the_solved_policy(env, dataset):
     assert np.allclose(lo, best.V, atol=1e-5)  # the solver's promise is its policy's lower bound
 
 
+@pytest.mark.parametrize("step_reward", [-1.0, 1.0])
+def test_the_bracket_of_a_data_only_model_uses_its_sinks(step_reward):
+    """The value bracket of a data-only model (bible R15): a state that is terminal in truth is never a
+    source, so the model does not know the episode ends there and makes it a sink. The true value of state 0
+    is one step reward. Without the sinks the model keeps earning the step reward after the true end, so with
+    -1 the upper end falls below the truth and with +1 the lower end rises above it; with the sinks (worst
+    value for V_lo, best for V_up, stopping.data_only_values) both ends bound the truth."""
+    from scm_to_mdp.solving.stopping import data_only_values
+
+    R, r_next, true_value = np.full((2, 1), step_reward), np.zeros(2), step_reward
+    L = np.zeros((2, 1, 2))
+    L[0, 0, 1] = 1.0  # the data: 0 -> 1 every time
+    U = L.copy()
+    U[1, 0, :] = 1.0  # state 1 never a source: its row is free
+    mdp = IntervalMDP(L, U, Reward(R, r_next, np.zeros(2, bool)))  # data-only: no terminal flags
+    masks = {"unknown": np.zeros(2, bool), "never_source": np.array([False, True]),
+             "doomed": np.zeros((2, 1), bool)}  # fmt: skip
+    pi = np.ones((2, 1))
+    plain = {n: robust_vi.evaluate(mdp, pi, GAMMA, nature=n)[0] for n in robust_vi.NATURES}
+    assert not plain["adversarial"] <= true_value + 1e-6 <= plain["cooperative"] + 2e-6  # the gap
+    lo_v, lo_q = data_only_values(mdp.reward, GAMMA, masks)
+    up_v, up_q = data_only_values(mdp.reward, GAMMA, masks, optimistic=True)
+    V_lo = robust_vi.evaluate(mdp, pi, GAMMA, nature="adversarial", fixed_v=lo_v, fixed_q=lo_q)
+    V_up = robust_vi.evaluate(mdp, pi, GAMMA, nature="cooperative", fixed_v=up_v, fixed_q=up_q)
+    assert V_lo[0] <= true_value + 1e-6 <= V_up[0] + 2e-6
+
+
 def test_failure_states_are_the_terminals_that_pay_less():
     r = Reward(np.zeros((4, 1)), np.array([0.0, 1.0, 0.0, 0.5]), np.array([True, True, False, True]))
     assert robustness.failure_states(r).tolist() == [True, False, False, True]

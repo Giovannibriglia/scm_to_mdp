@@ -34,6 +34,7 @@ from scm_to_mdp.compilation import product_bounds
 from scm_to_mdp.core import Dataset, FactorBounds, IntervalMDP, Reward, Solution
 from scm_to_mdp.ground_truth import MDPGroundTruth
 from scm_to_mdp.solving import robust_vi
+from scm_to_mdp.solving.stopping import data_only_values
 
 TOL = 1e-6  # slack of every comparison (the solvers stop at 1e-7)
 
@@ -93,12 +94,22 @@ def checks(
     V_star, V_pi = observed_average(truth, V_star_full), observed_average(truth, V_true)
     span = float(start @ V_star - start @ observed_average(truth, truth.random_policy_values(gamma)))
 
+    # a data-only model: its sinks at the worst value for V_lo and the residual, at the best for V_up
+    # (stopping.data_only_values), restricted to the actions the policy plays as the set is
+    masks = getattr(full, "data_only", None)
+    lo_v, lo_q = data_only_values(full.reward, gamma, masks)
+    up_v, up_q = data_only_values(full.reward, gamma, masks, optimistic=True)
+    played = (np.arange(S)[:, None], robust_vi.played_actions(pi_full))
+    lo_q, up_q = (None if q is None else q[played] for q in (lo_q, up_q))
     # started at the solver's promise and at V_opt (both close); any start gives the same sound bounds
-    V_lo = robust_vi.evaluate(mdp, pi, gamma, nature="adversarial", V0=solution.V)
-    V_up = robust_vi.evaluate(mdp, pi, gamma, nature="cooperative", V0=V_opt_obs)
-    backup = (
-        pi * (mdp.reward.R + robust_vi.Nature(mdp).expectation(mdp.reward.backup(solution.V, gamma)))
-    ).sum(1)
+    V_lo = robust_vi.evaluate(mdp, pi, gamma, nature="adversarial", V0=solution.V, fixed_v=lo_v, fixed_q=lo_q)
+    V_up = robust_vi.evaluate(mdp, pi, gamma, nature="cooperative", V0=V_opt_obs, fixed_v=up_v, fixed_q=up_q)
+    Q_back = mdp.reward.R + robust_vi.Nature(mdp).expectation(mdp.reward.backup(solution.V, gamma))
+    if lo_q is not None:
+        Q_back = np.where(np.isnan(lo_q), Q_back, lo_q)
+    backup = (pi * Q_back).sum(1)
+    if lo_v is not None:
+        backup = np.where(np.isnan(lo_v), backup, lo_v)
     out = {
         "bracket_holds": bool(np.all((V_lo[live] <= V_pi[live] + TOL) & (V_pi[live] <= V_up[live] + TOL))),
         "bracket_width": float(start @ (V_up - V_lo)) / span if span > 0 else float("nan"),

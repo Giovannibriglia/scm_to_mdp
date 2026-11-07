@@ -93,12 +93,17 @@ def _bound(V_new: np.ndarray, step: float, gamma: float, adversarial: bool) -> n
     return sound_lower_bound(V_new, step, gamma) if adversarial else V_new + gamma / (1 - gamma) * step
 
 
+def played_actions(policy: np.ndarray) -> np.ndarray:
+    """[S, m] the actions on_policy keeps: per state, the policy's actions in decreasing probability."""
+    m = max(int((policy > 0).sum(1).max()), 1)
+    return np.argsort(-policy, axis=1, kind="stable")[:, :m]
+
+
 def on_policy(mdp: IntervalMDP, policy: np.ndarray) -> tuple[IntervalMDP, np.ndarray]:
     """(the set on the actions the policy plays [S, m, S'], their probabilities [S, m]); m = the most
     actions any state plays with positive probability (1 for a deterministic policy). Row k of state s
     is the policy's k-th most likely action there (rows of zero probability pad states playing fewer)."""
-    m = max(int((policy > 0).sum(1).max()), 1)
-    actions = np.argsort(-policy, axis=1, kind="stable")[:, :m]  # [S, m]
+    actions = played_actions(policy)  # [S, m]
     rows = np.arange(policy.shape[0])[:, None]
     reward = dataclasses.replace(mdp.reward, R=mdp.reward.R[rows, actions])
     restricted = IntervalMDP(mdp.L[rows, actions], mdp.U[rows, actions], reward, mdp.info)
@@ -143,18 +148,29 @@ def evaluate(
     tol: float = 1e-7,
     nature: str = "adversarial",
     V0: np.ndarray | None = None,
+    fixed_v: np.ndarray | None = None,
+    fixed_q: np.ndarray | None = None,
 ) -> np.ndarray:
     """[S] the value of a fixed policy against nature: policy [S, K] action probabilities (a
     deterministic policy is one-hot). Adversarial: a sound lower bound on the policy's value under
     every kernel in the set; cooperative: a sound upper bound. The fixed-policy operator is a
     gamma-contraction, so the same stopping rule applies. Runs on the actions the policy plays
-    (on_policy); V0: the start."""
+    (on_policy); V0: the start. fixed_v [S], fixed_q [S, K] (optional, NaN where free, K the policy's
+    columns): the data-only sinks (stopping.data_only_values, with optimistic=True for the cooperative
+    bound), applied as in solve."""
+    if fixed_q is not None:
+        rows = np.arange(policy.shape[0])[:, None]
+        fixed_q = np.asarray(fixed_q, dtype=float)[rows, played_actions(policy)]
     mdp, policy = on_policy(mdp, policy)
     inner = Nature(mdp, nature)
     V = np.zeros(mdp.L.shape[0]) if V0 is None else np.asarray(V0, dtype=float)
     while True:
         Q = mdp.reward.R + inner.expectation(mdp.reward.backup(V, gamma))
+        if fixed_q is not None:
+            Q = np.where(np.isnan(fixed_q), Q, fixed_q)
         V_new = (policy * Q).sum(1)
+        if fixed_v is not None:
+            V_new = np.where(np.isnan(fixed_v), V_new, fixed_v)
         step = np.abs(V_new - V).max()
         if step < stop_at(tol, gamma):
             return _bound(V_new, step, gamma, inner.adversarial)
