@@ -30,6 +30,33 @@ def test_optimistic_values_of_an_exact_model_are_its_values():
     assert np.allclose(V_opt, truth.optimal_values(0.9), atol=1e-5)
 
 
+def test_optimistic_values_put_the_data_only_sinks_at_the_best_value():
+    """R15: a state that is terminal in truth is never seen as a source, so the data-only model makes it
+    a sink and does not know it ends the episode. With step rewards of -1 the cooperative model without
+    the sinks keeps paying after the true end (V_opt = -10 < the true -1); with the sink at
+    V_max = max(r_max, 0)/(1-gamma) = 0 it is an upper bound again."""
+    from scm_to_mdp.core import IntervalMDP, Reward
+
+    gamma = 0.9
+    R, r_next = -np.ones((2, 1)), np.zeros(2)
+    true_value = -1.0  # from state 0: pay -1, arrive in the terminal state 1, the episode ends
+    L = np.zeros((2, 1, 2))
+    L[0, 0, 1] = 1.0  # the data: 0 -> 1 every time
+    U = L.copy()
+    U[1, 0, :] = 1.0  # state 1 never a source: its row is free
+    masks = {
+        "unknown": np.zeros(2, bool),
+        "never_source": np.array([False, True]),
+        "doomed": np.zeros((2, 1), bool),
+    }
+    reward = Reward(R, r_next, np.zeros(2, bool))  # data-only: the terminal flags are not given
+    without = evaluation.optimistic_values(IntervalMDP(L, U, reward), gamma)
+    assert without[0] < true_value - 1  # the gap R15 is about
+    V_opt = evaluation.optimistic_values(IntervalMDP(L, U, reward, data_only=masks), gamma)
+    assert V_opt[0] >= true_value - 1e-6
+    assert V_opt[1] == 0.0  # V_max
+
+
 def test_action_recall():
     env = SysAdmin(3, 0)
     truth = env.ground_truth()

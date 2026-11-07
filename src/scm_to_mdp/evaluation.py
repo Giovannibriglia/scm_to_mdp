@@ -171,12 +171,21 @@ def optimistic_values(
     returned as a sound UPPER bound on the fixed point (solving/stopping.py). tol 1e-5 rather than the
     solvers' 1e-7: a quarter fewer sweeps, and V_opt moved by at most 4e-14 on learned Chemistry
     models (the corrected iterate is close to the fixed point when the error shrinks at one rate).
-    V0: the start (e.g. the robust solver's V, below V_opt and close to it; any start is sound)."""
+    V0: the start (e.g. the robust solver's V, below V_opt and close to it; any start is sound).
+    A data-only model (scm_learning/data_only.py) has its sinks at the BEST value here
+    (stopping.data_only_values(optimistic=True)): the worst-value sinks of the promise would not
+    bound V_opt."""
     from scm_to_mdp.compilation import product_bounds
     from scm_to_mdp.solving import robust_vi
+    from scm_to_mdp.solving.stopping import data_only_values
 
     mdp = product_bounds.compile(model) if isinstance(model, FactorBounds) else model
-    return robust_vi.solve(mdp, gamma, tol=tol, nature="cooperative", V0=V0).V
+    masks = getattr(mdp, "data_only", None)
+    fixed_v, fixed_q = data_only_values(mdp.reward, gamma, masks, optimistic=True)
+    solved = robust_vi.solve(
+        mdp, gamma, tol=tol, nature="cooperative", V0=V0, fixed_v=fixed_v, fixed_q=fixed_q
+    )
+    return solved.V
 
 
 def certificate(model, truth: MDPGroundTruth, solution: Solution, V_true: np.ndarray, V_star: np.ndarray,

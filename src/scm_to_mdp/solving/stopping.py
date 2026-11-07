@@ -51,25 +51,43 @@ def value_floor(reward, gamma: float) -> float:
     return r_min / (1 - gamma)
 
 
-def data_only_values(reward, gamma: float, masks: dict | None):
+def data_only_values(reward, gamma: float, masks: dict | None, optimistic: bool = False):
     """(fixed_v [S], fixed_q [S, K]) of a data-only model (scm_learning/data_only.py), NaN where not fixed.
     V_min = min(r_min, 0) / (1 - gamma), r_min the smallest one-step reward (0: an episode may end). A state never
     seen as a source is a known state: V_min after its own arrival reward. A state holding a value never seen is
     unknown: it is entered with the smallest arrival reward, so its value is set to make
     r_next(s) + gamma V(s) = min r_next + gamma V_min. A pair with an unseen row sends all its mass to an
     unknown sink: Q = R + min r_next + gamma V_min. Every fixed value is below the true one, so the robust
-    update keeps a lower bound (badings_claude, 2026-11-06)."""
+    update keeps a lower bound (badings_claude, 2026-11-06).
+
+    optimistic=True: the same sinks at the BEST value, for an upper bound (the certificate's V_opt,
+    evaluation.optimistic_values): V_max = max(r_max, 0) / (1 - gamma), r_max the largest one-step reward,
+    and an unknown state entered with the largest arrival reward. Every value is at most V_max: with
+    c = V_max >= 0, T(c e) <= c e (an episode that ends earns 0 after it), so V* <= c (kallenberg_claude:
+    Kallenberg, Thm 3.3, p. 46). Every fixed value is then above the true one, and with the true kernel in
+    the set on the other rows the cooperative operator T' satisfies T'V* >= V* (not T'V >= TV for every V,
+    which fails at the fixed entries); T' is a monotone gamma-contraction (Lemma 3.1, p. 46; Thm 3.4,
+    pp. 48-49), so its fixed point is >= V* (Thm 3.3(2), p. 46). The unestimated mass at the best value is
+    the upper bound of [Ashok et al. 2019] (U-hat, pdf 8; badings_claude, 2026-11-07), black-box form; with
+    gamma < 1 no end-component handling is needed. The worst-value sinks are not sound there: with the
+    terminal states removed and negative rewards, a true terminal state the model keeps paying for would
+    pull V_opt below the true value (bible R15). Assumes that a true terminal state is never a source in
+    the data (sampling stops there)."""
     S, K = reward.R.shape
     fixed_v, fixed_q = np.full(S, np.nan), np.full((S, K), np.nan)
     if masks is None:
         return None, None
-    r_next_min = float(reward.r_next.min()) if reward.r_next.size else 0.0
-    v_min = min(float(reward.R.min()) + r_next_min, 0.0) / (1 - gamma)
-    fixed_v[masks["never_source"]] = v_min
+    if optimistic:
+        r_next_end = float(reward.r_next.max()) if reward.r_next.size else 0.0
+        v_end = max(float(reward.R.max()) + r_next_end, 0.0) / (1 - gamma)
+    else:
+        r_next_end = float(reward.r_next.min()) if reward.r_next.size else 0.0
+        v_end = min(float(reward.R.min()) + r_next_end, 0.0) / (1 - gamma)
+    fixed_v[masks["never_source"]] = v_end
     unknown = masks["unknown"]
-    fixed_v[unknown] = v_min + (r_next_min - reward.r_next[unknown]) / max(gamma, 1e-12)
+    fixed_v[unknown] = v_end + (r_next_end - reward.r_next[unknown]) / max(gamma, 1e-12)
     doomed = masks["doomed"] & np.isnan(fixed_v)[:, None]
-    fixed_q[doomed] = (reward.R + r_next_min + gamma * v_min)[doomed]
+    fixed_q[doomed] = (reward.R + r_next_end + gamma * v_end)[doomed]
     return fixed_v, fixed_q
 
 

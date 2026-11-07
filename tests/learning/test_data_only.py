@@ -69,6 +69,22 @@ def test_the_sink_values_are_below_every_value(scarce):
     assert np.all(reward.r_next[~never_source] + GAMMA * v[~never_source] <= reward.r_next.min() + GAMMA * floor + 1e-9)
 
 
+def test_the_optimistic_sink_values_are_above_every_value(scarce):
+    """The same sinks for the certificate's upper bound (data_only_values(optimistic=True), bible R15)."""
+    reward = data_only.model_reward(scarce)
+    _, never_source = data_only.sinks(scarce)
+    doomed = np.ones_like(scarce.reward.R, dtype=bool)
+    masks = {"unknown": ~never_source, "never_source": never_source, "doomed": doomed}
+    v, q = data_only_values(reward, GAMMA, masks, optimistic=True)
+    ceiling = max(reward.R.max() + reward.r_next.max(), 0.0) / (1 - GAMMA)
+    assert np.all(v[never_source] == pytest.approx(ceiling))
+    arrival = reward.r_next[~never_source] + GAMMA * v[~never_source]
+    assert np.all(arrival >= reward.r_next.max() + GAMMA * ceiling - 1e-9)
+    lo_v, _ = data_only_values(reward, GAMMA, masks)
+    assert np.all(v >= lo_v)
+    assert np.isnan(q).all()  # every state is a sink here, so no pair is left to fix
+
+
 ARMS = {
     "ia": Method("causal", "box_robust_vi", learning_options=DATA_ONLY, **TRUE),
     "exact": Method("causal", "exact_robust_vi", learning_options=DATA_ONLY, **TRUE),
