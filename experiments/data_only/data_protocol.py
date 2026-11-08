@@ -26,8 +26,13 @@ import protocol as clear27  # noqa: E402
 
 common = clear27.common
 EXPERIMENT = "data_only"
-DOMAIN = "sysadmin"
-SIZES = [2, 3, 4, 5, 6, 7, 8]
+DOMAIN = "sysadmin"  # the default domain
+SIZES = {  # every domain's sizes here (laptop scale)
+    "sysadmin": [2, 3, 4, 5, 6, 7, 8],  # 4 .. 256 states
+    "sepsis": [2, 3, 4],  # vitals: 144 .. 1440 states
+    "aircraft": ["4x3", "5x4", "6x4", "8x5", "8x6", "10x7", "12x8"],  # 80 .. 1053 states
+    "drone": ["3-1", "4-1", "5-1", "6-1", "7-1"],  # 27 .. 343 states
+}
 SEEDS = list(range(10))
 N_TRANSITIONS = [10, 20, 50, 100, 200, 500, 1000, 2000, 5000, 10_000, 20_000, 50_000, 100_000]
 SOURCES = ("dynotears_lagged", "pcmci_lagged", "fullfact", "sparse", "flat", "truegraph", "strehl", "met")
@@ -41,9 +46,9 @@ def data_only_name(name: str) -> str:
     return f"{name[:-1]}, {LABEL})" if name.endswith(")") else f"{name} ({LABEL})"
 
 
-def methods(source: str) -> dict:
+def methods(source: str, domain: str = DOMAIN) -> dict:
     """The oracle, then every kept arm of the source and its data-only twin."""
-    every = clear27.source_methods(source, clear27.DOMAINS[DOMAIN])
+    every = clear27.source_methods(source, clear27.DOMAINS[domain])
     if source == "flat":
         kept = {n: every[n] for n in FLAT_KEEP}
     else:
@@ -55,15 +60,15 @@ def methods(source: str) -> dict:
     return out
 
 
-def experiment_grid(source: str):
-    base = clear27.experiment_grid(DOMAIN, source)
+def experiment_grid(source: str, domain: str = DOMAIN):
+    base = clear27.experiment_grid(domain, source)
     smoke = clear27.SMOKE
     return dataclasses.replace(
         base,
-        sizes=SIZES[:1] if smoke else SIZES,
+        sizes=SIZES[domain][:1] if smoke else SIZES[domain],
         seeds=[0] if smoke else SEEDS,
         n_transitions=clear27.SMOKE_TRANSITIONS if smoke else N_TRANSITIONS,
-        methods=methods(source),
+        methods=methods(source, domain),
         save_models="none",
-        out_dir=common.ROOT / "results" / (EXPERIMENT + ("_smoke" if smoke else "")) / f"{DOMAIN}_{source}",
+        out_dir=common.ROOT / "results" / (EXPERIMENT + ("_smoke" if smoke else "")) / f"{domain}_{source}",
     )

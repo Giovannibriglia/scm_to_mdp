@@ -71,7 +71,7 @@ def data_only_values(reward, gamma: float, masks: dict | None, optimistic: bool 
     the upper bound of [Ashok et al. 2019] (U-hat, pdf 8; badings_claude, 2026-11-07), black-box form; with
     gamma < 1 no end-component handling is needed. The worst-value sinks are not sound there: with the
     terminal states removed and negative rewards, a true terminal state the model keeps paying for would
-    pull V_opt below the true value (bible R15). Assumes that a true terminal state is never a source in
+    pull V_opt below the true value. Assumes that a true terminal state is never a source in
     the data (sampling stops there)."""
     S, K = reward.R.shape
     fixed_v, fixed_q = np.full(S, np.nan), np.full((S, K), np.nan)

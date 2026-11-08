@@ -70,7 +70,7 @@ def test_the_sink_values_are_below_every_value(scarce):
 
 
 def test_the_optimistic_sink_values_are_above_every_value(scarce):
-    """The same sinks for the certificate's upper bound (data_only_values(optimistic=True), bible R15)."""
+    """The same sinks for the certificate's upper bound (data_only_values(optimistic=True))."""
     reward = data_only.model_reward(scarce)
     _, never_source = data_only.sinks(scarce)
     doomed = np.ones_like(scarce.reward.R, dtype=bool)

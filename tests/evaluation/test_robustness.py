@@ -40,7 +40,7 @@ def test_the_bracket_contains_the_promise_of_the_solved_policy(env, dataset):
 
 @pytest.mark.parametrize("step_reward", [-1.0, 1.0])
 def test_the_bracket_of_a_data_only_model_uses_its_sinks(step_reward):
-    """The value bracket of a data-only model (bible R15): a state that is terminal in truth is never a
+    """The value bracket of a data-only model: a state that is terminal in truth is never a
     source, so the model does not know the episode ends there and makes it a sink. The true value of state 0
     is one step reward. Without the sinks the model keeps earning the step reward after the true end, so with
     -1 the upper end falls below the truth and with +1 the lower end rises above it; with the sinks (worst

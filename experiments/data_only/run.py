@@ -34,6 +34,7 @@ def folder(base: Path, resume: bool) -> Path:
 
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description="data_only: every source in one pool of workers.")
+    parser.add_argument("--domains", nargs="+", choices=list(protocol.SIZES), default=[protocol.DOMAIN])
     parser.add_argument("--sources", nargs="+", choices=list(protocol.SOURCES), default=list(protocol.SOURCES))
     parser.add_argument("--resume", action="store_true")
     parser.add_argument("--workers", metavar="N")
@@ -41,14 +42,17 @@ def main(argv=None) -> int:
     if args.workers is not None:
         os.environ["SCM_TO_MDP_WORKERS"] = args.workers
     grids = []
-    for source in args.sources:
-        g = protocol.experiment_grid(source)
-        grids.append((source, dataclasses.replace(g, out_dir=folder(g.out_dir, args.resume))))
-    exps = []
-    for _, g in grids:
+    for domain in args.domains:
+        for source in args.sources:
+            g = protocol.experiment_grid(source, domain)
+            grids.append((f"{domain}_{source}", dataclasses.replace(g, out_dir=folder(g.out_dir, args.resume))))
+    exps, ranks = [], []
+    for name, g in grids:
         write_grid_file(g)
-        exps += experiments(g)
-    run_sweeps(exps, resume=True, title=f"{protocol.EXPERIMENT} ({len(grids)} sources)")
+        mine = experiments(g)
+        exps += mine
+        ranks += [args.domains.index(name.split("_")[0])] * len(mine)  # the domains in the order given
+    run_sweeps(exps, resume=True, title=f"{protocol.EXPERIMENT} ({len(grids)} sources)", ranks=ranks)
     failed = []
     for source, g in grids:
         try:
