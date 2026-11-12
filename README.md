@@ -68,7 +68,8 @@ Figures go to `outputs/clear27/<domain>/paper/` and `explore/` (PDF and PNG), wi
 ```
 
 `ablation_bic_score`: on SysAdmin, every graph the constraints allow (2^(N(N+1)): 64 at N=2, 4,096 at N=3)
-is scored with BIC and run through the box IMDP, to see whether a better BIC gives a better policy.
+is scored with BIC, AIC and BDeu and run through the box IMDP, to see whether a better score gives a
+better policy.
 
 ## The tool in three parts
 

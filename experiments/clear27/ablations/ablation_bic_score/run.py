@@ -5,11 +5,13 @@ For SysAdmin with N machines, EVERY graph our constraints allow is scored and ru
     constraints   the time order, and no edge inside a slice: an edge goes from an input at t (the N
                   machines and the action `reboot`) to a machine at t+1. N (N+1) possible edges, so
                   2^(N (N+1)) graphs: 64 at N=2, 4,096 at N=3, 1,048,576 at N=4.
-    per graph     its BIC on the data (the score of the selection step, selection/bic_best.py), then the
+    per graph     three scores on the data: BIC (the score of the selection step, selection/bic_best.py),
+                  AIC (the log-likelihood minus the number of parameters) and BDeu (the Bayesian score
+                  with a uniform Dirichlet prior of equivalent sample size BDEU_ESS); then the
                   steps of "PCMCI+ (lagged) -> IMDP (IA)" on that graph: the interval sets (delta and the
                   post-selection family of the lagged arms), the box, robust value iteration, and the
                   evaluation on the true model.
-    marked        the true graph, the empty and the full graph, the graph with the best BIC, and the
+    marked        the true graph, the empty and the full graph, the best graph of each score, and the
                   graphs PCMCI+ and DYNOTEARS find under the same constraints (their "lagged" arms).
 
 The data are clear27's (protocol.py: ring, uniform logger, the same seeds), so a dataset is the paper's.
@@ -66,9 +68,12 @@ DISCOVERIES = {  # mark -> (clear27 source, its arm): the discoveries under our 
     "pcmci": ("pcmci_lagged", "PCMCI+ (lagged) -> IMDP (IA)"),
     "dynotears": ("dynotears_lagged", "DYNOTEARS (lagged) -> IMDP (IA)"),
 }
+SCORES = ("bic", "aic", "bdeu")  # higher is better for each
+BDEU_ESS = 1.0  # BDeu's equivalent sample size (Heckerman, Geiger, Chickering 1995; 1 is the usual choice)
 SECONDS_PER_GRAPH = 0.006  # for the estimate printed at the start (measured at N=2 and 3: about 5 ms)
 GRAPH_COLUMNS = [
-    "seed", "n_transitions", "graph", "n_edges", "missing", "extra", "bic", "loglik", "n_params", "status",
+    "seed", "n_transitions", "graph", "n_edges", "missing", "extra", "bic", "aic", "bdeu", "loglik",
+    "n_params", "status",
     "value", "promise", "held", "covered", "width", "rows", "unseen", "true", "promise_raw",
 ]  # fmt: skip
 
@@ -120,21 +125,34 @@ def setup() -> dict:
 
 
 def family_scores(data, cards: dict) -> dict:
-    """(state var index, parent mask) -> (BIC, log-likelihood, parameters) of that family: N 2^(N+1)
-    families give the score of every graph (the BIC is a sum over the machines)."""
+    """(state var index, parent mask) -> (BIC, log-likelihood, parameters, BDeu) of that family: N 2^(N+1)
+    families give the scores of every graph (each score is a sum over the machines). Parameters and
+    BDeu's prior count the parent rows that can occur (bic_search.feasible_rows), as the BIC does."""
     import math
 
-    from scm_to_mdp.discovery.bic_search import feasible_rows
-    from scm_to_mdp.selection.bic_best import family_bic
+    import numpy as np
+    from scipy.special import gammaln
+
+    from scm_to_mdp.core import encode
+    from scm_to_mdp.discovery.bic_search import bic, feasible_rows
 
     scores, half_log_n = {}, 0.5 * math.log(len(data.df))
     for i, v in enumerate(data.state_vars):
+        child, values = data.df[v + NEXT_MARK].to_numpy(), cards[v]
         for mask in range(2 ** len(data.inputs)):
-            parents = tuple(p for j, p in enumerate(data.inputs) if (mask >> j) & 1)
-            rows = feasible_rows(parents, cards, data.action_vars, data.actions)
-            params = rows * (cards[v] - 1)
-            bic = family_bic(data.df, v + NEXT_MARK, parents, cards, rows)
-            scores[i, mask] = (bic, bic + half_log_n * params, params)
+            parents = [p for j, p in enumerate(data.inputs) if (mask >> j) & 1]
+            parent_cards = [cards[p] for p in parents]
+            rows = encode(data.df[parents].to_numpy(), parent_cards) if parents else np.zeros(len(child), int)
+            counts = np.zeros((math.prod(parent_cards), values))
+            np.add.at(counts, (rows, child), 1)
+            feasible = feasible_rows(tuple(parents), cards, data.action_vars, data.actions)
+            params = feasible * (values - 1)
+            score = bic(counts, feasible)
+            row_prior, cell_prior = BDEU_ESS / feasible, BDEU_ESS / (feasible * values)
+            seen = counts[counts.sum(1) > 0]  # a row without data adds nothing
+            bdeu = (gammaln(row_prior) - gammaln(row_prior + seen.sum(1))).sum()
+            bdeu += (gammaln(cell_prior + seen) - gammaln(cell_prior)).sum()
+            scores[i, mask] = (score, score + half_log_n * params, params, float(bdeu))
     return scores
 
 
@@ -169,21 +187,23 @@ def run_dataset(folder: str, machines: int, seed: int, n: int) -> dict:
     out.mkdir(parents=True, exist_ok=True)
     final = out / f"seed={seed}_n={n}.csv"
     partial = final.with_suffix(".csv.partial")
-    best = (-float("inf"), None)
+    best = dict.fromkeys(SCORES, (-float("inf"), None))  # score -> (its best value, the graph)
     with open(partial, "w", newline="") as f:
         writer = csv.writer(f)
         writer.writerow(GRAPH_COLUMNS)
         for graph in range(total):
             family = [scores[i, (graph >> (i * width)) & ((1 << width) - 1)] for i in range(len(state_vars))]
-            bic, loglik, params = (sum(x[k] for x in family) for k in range(3))
-            if bic > best[0]:
-                best = (bic, graph)  # a tie: the lowest number (the fewest high bits)
+            bic, loglik, params, bdeu = (sum(x[k] for x in family) for k in range(4))
+            aic = loglik - params
+            for name, score in zip(SCORES, (bic, aic, bdeu), strict=True):
+                if score > best[name][0]:
+                    best[name] = (score, graph)  # a tie: the lowest number
             result = learn(data, s["given"], None, parents_of(graph, state_vars, inputs), seed=seed)
             result = solve(result, data, exp.gamma, None, seed=seed)
             m = evaluate(result, data, truth, exp.gamma, starts, exp.failure_horizon) if result.ok else {}
             writer.writerow([
                 seed, n, graph, graph.bit_count(), (true_graph & ~graph).bit_count(),
-                (graph & ~true_graph).bit_count(), bic, loglik, params, result.status,
+                (graph & ~true_graph).bit_count(), bic, aic, bdeu, loglik, params, result.status,
                 normalised(m.get("true")), normalised(m.get("promise")), m.get("safe"), m.get("contain_all"),
                 m.get("s4_width"), m.get("s4_rows"), m.get("s4_unseen"), m.get("true"), m.get("promise"),
             ])  # fmt: skip
@@ -197,7 +217,8 @@ def run_dataset(folder: str, machines: int, seed: int, n: int) -> dict:
     row = {
         "machines": machines, "seed": seed, "n_transitions": n, "transitions": len(data.df), "graphs": total,
         "V_star_obs": reference["V_star_obs"], "V_random": reference["V_random"],
-        "true_graph": true_graph, "empty_graph": 0, "full_graph": total - 1, "best_bic_graph": best[1],
+        "true_graph": true_graph, "empty_graph": 0, "full_graph": total - 1,
+        **{f"best_{name}_graph": best[name][1] for name in SCORES},
         **marks, "seconds": round(time.monotonic() - start, 2),
     }  # fmt: skip
     final.with_suffix(".json").write_text(json.dumps(row))

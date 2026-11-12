@@ -1,4 +1,4 @@
-"""Figures of the ablation "BIC against performance, every graph" (run.py), one set per size N.
+"""Figures of the ablation "a score against performance, every graph" (run.py), one set per size N.
 
 Run from the repository root, after (or during) run.py:
     .venv/bin/python experiments/clear27/ablations/ablation_bic_score/plot.py               # the latest run
@@ -9,24 +9,34 @@ Input:  results/clear27/ablations/ablation_bic_score/sysadmin_<date>_<time>/N=<N
 Output: outputs/clear27/ablations/ablation_bic_score/N=<N>/<figure>.{pdf,png}
         outputs/clear27/ablations/ablation_bic_score/data/N=<N>_<figure>.csv   the numbers drawn
 
-Figures
-  bic_vs_value     every graph as a dot: its BIC rank in its dataset (0 = worst, 1 = best BIC) against the
-                   normalised value of its policy; one panel per number of transitions, the seeds pooled.
-                   Line: the mean value of the graphs in each twentieth of the BIC ranks.
-  bic_vs_promise   the same with the normalised promise (the certified lower bound).
-  correlation      Spearman's rank correlation between BIC and value, and BIC and promise, one per dataset.
-  bic_choice       what choosing the best-BIC graph gives: value and promise of that graph, of the true
-                   graph, of the graphs PCMCI+ and DYNOTEARS find, and of the best graph of all; and the
-                   share of graphs whose policy is strictly better than the best-BIC graph's.
-  edges            the value against the number of true edges a graph misses and of extra edges it has.
+The scores: BIC, AIC and BDeu (run.py); for each, higher is better.
 
-Marked graphs: true graph (gold), best BIC (black ring), PCMCI+ (red), DYNOTEARS (blue), as in the paper.
-A dataset where every graph has the same value has no correlation, and is left out of `correlation`.
+Figures
+  <score>_vs_value     every graph as a dot: its rank by the score in its dataset (0 = worst, 1 = best)
+                       against the normalised value of its policy; one panel per number of transitions,
+                       the seeds pooled, so a marked graph appears once per seed (ten rings "best BIC"
+                       are the ten datasets' best graphs, not ten graphs tied in one dataset). Line: the
+                       mean value of the graphs in each twentieth of the ranks.
+  <score>_vs_promise   the same with the normalised promise (the certified lower bound).
+  correlation          Spearman's rank correlation between each score and the value, and the promise,
+                       one per dataset.
+  choice               what choosing by a score gives: value and promise of the best graph of each score,
+                       of the true graph, of the graphs PCMCI+ and DYNOTEARS find, and of the best single
+                       graph: the ONE graph with the highest mean value over the seeds at that number of
+                       transitions (the same graph in every dataset, so it is a choice one could make,
+                       unlike the best graph of each dataset taken after the fact). Third panel: the share
+                       of graphs whose policy is strictly better than the graph a score picks.
+  edges                the value against the number of true edges a graph misses and of extra edges.
+
+Marked graphs: true graph (gold), PCMCI+ (red), DYNOTEARS (blue), as in the paper; the best graph of a
+score is a ring. A dataset where every graph has the same value has no correlation, and is left out.
 """
 
 import argparse
 import importlib.util
+import json
 import sys
+from datetime import datetime
 from pathlib import Path
 
 import matplotlib as mpl
@@ -56,22 +66,26 @@ def _paper():
 
 
 paper = _paper()
-BINS = 20  # the BIC ranks are cut in twentieths for the mean line
-# mark -> (column of datasets.csv, label, colour, marker)
-MARKS = {
+BINS = 20  # the ranks are cut in twentieths for the mean line
+SCORES = {"bic": ("BIC", "#0b0b0b"), "aic": ("AIC", paper.TEAL), "bdeu": ("BDeu", paper.PURPLE)}
+# mark -> (column of datasets.csv, label, colour, marker); the best graph of a score is added per figure
+GRAPHS = {
     "true": ("true_graph", "true graph", paper.GOLD, "o"),
     "pcmci": ("pcmci_graph", "PCMCI+", paper.RED, "s"),
     "dynotears": ("dynotears_graph", "DYNOTEARS", paper.BLUE, "D"),
-    "best_bic": ("best_bic_graph", "best BIC", "#0b0b0b", "o"),
 }
+BEST = {
+    score: (f"best_{score}_graph", f"best {label}", color, "o") for score, (label, color) in SCORES.items()
+}
+SINGLE = "single"  # the best single graph (see the module docstring)
 QUANTITIES = {"value": "normalised value", "promise": "normalised promise"}
 LIMITS = {"value": (-1.3, 1.15), "promise": (-3.2, 1.15)}
+DASH = (0, (4, 2))
+BY = ["seed", "n_transitions"]
 
 
 # ---- loading --------------------------------------------------------------------------------------
 def latest_run(results: Path) -> Path | None:
-    from datetime import datetime
-
     found = []
     for path in results.glob("sysadmin_*") if results.is_dir() else []:
         try:
@@ -87,29 +101,47 @@ def sizes_of(run: Path) -> list[int]:
 
 
 def load(run: Path, machines: int) -> tuple[pd.DataFrame, pd.DataFrame]:
-    """(graphs, datasets) of one size: every finished dataset of the run. graphs gets, per dataset, the
-    BIC rank of each graph in [0, 1] (1 = the best BIC)."""
-    import json
-
+    """(graphs, datasets) of one size: every finished dataset of the run. graphs gets, per dataset and
+    score, the rank of each graph in [0, 1] (1 = the best score): <score>_rank."""
     folder = run / f"N={machines}" / "graphs"
     records = [json.loads(p.read_text()) for p in sorted(folder.glob("*.json"))]
     datasets = pd.DataFrame(records).sort_values(["n_transitions", "seed"]).reset_index(drop=True)
     files = [folder / f"seed={r['seed']}_n={r['n_transitions']}.csv" for r in records]
     graphs = pd.concat([pd.read_csv(f) for f in files], ignore_index=True)
     graphs["held"] = graphs["held"].map({True: 1.0, False: 0.0, "True": 1.0, "False": 0.0})
-    by_dataset = graphs.groupby(["seed", "n_transitions"])["bic"]
-    graphs["bic_rank"] = (by_dataset.rank(method="average") - 1) / (by_dataset.transform("size") - 1)
+    for score in SCORES:
+        by_dataset = graphs.groupby(BY)[score]
+        graphs[f"{score}_rank"] = (by_dataset.rank(method="average") - 1) / (by_dataset.transform("size") - 1)
     return graphs, datasets
 
 
-def marked(graphs: pd.DataFrame, datasets: pd.DataFrame) -> pd.DataFrame:
+def marked(graphs: pd.DataFrame, datasets: pd.DataFrame, marks: dict) -> pd.DataFrame:
     """The marked graphs of every dataset, one row each, with the column `mark`."""
     rows = []
-    for mark, (column, _, _, _) in MARKS.items():
-        keys = datasets[["seed", "n_transitions", column]].dropna().rename(columns={column: "graph"})
+    for mark, (column, _, _, _) in marks.items():
+        keys = datasets[[*BY, column]].dropna().rename(columns={column: "graph"})
         keys["graph"] = keys["graph"].astype(np.int64)
-        rows.append(keys.merge(graphs, on=["seed", "n_transitions", "graph"]).assign(mark=mark))
+        rows.append(keys.merge(graphs, on=[*BY, "graph"]).assign(mark=mark))
     return pd.concat(rows, ignore_index=True)
+
+
+def best_single(graphs: pd.DataFrame) -> pd.DataFrame:
+    """Per number of transitions, the one graph with the highest mean value over the seeds: its rows
+    (one per seed), with mark SINGLE. Only graphs that finished in every seed count; a tie goes to the
+    graph with fewer edges, then to the lower number."""
+    rows = []
+    for n, d in graphs.groupby("n_transitions"):
+        seeds = d["seed"].nunique()
+        per = d.dropna(subset=["value"]).groupby("graph").agg(
+            mean=("value", "mean"), seeds=("seed", "nunique"), edges=("n_edges", "first")
+        )  # fmt: skip
+        per = per[per["seeds"] == seeds].reset_index()
+        if per.empty:
+            continue
+        per["mean"] = per["mean"].round(9)
+        graph = per.sort_values(["mean", "edges", "graph"], ascending=[False, True, True])["graph"].iloc[0]
+        rows.append(d[d["graph"] == graph].assign(mark=SINGLE, n_transitions=n))
+    return pd.concat(rows, ignore_index=True) if rows else pd.DataFrame(columns=[*graphs.columns, "mark"])
 
 
 # ---- helpers --------------------------------------------------------------------------------------
@@ -124,46 +156,45 @@ def save(out: Path, machines: int, fig, name: str, data: pd.DataFrame) -> None:
     print(f"  wrote N={machines}/{name}")
 
 
-def mark_handle(mark: str) -> Line2D:
-    _, label, color, marker = MARKS[mark]
-    ring = mark == "best_bic"
-    face, edge = ("none", color) if ring else (color, "white")
-    return Line2D([], [], ls="", marker=marker, ms=6, mfc=face, mec=edge,
-                  mew=1.2 if ring else 0.5, label=label)  # fmt: skip
-
-
-def draw_marks(ax, points: pd.DataFrame, x: str, y: str, limits) -> None:
-    for mark, (_, _, color, marker) in MARKS.items():
-        p = points[points["mark"] == mark]
-        ring = mark == "best_bic"
-        ax.scatter(p[x], p[y].clip(*limits), s=46 if ring else 24, marker=marker, zorder=5 if ring else 4,
-                   facecolor="none" if ring else color, edgecolor=color if ring else "white",
-                   linewidth=1.1 if ring else 0.5)  # fmt: skip
+def mark_handle(label: str, color: str, marker: str, hollow: bool) -> Line2D:
+    face, edge = ("none", color) if hollow else (color, "white")
+    return Line2D([], [], ls="", marker=marker, ms=6, mfc=face, mec=edge, mew=1.2 if hollow else 0.5,
+                  label=label)  # fmt: skip
 
 
 def k(n: int) -> str:
     return f"{n:,}"
 
 
+def spearman(x: pd.Series, y: pd.Series) -> float:
+    return stats.spearmanr(x, y).statistic if x.nunique() > 1 and y.nunique() > 1 else np.nan
+
+
 # ---- figures --------------------------------------------------------------------------------------
-def bic_against(graphs, datasets, quantity: str, machines: int, out: Path) -> None:
+def score_against(graphs, datasets, score: str, quantity: str, machines: int, out: Path) -> None:
+    label, rank = SCORES[score][0], f"{score}_rank"
+    marks = GRAPHS | {score: BEST[score]}
     ns = sorted(graphs["n_transitions"].unique())
     fig, axes = plt.subplots(1, len(ns), figsize=(2.5 * max(len(ns), 2), 2.7), sharex=True, sharey=True,
                              squeeze=False)  # fmt: skip
-    points, limits, rows = marked(graphs, datasets), LIMITS[quantity], []
+    points, limits, rows = marked(graphs, datasets, marks), LIMITS[quantity], []
     for ax, n in zip(axes.flat, ns, strict=True):
         g = graphs[(graphs["n_transitions"] == n) & graphs[quantity].notna()]
-        ax.scatter(g["bic_rank"], g[quantity].clip(*limits), s=3, color=paper.MUTED, alpha=0.18, lw=0,
-                   rasterized=True, zorder=1)  # fmt: skip
-        bins = np.minimum((g["bic_rank"] * BINS).astype(int), BINS - 1)
+        ax.scatter(g[rank], g[quantity].clip(*limits), s=3, color=paper.MUTED, alpha=0.18, lw=0,
+                   rasterized=True,
+                   zorder=1)  # fmt: skip
+        bins = np.minimum((g[rank] * BINS).astype(int), BINS - 1)
         mean = g.groupby(bins)[quantity].mean()
-        ax.plot((mean.index + 0.5) / BINS, mean.clip(*limits), color=paper.INK, lw=1.3, zorder=3)
-        draw_marks(ax, points[points["n_transitions"] == n], "bic_rank", quantity, limits)
-        rho = [
-            stats.spearmanr(d["bic"], d[quantity]).statistic
-            for _, d in g.groupby("seed")
-            if d[quantity].nunique() > 1
-        ]
+        centres = (mean.index + 0.5) / BINS
+        ax.plot(centres, mean.clip(*limits), color=paper.INK, lw=1.3, zorder=3)
+        for mark, (_, _, color, marker) in marks.items():
+            p = points[(points["mark"] == mark) & (points["n_transitions"] == n)]
+            hollow = mark == score
+            ax.scatter(p[rank], p[quantity].clip(*limits), s=46 if hollow else 24, marker=marker,
+                       zorder=5 if hollow else 4, facecolor="none" if hollow else color,
+                       edgecolor=color if hollow else "white", linewidth=1.1 if hollow else 0.5)  # fmt: skip
+        rho = [spearman(d[score], d[quantity]) for _, d in g.groupby("seed")]
+        rho = [r for r in rho if np.isfinite(r)]
         note = f"ρ = {np.median(rho):.2f}" if rho else "ρ: no spread"
         ax.text(0.04, 0.96, note, transform=ax.transAxes, va="top", fontsize=8.5, color=paper.INK2)
         ax.axhline(0, **paper.ZERO_LINE)
@@ -171,100 +202,96 @@ def bic_against(graphs, datasets, quantity: str, machines: int, out: Path) -> No
         ax.set_xlim(-0.03, 1.03)
         ax.set_ylim(*limits)
         ax.set_xticks([0, 0.5, 1])
-        ax.set_xlabel("BIC rank (1 = best)")
-        centres = (mean.index + 0.5) / BINS
-        rows.append(pd.DataFrame({"n_transitions": n, "bic_rank_bin": centres, "mean": mean.values,
+        ax.set_xlabel(f"{label} rank (1 = best)")
+        rows.append(pd.DataFrame({"n_transitions": n, "rank_bin": centres, "mean": mean.values,
                                   "median_spearman": np.median(rho) if rho else np.nan}))  # fmt: skip
     axes[0, 0].set_ylabel(QUANTITIES[quantity])
     fig.tight_layout(w_pad=1.0)
     handles = [Line2D([], [], ls="", marker="o", ms=3, color=paper.MUTED, label="a graph"),
                Line2D([], [], color=paper.INK, lw=1.3, label="mean")]  # fmt: skip
-    handles += [mark_handle(m) for m in MARKS]
+    handles += [mark_handle(lab, c, m, mark == score) for mark, (_, lab, c, m) in marks.items()]
     paper.legend_below(fig, handles, y=0.03)
-    save(out, machines, fig, f"bic_vs_{quantity}", pd.concat(rows))
+    save(out, machines, fig, f"{score}_vs_{quantity}", pd.concat(rows))
 
 
 def correlations(graphs: pd.DataFrame) -> pd.DataFrame:
-    """Spearman's correlation between BIC and each quantity, one row per dataset and quantity."""
+    """Spearman's correlation between each score and each quantity, one row per dataset."""
     rows = []
-    for (seed, n), d in graphs.groupby(["seed", "n_transitions"]):
-        for quantity in QUANTITIES:
-            x = d.dropna(subset=[quantity])
-            spread = x[quantity].nunique() > 1 and x["bic"].nunique() > 1
-            rho = stats.spearmanr(x["bic"], x[quantity]).statistic if spread else np.nan
-            rows.append(
-                {"seed": seed, "n_transitions": n, "quantity": quantity, "spearman": rho, "graphs": len(x)}
-            )
+    for (seed, n), d in graphs.groupby(BY):
+        for score in SCORES:
+            for quantity in QUANTITIES:
+                x = d.dropna(subset=[quantity])
+                rows.append({"seed": seed, "n_transitions": n, "score": score, "quantity": quantity,
+                             "spearman": spearman(x[score], x[quantity]), "graphs": len(x)})  # fmt: skip
     return pd.DataFrame(rows)
 
 
 def correlation(graphs, datasets, machines: int, out: Path) -> None:
     table = correlations(graphs)
     ns = sorted(table["n_transitions"].unique())
-    fig, ax = plt.subplots(figsize=(4.6, 3.1))
-    series = (("value", paper.BLUE, "o"), ("promise", paper.RED, "s"))
-    for shift, (quantity, color, marker) in zip((-0.09, 0.09), series,
-                                                strict=True):  # fmt: skip
-        t = table[(table["quantity"] == quantity) & table["spearman"].notna()]
-        x = t["n_transitions"].map({n: i for i, n in enumerate(ns)}) + shift
-        ax.scatter(x, t["spearman"], s=14, color=color, alpha=0.45, lw=0, marker=marker)
-        median = t.groupby("n_transitions")["spearman"].median().reindex(ns)
-        ax.plot(np.arange(len(ns)) + shift, median.values, **paper.paper_line(color, marker, ms=5))
-    ax.axhline(0, **paper.ZERO_LINE)
-    ax.set_xticks(range(len(ns)))
-    ax.set_xticklabels([k(n) for n in ns])
-    ax.set_ylim(-1.05, 1.05)
-    ax.set_xlabel("transitions")
-    ax.set_ylabel("rank correlation with BIC")
-    handles = [Line2D([], [], **paper.paper_line(paper.BLUE, "o", "normalised value", ms=5)),
-               Line2D([], [], **paper.paper_line(paper.RED, "s", "normalised promise", ms=5))]  # fmt: skip
-    fig.tight_layout()
-    paper.legend_below(fig, handles, y=0.03)  # median over seeds; a dot is one dataset
+    fig, axes = plt.subplots(1, 2, figsize=(7.6, 3.0), sharey=True)
+    shifts = np.linspace(-0.16, 0.16, len(SCORES))
+    for ax, quantity in zip(axes, QUANTITIES, strict=True):
+        for shift, (score, (_, color)) in zip(shifts, SCORES.items(), strict=True):
+            t = table[(table["quantity"] == quantity) & (table["score"] == score) & table["spearman"].notna()]
+            x = t["n_transitions"].map({n: i for i, n in enumerate(ns)}) + shift
+            ax.scatter(x, t["spearman"], s=12, color=color, alpha=0.4, lw=0)
+            median = t.groupby("n_transitions")["spearman"].median().reindex(ns)
+            ax.plot(np.arange(len(ns)) + shift, median.values, **paper.paper_line(color, "o", ms=5))
+        ax.axhline(0, **paper.ZERO_LINE)
+        ax.set_xticks(range(len(ns)))
+        ax.set_xticklabels([k(n) for n in ns])
+        ax.set_ylim(-1.05, 1.05)
+        ax.set_xlabel("transitions")
+        ax.set_title(f"with the {QUANTITIES[quantity]}", pad=4)
+    axes[0].set_ylabel("rank correlation of the score")
+    fig.tight_layout(w_pad=1.2)
+    handles = [
+        Line2D([], [], **paper.paper_line(color, "o", label, ms=5)) for label, color in SCORES.values()
+    ]
+    paper.legend_below(fig, handles, y=0.03)  # a line: the median over the seeds; a dot: one dataset
     save(out, machines, fig, "correlation", table)
 
 
-def bic_choice(graphs, datasets, machines: int, out: Path) -> None:
-    points = marked(graphs, datasets)
+def choice(graphs, datasets, machines: int, out: Path) -> None:
+    marks = GRAPHS | {f"best_{score}": BEST[score] for score in SCORES}
+    points = pd.concat([marked(graphs, datasets, marks), best_single(graphs)], ignore_index=True)
     ns = sorted(graphs["n_transitions"].unique())
     x = np.arange(len(ns))
-    by = ["seed", "n_transitions"]
-    best = graphs.groupby(by)[["value", "promise"]].max().reset_index().assign(mark="best graph")
-    table = pd.concat([points[by + ["mark", "value", "promise", "held"]], best], ignore_index=True)
-    chosen = points[points["mark"] == "best_bic"][by + ["value"]].rename(columns={"value": "chosen"})
-    better = graphs.merge(chosen, on=by)
-    better = (
-        better.assign(better=better["value"] > better["chosen"] + 1e-9)
-        .groupby(by)["better"]
-        .mean()
-        .reset_index()
-    )
-    fig, axes = plt.subplots(1, 3, figsize=(9.6, 2.9))
-    styles = {m: (color, marker) for m, (_, _, color, marker) in MARKS.items()} | {
-        "best graph": (paper.MUTED, "^")
+    styles = {
+        m: (label, color, marker, m.startswith("best_")) for m, (_, label, color, marker) in marks.items()
     }
-    labels = {m: label for m, (_, label, _, _) in MARKS.items()} | {"best graph": "best graph of all"}
-    dashed_marks = ("best graph", "best_bic")
+    styles[SINGLE] = ("best single graph", paper.MUTED, "^", True)
+    fig, axes = plt.subplots(1, 3, figsize=(9.8, 2.9))
     for ax, quantity in zip(axes[:2], QUANTITIES, strict=True):
-        for mark, (color, marker) in styles.items():
-            mean = table[table["mark"] == mark].groupby("n_transitions")[quantity].mean().reindex(ns)
-            dashed = mark in dashed_marks
-            ax.plot(x, mean.values, **paper.paper_line(color, marker, ls=(0, (4, 2)) if dashed else "-",
-                                                       zorder=4 if mark == "best_bic" else 3))  # fmt: skip
+        for mark, (_, color, marker, dashed) in styles.items():
+            mean = points[points["mark"] == mark].groupby("n_transitions")[quantity].mean().reindex(ns)
+            ax.plot(x, mean.values, **paper.paper_line(color, marker, ls=DASH if dashed else "-",
+                                                       zorder=3 if dashed else 4))  # fmt: skip
         ax.axhline(0, **paper.ZERO_LINE)
         ax.set_ylabel(QUANTITIES[quantity])
-    share = better.groupby("n_transitions")["better"]
-    axes[2].bar(x, 100 * share.mean().reindex(ns).values, color=paper.MUTED, width=0.6)
-    axes[2].set_ylabel("graphs better than the\nbest-BIC graph (%)")
+    width, rows = 0.8 / len(SCORES), []
+    for i, (score, (label, color)) in enumerate(SCORES.items()):  # graphs better than the score's pick
+        picked = points[points["mark"] == f"best_{score}"][[*BY, "value"]].rename(columns={"value": "picked"})
+        d = graphs.merge(picked, on=BY)
+        share = d.assign(better=d["value"] > d["picked"] + 1e-9).groupby(BY)["better"].mean().reset_index()
+        mean = 100 * share.groupby("n_transitions")["better"].mean().reindex(ns)
+        axes[2].bar(
+            x + (i - (len(SCORES) - 1) / 2) * width, mean.values, width=width, color=color, label=label
+        )
+        rows.append(share.assign(score=score))
+    axes[2].set_ylabel("graphs better than\nthe score's best graph (%)")
+    axes[2].legend(fontsize=8, handlelength=1.0)
     for ax in axes:
         ax.set_xticks(x)
         ax.set_xticklabels([k(n) for n in ns])
         ax.set_xlabel("transitions")
     fig.tight_layout(w_pad=1.6)
-    handles = [Line2D([], [], **paper.paper_line(c, m, labels[mark], ms=5,
-                                                 ls=(0, (4, 2)) if mark in dashed_marks else "-"))
-               for mark, (c, m) in styles.items()]  # fmt: skip
-    paper.legend_below(fig, handles, y=0.03)
-    save(out, machines, fig, "bic_choice", table.merge(better, on=by, how="left"))
+    handles = [Line2D([], [], **paper.paper_line(color, marker, label, ms=5, ls=DASH if dashed else "-"))
+               for label, color, marker, dashed in styles.values()]  # fmt: skip
+    paper.legend_below(fig, handles, ncol=4, y=0.03)
+    drawn = points[[*BY, "mark", "graph", "n_edges", "missing", "value", "promise", "held"]]
+    save(out, machines, fig, "choice", pd.concat([drawn, pd.concat(rows)], ignore_index=True))
 
 
 def edges(graphs, datasets, machines: int, out: Path) -> None:
@@ -289,13 +316,14 @@ def edges(graphs, datasets, machines: int, out: Path) -> None:
     save(out, machines, fig, "edges", pd.concat(rows))
 
 
-FIGURES = {
-    "bic_vs_value": lambda g, d, m, o: bic_against(g, d, "value", m, o),
-    "bic_vs_promise": lambda g, d, m, o: bic_against(g, d, "promise", m, o),
-    "correlation": correlation,
-    "bic_choice": bic_choice,
-    "edges": edges,
-}
+def _against(score: str, quantity: str):
+    return lambda graphs, datasets, machines, out: score_against(
+        graphs, datasets, score, quantity, machines, out
+    )
+
+
+FIGURES = {f"{score}_vs_{quantity}": _against(score, quantity) for score in SCORES for quantity in QUANTITIES}
+FIGURES |= {"correlation": correlation, "choice": choice, "edges": edges}
 
 
 def plot_size(run: Path, machines: int, out: Path, only: list | None = None) -> list[str]:
@@ -312,10 +340,10 @@ def plot_size(run: Path, machines: int, out: Path, only: list | None = None) -> 
 
 
 def main(argv=None) -> int:
-    parser = argparse.ArgumentParser(description="Figures of the ablation BIC against performance.")
+    parser = argparse.ArgumentParser(description="Figures of the ablation: a score against performance.")
     parser.add_argument("--run", type=Path, help="the run folder (default: the latest)")
     parser.add_argument(
-        "--machines", nargs="+", type=int, metavar="N", help="sizes (default: every size of the run)"
+        "--machines", nargs="+", type=int, metavar="N", help="sizes (default: all of the run)"
     )
     parser.add_argument("--only", nargs="+", metavar="FIGURE", help=f"among: {', '.join(FIGURES)}")
     parser.add_argument("--results", type=Path, default=RESULTS, help=argparse.SUPPRESS)

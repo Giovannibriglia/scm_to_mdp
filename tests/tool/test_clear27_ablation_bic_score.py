@@ -60,7 +60,11 @@ def test_a_run_writes_every_graph_and_its_figures(tmp_path, capsys):
     (dataset,) = pd.read_csv(folder / "N=2" / "datasets.csv").to_dict("records")
     assert dataset["graphs"] == 64 and dataset["true_graph"] == 63  # a ring of 2: every input is a parent
     assert (dataset["empty_graph"], dataset["full_graph"]) == (0, 63)
-    assert dataset["best_bic_graph"] == graphs.loc[graphs["bic"].idxmax(), "graph"]
+    for score in run.SCORES:  # BIC, AIC, BDeu: each has its best graph, and a value for every graph
+        assert dataset[f"best_{score}_graph"] == graphs.loc[graphs[score].idxmax(), "graph"]
+        assert graphs[score].notna().all()
+    assert (graphs["aic"] - (graphs["loglik"] - graphs["n_params"])).abs().max() < 1e-9
+    assert (graphs["bdeu"] < 0).all()  # a log marginal likelihood of discrete data
     assert dataset["pcmci_status"] == dataset["dynotears_status"] == "ok"
     # more parents never lower the likelihood, and the BIC is the likelihood minus its penalty
     by_graph = graphs.set_index("graph")
