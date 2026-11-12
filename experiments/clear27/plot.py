@@ -77,14 +77,16 @@ SERIES = [
     ("flat", "IMDP", "flat", PURPLE, "X"),
 ]
 # The figure against the offline RL baselines: (model, solver or None, label, colour, marker, dashed).
+# Colours and markers as in the paper's figure against the state of the art (sota_<domain>.pdf): ours is
+# its thick blue line, SPIBB on a graph its red "+", and each baseline keeps its colour and marker.
 BASELINE_SERIES = [
-    ("true graph", None, "ours (true graph)", GOLD, "o", False),
-    ("true graph", "Factored SPIBB", "Factored SPIBB", RED, "s", True),
+    ("true graph", None, "ours (true graph)", BLUE, "o", False),
+    ("true graph", "Factored SPIBB", "Factored SPIBB", RED, "+", True),
     ("DiFaRL", "DiFaRL", "DiFaRL", GREEN, "D", True),
-    ("FOCUS", "FOCUS", "FOCUS", PURPLE, "v", True),
-    ("SL-SPIBB", "SL-SPIBB", "SL-SPIBB", PINK, "^", True),
-    ("flat SPIBB", "flat SPIBB", "flat SPIBB", OLIVE, "P", True),
-    ("offline CQL", "offline CQL", "CQL", NAVY, "X", True),
+    ("FOCUS", "FOCUS", "FOCUS", PURPLE, "x", True),
+    ("SL-SPIBB", "SL-SPIBB", "SL-SPIBB", PINK, "v", True),
+    ("flat SPIBB", "flat SPIBB", "flat SPIBB", OLIVE, "<", True),
+    ("offline CQL", "offline CQL", "CQL", NAVY, ">", True),
     ("offline DQN", "offline DQN", "DQN", WINE, "*", True),
 ]
 BASELINES = ["DiFaRL", "FOCUS", "SL-SPIBB", "flat SPIBB", "offline CQL", "offline DQN"]
@@ -426,8 +428,10 @@ def baselines(dom: Domain) -> None:
         d = dom.series(model, solver)
         val, held = cells(d), cells(d.assign(value=100 * d["safe"]))
         rows += [val.assign(method=label, metric="value"), held.assign(method=label, metric="promise_held")]
-        style = paper_line(color, marker, lw=1.1 if dashed else 1.6, ls=(0, (4, 1.6)) if dashed else "-",
+        style = paper_line(color, marker, lw=1.1 if dashed else 2.2, ls=(0, (4, 1.6)) if dashed else "-",
                            zorder=2 if dashed else 3)  # fmt: skip
+        if marker in ("+", "x"):  # markers made of lines: drawn in the line's colour, not with a white edge
+            style |= {"mec": color, "mew": 1.0}
         for j, size in enumerate(dom.panels):
             s = val[val["size"] == size].sort_values("n_transitions")
             if not dashed:
