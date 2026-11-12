@@ -21,13 +21,19 @@ Then the figures: .venv/bin/python experiments/clear27/ablations/ablation_reward
 
 Output: results/clear27/ablations/ablation_rewards/sysadmin_<date>_<time>/
     config.json               the options, the commit, the methods and the rewards of every size
-    timing.csv                one row per (N, seed): seconds in all, to learn the models, to re-plan
+    timing.csv                one row per (N, seed): seconds in all, and per step (summed over its methods)
     N=<N>/runs/seed=<s>.csv   one row per (transitions, method, reward)
 
 Columns of a run: value and promise are normalised with the reward's own references,
 (V - V_random) / (V*_obs - V_random); `held`: promise <= true value in every observed live state;
-learn_s: the seconds to learn the method's model on that dataset (the same on every reward's row);
-replan_s: the seconds to compile and solve that model under the reward.
+Times, in seconds, per step of the method:
+    discovery_s   causal discovery / structure learning   } once per (dataset, method): the same on
+    selection_s   choosing the graph among the candidates  } every reward's row of that model
+    learning_s    the parameters: the interval sets        }   (learn_s: their sum)
+    relax_s       compiling the model to the box   } once per reward
+    solve_s       robust value iteration           }   (replan_s: the wall time of both, with the
+                                                       cost of starting the limited steps)
+A step a method does not have is empty (the flat model has no discovery and no box to compile).
 """
 
 import argparse
@@ -71,7 +77,10 @@ REFERENCE = "true graph"
 COLUMNS = [
     "machines", "seed", "n_transitions", "method", "level", "reward", "status", "failed_step", "value",
     "promise", "held", "true", "promise_raw", "V_star_obs", "V_random", "learn_s", "replan_s",
+    "discovery_s", "selection_s", "learning_s", "relax_s", "solve_s",
 ]  # fmt: skip
+MODEL_STEPS = ("discovery", "selection", "learning")  # once per model
+REWARD_STEPS = ("relax", "solve")  # once per reward
 
 _SETUP: dict = {}
 
@@ -122,6 +131,10 @@ def run_seed(folder: str, machines: int, seed: int, transitions: tuple[int, ...]
         _, V_target = task_truth.observed_optimal(exp.gamma)
         tasks.append((rung, task_truth, V_target, ref["V_star_obs"], ref["V_random"]))
     setup_s, learn_s, replan_s = time.monotonic() - start, 0.0, 0.0
+    spent_in = dict.fromkeys(MODEL_STEPS + REWARD_STEPS, 0.0)  # the seconds of every step, summed
+
+    def seconds_of(result, steps) -> list:
+        return [result.steps[name]["seconds"] if name in result.steps else None for name in steps]
 
     out = Path(folder) / f"N={machines}" / "runs"
     out.mkdir(parents=True, exist_ok=True)
@@ -143,21 +156,29 @@ def run_seed(folder: str, machines: int, seed: int, transitions: tuple[int, ...]
                 given = truth.true_parents if method.discovery == "oracle" else None  # the reference's graph
                 model = learn(data, method, exp.limits, given, seed=seed, shared=shared)
                 base = solve(model, data, exp.gamma, exp.limits, seed=seed, shared=shared)
-                seconds = sum(step["seconds"] for name, step in base.steps.items() if name != "solve")
+                model_s = seconds_of(base, MODEL_STEPS)
+                seconds = sum(x for x in model_s if x is not None)
                 learn_s += seconds
+                for name, x in zip(MODEL_STEPS, model_s, strict=True):
+                    spent_in[name] += x or 0.0
                 for rung, task_truth, V_target, V_best, V_rand in tasks:
                     row = [machines, seed, n, label, rung.level, rung.name]
                     if not base.ok or base.solution is None:  # the model was not learned: no reward runs
-                        writer.writerow([*row, base.status, base.failed_step, *[None] * 7, seconds, None])
+                        failed = [base.status, base.failed_step, *[None] * 7, seconds, None]
+                        writer.writerow([*row, *failed, *model_s, None, None])
                         continue
                     task_data = rf.with_task(data, rung.task, true_actions)
                     again = time.monotonic()
                     planned = replan(base, task_data, exp.gamma, exp.limits, seed=seed)
                     spent = time.monotonic() - again
                     replan_s += spent
+                    reward_s = seconds_of(planned, REWARD_STEPS)
+                    for name, x in zip(REWARD_STEPS, reward_s, strict=True):
+                        spent_in[name] += x or 0.0
+                    times = [seconds, spent, *model_s, *reward_s]
                     if not planned.ok or planned.solution is None:
                         stopped = [planned.status, planned.failed_step, *[None] * 5]
-                        writer.writerow([*row, *stopped, V_best, V_rand, seconds, spent])
+                        writer.writerow([*row, *stopped, V_best, V_rand, *times])
                         continue
                     m = exact.evaluate(task_truth, task_data, planned.solution, exp.gamma, V_target, starts)
                     span = V_best - V_rand
@@ -165,12 +186,13 @@ def run_seed(folder: str, machines: int, seed: int, transitions: tuple[int, ...]
                         (m[key] - V_rand) / span if span > 1e-9 else None for key in ("true", "promise")
                     ]
                     writer.writerow([*row, "ok", None, *scaled, m["safe"], m["true"], m["promise"], V_best,
-                                     V_rand, seconds, spent])  # fmt: skip
+                                     V_rand, *times])  # fmt: skip
     os.replace(partial, final)  # a file with this name is a finished (size, seed) (--resume)
     timing = {
         "machines": machines, "seed": seed, "datasets": len(transitions), "rewards": len(tasks),
         "seconds": round(time.monotonic() - start, 2), "setup_s": round(setup_s, 2),
         "learn_s": round(learn_s, 2), "replan_s": round(replan_s, 2),
+        **{f"{name}_s": round(x, 2) for name, x in spent_in.items()},
     }  # fmt: skip
     final.with_suffix(".json").write_text(json.dumps(timing))
     return timing
@@ -284,11 +306,12 @@ def main(argv=None) -> int:
         timing = write_timing(folder)
     wall = time.monotonic() - started
     if timing is not None:
-        by_size = timing.groupby("machines")[["seconds", "learn_s", "replan_s"]].sum()
-        print("time per size (summed over its seeds):")
+        steps = [f"{name}_s" for name in MODEL_STEPS + REWARD_STEPS]
+        by_size = timing.groupby("machines")[["seconds", *steps]].sum()
+        print("time per size (summed over its seeds and methods):")
         for m, t in by_size.iterrows():
-            print(f"  N={m}: {duration(t['seconds'])} (learning {duration(t['learn_s'])}, "
-                  f"re-planning {duration(t['replan_s'])})")  # fmt: skip
+            parts = ", ".join(f"{name[:-2]} {duration(t[name])}" for name in steps)
+            print(f"  N={m}: {duration(t['seconds'])} ({parts})")
         print(f"  all: {duration(timing['seconds'].sum())} of computation, {duration(wall)} of wall clock "
               f"for this launch")  # fmt: skip
     note = f" ({len(failed)} job(s) failed: run again with --resume)" if failed else ""

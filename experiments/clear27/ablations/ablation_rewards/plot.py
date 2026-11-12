@@ -23,7 +23,7 @@ number of transitions):
 Across the sizes (summary/):
   value_by_size_n=<n>   the value against N, one column per level, at the two largest data sizes
   solved_by_level       as above, the sizes pooled
-  time                  seconds to learn one model, and to re-plan it under one reward, against N
+  time                  seconds of every step against N: discovery, parameter learning, the box, solving
 
 A point is the mean over the seeds of the mean over the rewards of that level; the band is one standard
 error over the seeds. A run that stopped (time or memory) counts as not solved and has no value.
@@ -213,30 +213,39 @@ def value_by_size(runs: pd.DataFrame, n: int, out: Path) -> None:
     save(out, "summary", fig, f"value_by_size_n={n}", table.assign(n_transitions=n))
 
 
+STEPS = {  # column -> (panel title, once per model or once per reward)
+    "discovery_s": ("structure: discovery", "model"),
+    "learning_s": ("parameters: the interval sets", "model"),
+    "relax_s": ("relaxation: the box, per reward", "reward"),
+    "solve_s": ("solving, per reward", "reward"),
+}
+
+
 def time(runs: pd.DataFrame, timing: pd.DataFrame, out: Path) -> None:
-    """Seconds to learn one model and to re-plan it under one reward, against N, per method."""
+    """Mean seconds of every step against N, per method: discovery and parameter learning (once per
+    model), relaxation and solving (once per reward). Selection is in the data, not drawn (it is tiny)."""
     models = runs.drop_duplicates(["machines", "seed", "n_transitions", "method"])
-    learn = models.groupby(["method", "machines"])["learn_s"].mean().reset_index(name="seconds")
-    replan = runs.groupby(["method", "machines"])["replan_s"].mean().reset_index(name="seconds")
     sizes = sorted(runs["machines"].unique())
-    fig, axes = plt.subplots(1, 2, figsize=(7.6, 3.0), sharey=True)
-    panels = (("learning one model", learn), ("re-planning under one reward", replan))
-    for ax, (title, table) in zip(axes, panels, strict=True):
+    fig, axes = plt.subplots(1, len(STEPS), figsize=(2.75 * len(STEPS), 3.0), sharey=True)
+    rows = []
+    for ax, (column, (title, per)) in zip(axes, STEPS.items(), strict=True):
+        source = models if per == "model" else runs
+        table = source.groupby(["method", "machines"])[column].mean().reset_index(name="seconds")
         for method, (color, marker) in STYLE.items():
-            t = table[table["method"] == method].sort_values("machines")
+            t = table[(table["method"] == method) & table["seconds"].notna()].sort_values("machines")
             ax.plot(t["machines"], t["seconds"], **paper.paper_line(color, marker))
         ax.set_yscale("log")
         ax.set_xticks(sizes)
         ax.set_xlabel("machines N")
-        ax.set_title(title, pad=4)
+        ax.set_title(title, pad=4, fontsize=9)
+        rows.append(table.assign(step=column))
     axes[0].set_ylabel("seconds (mean)")
-    fig.tight_layout(w_pad=1.2)
+    fig.tight_layout(w_pad=1.0)
     paper.legend_below(fig, handles_of(list(STYLE)), y=0.03)
-    total = timing.groupby("machines")[["seconds", "learn_s", "replan_s", "setup_s"]].sum().reset_index()
-    data = pd.concat(
-        [learn.assign(what="learn"), replan.assign(what="replan"), total.assign(what="job total")]
-    )
-    save(out, "summary", fig, "time", data)
+    selection = models.groupby(["method", "machines"])["selection_s"].mean().reset_index(name="seconds")
+    rows.append(selection.assign(step="selection_s"))
+    total = timing.groupby("machines").sum(numeric_only=True).drop(columns=["seed"]).reset_index()
+    save(out, "summary", fig, "time", pd.concat([*rows, total.assign(step="job totals")]))
 
 
 PER_SIZE = [f"{quantity}_by_level" for quantity in QUANTITIES]

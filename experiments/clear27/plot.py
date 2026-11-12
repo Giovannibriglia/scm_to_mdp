@@ -76,19 +76,24 @@ SERIES = [
     ("full-fact", None, "full graph", TEAL, "^"),
     ("flat", "IMDP", "flat", PURPLE, "X"),
 ]
-# The figure against the offline RL baselines: (model, solver or None, label, colour, marker, dashed).
-# Colours and markers as in the paper's figure against the state of the art (sota_<domain>.pdf): ours is
-# its thick blue line, SPIBB on a graph its red "+", and each baseline keeps its colour and marker.
+# The figure against the state of the art, as in the paper (sota_<domain>.pdf, Table "methods"): MDPs on a
+# graph (solid) against the baselines (dashed). CD = the graph DYNOTEARS finds (lagged); no method of this
+# figure returns a promise. (model, solver, label, colour, marker, line), line: a key of BASELINE_LINES
 BASELINE_SERIES = [
-    ("true graph", None, "ours (true graph)", BLUE, "o", False),
-    ("true graph", "Factored SPIBB", "Factored SPIBB", RED, "+", True),
-    ("DiFaRL", "DiFaRL", "DiFaRL", GREEN, "D", True),
-    ("FOCUS", "FOCUS", "FOCUS", PURPLE, "x", True),
-    ("SL-SPIBB", "SL-SPIBB", "SL-SPIBB", PINK, "v", True),
-    ("flat SPIBB", "flat SPIBB", "flat SPIBB", OLIVE, "<", True),
-    ("offline CQL", "offline CQL", "CQL", NAVY, ">", True),
-    ("offline DQN", "offline DQN", "DQN", WINE, "*", True),
+    ("DYNOTEARS (lagged)", "MDP (plug-in)", "CD-MDP (ours)", BLUE, "o", "ours"),
+    ("DYNOTEARS (lagged)", "Factored SPIBB", "CD-SPIBB (ours)", RED, "+", "solid"),
+    ("true graph", "MDP (plug-in)", "True-MDP", GOLD, "s", "solid"),
+    ("SL-SPIBB", "SL-SPIBB", "SL-SPIBB", PINK, "v", "dashed"),
+    ("DiFaRL", "DiFaRL", "DiFaRL", GREEN, "D", "dashed"),
+    ("FOCUS", "FOCUS", "FOCUS", PURPLE, "x", "dashed"),
+    ("flat SPIBB", "flat SPIBB", "flat SPIBB", OLIVE, "<", "dashed"),
+    ("offline CQL", "offline CQL", "offline CQL", NAVY, ">", "dashed"),
+    ("offline DQN", "offline DQN", "offline DQN", WINE, "*", "dashdot"),
 ]
+BASELINE_LINES = {  # line -> (width, style, order of drawing)
+    "ours": (2.4, "-", 5), "solid": (1.5, "-", 4), "dashed": (1.1, (0, (4, 1.6)), 2),
+    "dashdot": (1.1, (0, (4, 1.4, 1, 1.4)), 2),
+}  # fmt: skip
 BASELINES = ["DiFaRL", "FOCUS", "SL-SPIBB", "flat SPIBB", "offline CQL", "offline DQN"]
 
 # The exploratory figures draw more models: every graph source, the KWIK learners and the baselines.
@@ -117,9 +122,13 @@ LINE = {m: DASH for m in BASELINES} | {
 #   detail_size    the size of the exploratory figures drawn at one size
 #   graph_size     the size of the paper figure graph_errors
 #   safety_labels  value_vs_safety, 10,000 transitions: where each label goes (dx, dy in points, alignment)
+#   baseline_panels  the sizes of the figure against the state of the art (its methods finish at every
+#                    size, so it can show larger sizes than `panels`; default: spread over every size)
+#   title          the title of a size's panel, from the size (default: from its label in the results)
 DOMAIN_SETTINGS = {
     "sysadmin": {
         "panels": ["2", "4", "6", "8", "9"],
+        "baseline_panels": ["2", "4", "6", "8", "10"],  # the paper's
         "detail_size": "7",
         "graph_size": "9",
         "safety_labels": {
@@ -131,8 +140,18 @@ DOMAIN_SETTINGS = {
         },
     },
     # the exact solver runs out of memory at vitals=4 (Sepsis) and from side 5 on (Drone): the box finishes
-    "sepsis": {"solver": "IMDP (IA)", "panels": ["2", "3", "4"]},
-    "drone": {"solver": "IMDP (IA)", "panels": ["3-1", "5-1", "7-1", "10-1", "12-1"]},
+    "sepsis": {
+        "solver": "IMDP (IA)",
+        "panels": ["2", "3", "4"],
+        "baseline_panels": ["2", "3", "4"],  # the paper shows 2 and 3
+        "title": lambda size: f"{size} vital signs",
+    },
+    "drone": {
+        "solver": "IMDP (IA)",
+        "panels": ["3-1", "5-1", "7-1", "10-1", "12-1"],
+        "baseline_panels": ["3-1", "5-1", "7-1", "9-1", "12-1"],  # the paper's
+        "title": lambda size: f"side {size.split('-')[0]}",
+    },
     "aircraft": {"solver": "IMDP (IA)"},  # the exact solver finishes at 4x3 only; panels from the data
 }
 
@@ -233,6 +252,8 @@ class Domain:
     states: dict  # size -> observed states
     labels: dict  # size -> its label in the results, e.g. "N=7", "vitals=3"
     safety_labels: dict
+    baseline_panels: list  # the sizes of the figure against the state of the art
+    size_title: object  # None, or a function size -> the title of its panel (DOMAIN_SETTINGS "title")
     out: Path
 
     def pick(self, model: str, solver: str | None = None) -> pd.DataFrame:
@@ -249,6 +270,8 @@ class Domain:
 
     def title(self, size) -> str:
         """ "N=7" -> "$N = 7$" (a one-letter name is set as a symbol), "vitals=3" -> "vitals = 3"."""
+        if self.size_title is not None:
+            return self.size_title(size)
         name, _, value = str(self.labels.get(size, size)).partition("=")
         if not value:
             return name
@@ -278,6 +301,8 @@ def describe(name: str, runs: pd.DataFrame, solver: str, out: Path) -> Domain:
     if len(panels) != len(chosen.get("panels", [None])):  # no choice, or a chosen size did not finish
         panels = spread(kept, MAX_PANELS)
     largest = kept[-1] if kept else None
+    wanted = chosen.get("baseline_panels", [])
+    against = [s for s in wanted if s in sizes]
     return Domain(
         name=name,
         runs=runs,
@@ -290,6 +315,8 @@ def describe(name: str, runs: pd.DataFrame, solver: str, out: Path) -> Domain:
         states={s: int(v) for s, v in states.items()},
         labels=runs.groupby("size")["size_label"].first().to_dict() if "size_label" in runs else {},
         safety_labels=chosen.get("safety_labels", {}),
+        baseline_panels=against if len(against) == len(wanted) and against else spread(sizes, MAX_PANELS),
+        size_title=chosen.get("title"),
         out=out / name,
     )
 
@@ -420,28 +447,27 @@ def value(dom: Domain) -> None:
 
 
 def baselines(dom: Domain) -> None:
-    """Our certified policy against the offline RL baselines: value (top) and the share of runs whose
-    promise held (bottom; a baseline's promise is its own value estimate, with no guarantee)."""
-    n = len(dom.panels)
+    """MDPs on a graph (solid) against the state of the art (dashed), as in the paper: the normalised
+    value (top) and the share of runs whose own value estimate held (bottom). No method here has a promise."""
+    panels = dom.baseline_panels
+    n = len(panels)
     fig, axes = plt.subplots(2, n, figsize=(2.0 * max(n, 2), 4.3), sharex=True, sharey="row", squeeze=False)
     rows, handles = [], []
-    for model, solver, label, color, marker, dashed in reversed(BASELINE_SERIES):  # ours drawn on top
-        d = dom.series(model, solver)
+    for model, solver, label, color, marker, line in BASELINE_SERIES:
+        d = dom.pick(model, solver)
         val, held = cells(d), cells(d.assign(value=100 * d["safe"]))
-        rows += [val.assign(method=label, metric="value"), held.assign(method=label, metric="promise_held")]
-        style = paper_line(color, marker, lw=1.1 if dashed else 2.2, ls=(0, (4, 1.6)) if dashed else "-",
-                           zorder=2 if dashed else 3)  # fmt: skip
+        rows += [val.assign(method=label, metric="value"), held.assign(method=label, metric="estimate_held")]
+        width, dashes, order = BASELINE_LINES[line]
+        style = paper_line(color, marker, lw=width, ls=dashes, zorder=order)
         if marker in ("+", "x"):  # markers made of lines: drawn in the line's colour, not with a white edge
             style |= {"mec": color, "mew": 1.0}
-        for j, size in enumerate(dom.panels):
+        for j, size in enumerate(panels):
             s = val[val["size"] == size].sort_values("n_transitions")
-            if not dashed:
-                axes[0, j].fill_between(s["n_transitions"], s["lo"], s["hi"], color=color, alpha=0.15, lw=0)
             axes[0, j].plot(s["n_transitions"], s["mean"], **style)
             h = held[held["size"] == size].sort_values("n_transitions")
             axes[1, j].plot(h["n_transitions"], h["mean"], **style)
-        handles.insert(0, Line2D([], [], **(style | {"ms": 4.5, "label": label})))
-    for j, size in enumerate(dom.panels):
+        handles.append(Line2D([], [], **(style | {"ms": 4.5, "label": label})))
+    for j, size in enumerate(panels):
         axes[0, j].set_title(dom.title(size), pad=4)
         for ax in axes[:, j]:
             paper_axis(ax)
@@ -453,12 +479,10 @@ def baselines(dom: Domain) -> None:
         axes[1, j].axhline(100 * (1 - DELTA), **ZERO_LINE)
         axes[1, j].set_xlabel("transitions")
     axes[0, 0].set_ylabel("normalised value")
-    axes[1, 0].set_ylabel("runs with\npromise held (%)")
-    axes[1, -1].annotate(r"$1-\delta$", (5e5, 100 * (1 - DELTA)), xytext=(3, -9), textcoords="offset points",
-                         fontsize=8, color="#6b6b6b", annotation_clip=False)  # fmt: skip
+    axes[1, 0].set_ylabel("runs whose value\nestimate held (%)")
     fig.tight_layout(w_pad=1.0, h_pad=0.8)
     fig.legend(handles=handles, loc="upper center", bbox_to_anchor=(0.5, 0.02), handlelength=2.4,
-               ncol=len(handles) if n >= 4 else 4, columnspacing=1.2, borderaxespad=0)  # fmt: skip
+               ncol=5 if n >= 4 else 3, columnspacing=1.2, borderaxespad=0)  # fmt: skip
     save(dom, "paper", fig, "baselines", table(rows))
 
 
@@ -977,7 +1001,7 @@ def transitions_needed(dom: Domain) -> None:
 GRAPHS_NEEDED = ["truegraph", "pcmci_lagged", "dynotears_lagged", "sparse", "fullfact", "flat"]
 FIGURES = {
     "value": ("paper", value, GRAPHS_NEEDED),
-    "baselines": ("paper", baselines, ["truegraph", "sota"]),
+    "baselines": ("paper", baselines, ["truegraph", "dynotears_lagged", "sota"]),
     "coverage": ("paper", coverage, GRAPHS_NEEDED),
     "promise_scatter": ("paper", promise_scatter, ["truegraph", "pcmci_lagged", "dynotears_lagged", "sota"]),
     "value_vs_safety": ("paper", value_vs_safety, GRAPHS_NEEDED + ["sota"]),

@@ -76,9 +76,16 @@ def test_a_run_writes_one_row_per_policy_its_time_and_the_figures(tmp_path):
     assert (runs["learn_s"] >= 0).all() and (runs["replan_s"] > 0).all()
     one = runs[(runs["method"] == "PCMCI+") & (runs["n_transitions"] == 1000)]
     assert one["learn_s"].nunique() == 1  # one model, re-planned under every reward
+    steps = ["discovery_s", "selection_s", "learning_s", "relax_s", "solve_s"]  # the time of every step
+    assert (one[steps] > 0).all().all() and one["discovery_s"].nunique() == 1 and one["solve_s"].nunique() > 1
+    assert (one["discovery_s"] + one["selection_s"] + one["learning_s"] - one["learn_s"]).abs().max() < 1e-9
+    assert (one["relax_s"] + one["solve_s"] <= one["replan_s"]).all()
+    flat = runs[runs["method"] == "flat"]  # no graph to discover and no box to compile
+    assert flat["discovery_s"].isna().all() and flat["relax_s"].isna().all() and (flat["solve_s"] > 0).all()
     assert (one[one["held"]]["promise"] <= one[one["held"]]["value"] + 1e-9).all()
     (timing,) = pd.read_csv(folder / "timing.csv").to_dict("records")
     assert timing["machines"] == 3 and timing["rewards"] == 10 and timing["seconds"] >= timing["replan_s"] > 0
+    assert all(timing[f"{step}_s"] > 0 for step in ("discovery", "selection", "learning", "relax", "solve"))
 
     again = subprocess.run([*run, "--resume"], capture_output=True, text=True, cwd=ROOT)
     assert again.returncode == 0 and "0 of 1 (size, seed) jobs to run" in again.stdout
