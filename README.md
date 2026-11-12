@@ -39,7 +39,7 @@ bash experiments/clear27/run_aircraft.sh
 ```
 
 Or the four in one pool, SysAdmin first (a free worker takes a job of the first domain that has one):
-`bash experiments/clear27/run_all.sh`. Results in `results/clear27/` (smoke: `results/clear27_smoke/`); `RESUME=1` continues a stopped run.
+`bash experiments/clear27/run_all.sh`. Results in `results/clear27/<domain>/` (smoke: `results/clear27_smoke/`); `RESUME=1` continues a stopped run.
 
 ## The tool in three parts
 

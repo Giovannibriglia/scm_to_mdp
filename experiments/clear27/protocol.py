@@ -54,7 +54,8 @@ compilation of it reuses its graph (tool/methods.py: _shared_key). Every script 
                     flat SPIBB, in pool 5)
     sota            pool 5: DiFaRL, FOCUS, SL-SPIBB, flat SPIBB, offline DQN, offline CQL
 
-A script: experiments/clear27/<domain>_<source>.py; results: results/clear27/<domain>_<source>_<date>_<time>.
+A script: experiments/clear27/<domain>/<domain>_<source>.py;
+results: results/clear27/<domain>/<domain>_<source>_<date>_<time>.
 A domain's 11 sources in one pool of workers: bash experiments/clear27/run_<domain>.sh (run_domain.sh ->
 run_pool.py: a free worker takes the next job of any source).
 """
@@ -201,6 +202,7 @@ def source_methods(source: str, domain) -> dict:
 def experiment_grid(domain: str, source: str) -> Grid:
     d = DOMAINS[domain]
     smoke = SMOKE
+    results = common.ROOT / "results" / (EXPERIMENT + ("_smoke" if smoke else ""))
     return Grid(
         name=d.title,
         make_env=d.make_env,
@@ -222,7 +224,7 @@ def experiment_grid(domain: str, source: str) -> Grid:
         solve_floor_s=SOLVE_FLOOR_S,
         save_models="none" if smoke else SAVE_MODELS.get(domain, "none"),
         workers="auto",
-        out_dir=common.ROOT / "results" / (EXPERIMENT + ("_smoke" if smoke else "")) / f"{domain}_{source}",
+        out_dir=results / domain / f"{domain}_{source}",
         reward_transfer=False,
         reward_family=None,
         shifts=None,

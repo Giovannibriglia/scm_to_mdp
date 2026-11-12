@@ -24,7 +24,7 @@ POINT_2 = (
 def test_every_script_exists_and_names_its_grid():
     for d in DOMAINS:
         for s in protocol.SOURCES:
-            text = (ROOT / "experiments" / "clear27" / f"{d}_{s}.py").read_text()
+            text = (ROOT / "experiments" / "clear27" / d / f"{d}_{s}.py").read_text()
             assert f'experiment_grid("{d}", "{s}")' in text
 
 
@@ -33,7 +33,7 @@ def test_the_data_protocol(domain):
     g = protocol.experiment_grid(domain, "truegraph")
     assert g.n_transitions[0] == 10 and g.n_transitions[-1] == 500_000 and len(g.n_transitions) == 15
     assert g.seeds == list(range(10)) and [p.label for p in g.policies] == ["uniform"]
-    assert g.out_dir == ROOT / "results" / "clear27" / f"{domain}_truegraph"
+    assert g.out_dir == ROOT / "results" / "clear27" / domain / f"{domain}_truegraph"
     assert "18x13" not in map(str, g.sizes)
     assert g.save_models == ("all" if domain == "sysadmin" else "none")
     if domain == "sysadmin":
@@ -47,7 +47,7 @@ def test_smoke_mode_is_a_tiny_grid_of_the_same_script(monkeypatch):
     monkeypatch.setattr(protocol, "SMOKE", True)
     g = protocol.experiment_grid("drone", "strehl")
     assert len(g.sizes) == 1 and g.n_transitions == [100, 1000] and g.seeds == [0]
-    assert g.out_dir == ROOT / "results" / "clear27_smoke" / "drone_strehl"
+    assert g.out_dir == ROOT / "results" / "clear27_smoke" / "drone" / "drone_strehl"
     assert g.methods.keys() == protocol.source_methods("strehl", protocol.DOMAINS["drone"]).keys()
 
 

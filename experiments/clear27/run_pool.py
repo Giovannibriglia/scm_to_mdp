@@ -1,12 +1,12 @@
 """clear27: the graph sources of one or more domains in ONE pool of workers.
 
-A source's script (<domain>_<source>.py) runs its (size, seed) jobs in waves by size: a size starts when
-every seed of the smaller size is done, because a method stopped by a limit there is skipped at the larger
-sizes (tool/sweep.py, "Rules"). So one script keeps at most len(seeds) = 10 jobs running, and a machine
-with more workers idles. Here every source is a setting of one run_sweeps call: a free worker takes the
-next job of any source, each source keeps its own waves and stops, and each source writes to its own
-folder exactly as its script would (results/clear27/<domain>_<source>_<date>_<time>/), so a source can
-also be resumed or reported by its own script.
+A source's script (<domain>/<domain>_<source>.py) runs its (size, seed) jobs in waves by size: a size starts
+when every seed of the smaller size is done, because a method stopped by a limit there is skipped at the
+larger sizes (tool/sweep.py, "Rules"). So one script keeps at most len(seeds) = 10 jobs running, and a
+machine with more workers idles. Here every source is a setting of one run_sweeps call: a free worker takes
+the next job of any source, each source keeps its own waves and stops, and each source writes to its
+own folder exactly as its script would (results/clear27/<domain>/<domain>_<source>_<date>_<time>/), so a source
+can also be resumed or reported by its own script.
 
 Run from the repository root:
     .venv/bin/python experiments/clear27/run_pool.py sysadmin                        # every source, new runs
