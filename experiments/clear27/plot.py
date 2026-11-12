@@ -20,8 +20,9 @@ panels and labels), 4 style and helpers, 5 paper figures, 6 exploratory figures,
 Conventions
 - normalised value = (V_true - V_random) / (V*_obs - V_random): 0 is the uniform random policy, 1 the best
   policy over the observed state. The promise is normalised in the same way.
-- "certified" = the interval MDP of a graph source solved with --solver (default "IMDP (exact)"); the flat
-  model has one interval MDP ("flat IMDP").
+- "certified" = the interval MDP of a graph source solved with the domain's solver: "IMDP (exact)" for
+  SysAdmin, the box "IMDP (IA)" for Sepsis and Drone, where the exact solver runs out of memory beyond the
+  smallest sizes (DOMAIN_SETTINGS; --solver overrides it). The flat model has one interval MDP ("flat IMDP").
 - A point (method, size, transitions) is drawn only if at least MIN_OK of its seeds finished (status ok):
   the mean over the finished seeds, and a 95% t-interval as the band.
 - "Promise held" = promise <= true value in every observed live state (column `safe`).
@@ -109,6 +110,7 @@ LINE = {m: DASH for m in BASELINES} | {
 }  # fmt: skip
 
 # Choices made by hand for one domain; a domain without an entry takes them from its data (section 3).
+#   solver         the certified solver of the domain (default DEFAULT_SOLVER)
 #   panels         the sizes of the paper figures with one panel per size
 #   detail_size    the size of the exploratory figures drawn at one size
 #   graph_size     the size of the paper figure graph_errors
@@ -126,6 +128,9 @@ DOMAIN_SETTINGS = {
             "offline DQN": (0, 9, "center"),
         },
     },
+    # the exact solver runs out of memory at vitals=4 (Sepsis) and from side 5 on (Drone): the box finishes
+    "sepsis": {"solver": "IMDP (IA)", "panels": ["2", "3", "4"]},
+    "drone": {"solver": "IMDP (IA)", "panels": ["3-1", "5-1", "7-1", "10-1", "12-1"]},
 }
 
 # ==== 2. loading the runs ==========================================================================
@@ -986,8 +991,12 @@ FIGURES = {
 STYLES = {"paper": PAPER_STYLE, "explore": EXPLORE_STYLE}
 
 
-def plot_domain(name: str, results: Path, out: Path, solver: str, only: list | None = None) -> list[str]:
-    """Draw the figures of one domain; returns the names of the figures written."""
+def plot_domain(
+    name: str, results: Path, out: Path, solver: str | None = None, only: list | None = None
+) -> list[str]:
+    """Draw the figures of one domain; returns the names of the figures written. solver None: the
+    domain's (DOMAIN_SETTINGS), else DEFAULT_SOLVER."""
+    solver = solver or DOMAIN_SETTINGS.get(name, {}).get("solver", DEFAULT_SOLVER)
     print(f"\n===== {name}: {results / name} -> {out / name} =====")
     runs = load(results, name)
     if runs.empty:
@@ -999,6 +1008,7 @@ def plot_domain(name: str, results: Path, out: Path, solver: str, only: list | N
     if not dom.kept:
         print(f"  the reference (true graph -> {solver}) finished at no size: nothing to draw")
         return []
+    print(f"  certified solver: {solver}")
     print(f"  sizes kept: {dom.size_range()} ({len(dom.kept)} of {len(dom.sizes)}); panels: "
           f"{', '.join(str(dom.labels[s]) for s in dom.panels)}")  # fmt: skip
     written = []
@@ -1028,9 +1038,7 @@ def main(argv=None) -> int:
     parser.add_argument("domains", nargs="*", help="e.g. sysadmin sepsis drone")
     parser.add_argument("--list", action="store_true", help="print the figure names and exit")
     parser.add_argument("--only", nargs="+", metavar="FIGURE", help="draw only these figures")
-    parser.add_argument(
-        "--solver", default=DEFAULT_SOLVER, help=f'the certified solver (default "{DEFAULT_SOLVER}")'
-    )
+    parser.add_argument("--solver", help='the certified solver, e.g. "IMDP (IA)" (default: the domain\'s)')
     parser.add_argument(
         "--results", type=Path, default=ROOT / "results" / EXPERIMENT, help="the results folder"
     )

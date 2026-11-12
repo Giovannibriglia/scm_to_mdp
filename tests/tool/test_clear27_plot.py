@@ -114,3 +114,21 @@ def test_figures_are_written_with_their_numbers(tmp_path, capsys):
         plot.main(["nowhere", "--results", str(tmp_path / "results")])
     with pytest.raises(SystemExit):
         plot.main(["grid", "--results", str(tmp_path / "results"), "--only", "no_such_figure"])
+
+
+def test_sepsis_and_drone_are_drawn_with_the_box(tmp_path, capsys):
+    """The exact solver stops beyond their smallest sizes, so their certified solver is the box and every
+    size is kept; --solver (the solver argument) still overrides the domain's choice."""
+    assert plot.DOMAIN_SETTINGS["sepsis"]["solver"] == plot.DOMAIN_SETTINGS["drone"]["solver"] == "IMDP (IA)"
+    assert plot.DOMAIN_SETTINGS["drone"]["panels"] == ["3-1", "5-1", "7-1", "10-1", "12-1"]
+    assert "solver" not in plot.DOMAIN_SETTINGS["sysadmin"]  # the default: exact
+    sizes = {"3-1": 27, "5-1": 125, "7-1": 343, "10-1": 1000, "12-1": 1728}
+    for source in SOURCES:
+        fake_run(tmp_path, "drone", source, "2026-11-05_22-52-41", sizes, stop_from=1)  # exact: 3-1 only
+    plot.plot_domain("drone", tmp_path, tmp_path / "out", only=["value"])
+    assert "certified solver: IMDP (IA)" in capsys.readouterr().out
+    drawn = pd.read_csv(tmp_path / "out" / "drone" / "data" / "value.csv")
+    assert set(drawn["size"]) == set(sizes)
+    plot.plot_domain("drone", tmp_path, tmp_path / "exact", solver="IMDP (exact)", only=["value"])
+    exact = pd.read_csv(tmp_path / "exact" / "drone" / "data" / "value.csv")
+    assert set(exact[exact["method"] == "true graph"]["size"]) == {"3-1"}
