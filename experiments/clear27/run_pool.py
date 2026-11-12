@@ -14,7 +14,8 @@ Run from the repository root:
     .venv/bin/python experiments/clear27/run_pool.py sysadmin drone sepsis aircraft --resume  # one pool for all:
                                                      # a free worker takes a job of the first domain that has one
     .venv/bin/python experiments/clear27/run_pool.py sysadmin --sources flat pcmci   # only these sources
-    --workers N|auto as in the scripts (SCM_TO_MDP_WORKERS); SMOKE=1: the tiny grids (protocol.py).
+    --workers N|auto and --core-share P as in the scripts (SCM_TO_MDP_WORKERS, SCM_TO_MDP_CORE_SHARE:
+    utils/compute.py); SMOKE=1: the tiny grids (protocol.py).
 Afterwards every source's tables and figures are written (report_grid), as its script does; a failed
 report is printed and gives exit code 1, the other reports still run. The start and the end of the pool
 are appended to results/clear27[_smoke]/logs/chain.log.
@@ -36,7 +37,7 @@ import common  # noqa: E402
 
 from scm_to_mdp.tool import report_grid  # noqa: E402
 from scm_to_mdp.tool.grid import experiments, write_grid_file  # noqa: E402
-from scm_to_mdp.tool.runs import STAMP, runs_of  # noqa: E402
+from scm_to_mdp.tool.runs import STAMP, add_core_share, runs_of, set_core_share  # noqa: E402
 from scm_to_mdp.tool.sweep import run_sweeps  # noqa: E402
 
 
@@ -89,7 +90,9 @@ def main(argv=None) -> int:
     parser.add_argument("--sources", nargs="+", choices=list(protocol.SOURCES), default=list(protocol.SOURCES))
     parser.add_argument("--resume", action="store_true", help="continue the latest run of every source")
     parser.add_argument("--workers", metavar="N", help="parallel jobs: a number or 'auto'")
+    add_core_share(parser)
     args = parser.parse_args(argv)
+    set_core_share(parser, args.core_share)
     if args.workers is not None:
         if args.workers != "auto" and not (args.workers.isdigit() and int(args.workers) >= 1):
             parser.error(f"--workers must be a positive number or 'auto', not {args.workers!r}")

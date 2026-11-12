@@ -7,9 +7,11 @@
                              a new folder, so a chain can always be (re)started with --resume)
     --report-only [FOLDER]   only the tables and figures of FOLDER, or of the latest <base>_* folder
     --workers N|auto         parallel jobs (default: the script's, "auto" = what the machine allows)
+    --core-share P           percent of the physical cores "auto" may take (default 100)
     --device auto|cpu|cuda|cuda:N|mps   where offline DQN / CQL train (default auto: CUDA if usable)
 
---workers and --device set SCM_TO_MDP_WORKERS / SCM_TO_MDP_DEVICE for the run (utils/compute.py);
+--workers, --core-share and --device set SCM_TO_MDP_WORKERS / SCM_TO_MDP_CORE_SHARE / SCM_TO_MDP_DEVICE
+for the run (utils/compute.py);
 they never change the results' configuration, so a run may resume with other values.
 
 A run resumes only in its own folder (results.csv and meta.json are there), so a stopped run must be
@@ -41,6 +43,23 @@ def runs_of(base: Path) -> list[Path]:
     return sorted(found)
 
 
+def add_core_share(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument("--core-share", metavar="P", help="percent of the physical cores to use (1-100)")
+
+
+def set_core_share(parser: argparse.ArgumentParser, value: str | None) -> None:
+    """Check --core-share and set SCM_TO_MDP_CORE_SHARE for the run (an empty value: nothing to set)."""
+    from scm_to_mdp.utils.compute import ENV_CORE_SHARE, core_share
+
+    if value in (None, ""):
+        return
+    try:
+        core_share(value)
+    except ValueError as err:
+        parser.error(f"--core-share: {err}")
+    os.environ[ENV_CORE_SHARE] = value
+
+
 def run_folder(base, argv: list[str] | None = None) -> tuple[Path, bool]:
     """(folder, report_only) from the command line (see the module docstring)."""
     parser = argparse.ArgumentParser(description="Run (or resume, or report) an experiment.")
@@ -50,8 +69,10 @@ def run_folder(base, argv: list[str] | None = None) -> tuple[Path, bool]:
         "--report-only", nargs="?", const="latest", metavar="FOLDER", help="tables and figures only"
     )
     parser.add_argument("--workers", metavar="N", help="parallel jobs: a number or 'auto'")
+    add_core_share(parser)
     parser.add_argument("--device", metavar="D", help="training device: auto, cpu, cuda, cuda:N, mps")
     args = parser.parse_args(sys.argv[1:] if argv is None else argv)
+    set_core_share(parser, args.core_share)
     if args.workers is not None:
         if args.workers != "auto" and not (args.workers.isdigit() and int(args.workers) >= 1):
             parser.error(f"--workers must be a positive number or 'auto', not {args.workers!r}")

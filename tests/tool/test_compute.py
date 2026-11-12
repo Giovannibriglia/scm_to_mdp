@@ -30,6 +30,26 @@ def test_workers_follow_cores_and_the_ram_rule():
         compute._workers("0", 8.0, cores=2, ram_gb=8)
 
 
+def test_the_core_share_limits_the_workers(monkeypatch):
+    assert compute._workers("auto", 8.0, cores=10, ram_gb=135, share=50)[0] == 5  # half of the cores
+    half = compute._workers("auto", 6.0, cores=40, ram_gb=135, share=50)
+    assert half == (20, "50% of the 40 physical cores")
+    assert compute._workers("auto", 6.0, cores=40, ram_gb=135, share=75)[0] == 21  # the RAM rule still binds
+    assert compute._workers("auto", 8.0, cores=4, ram_gb=64, share=10)[0] == 1  # at least one
+    assert compute._workers(None, None, cores=6, ram_gb=8, share=34)[0] == 2  # rounded down
+    assert compute._workers("5", 8.0, cores=4, ram_gb=64, share=25)[0] == 5  # a number of workers wins
+    monkeypatch.delenv(compute.ENV_CORE_SHARE, raising=False)
+    assert compute.core_share() == 100 and compute.core_share("40") == 40
+    monkeypatch.setenv(compute.ENV_CORE_SHARE, "25")
+    assert compute.core_share() == 25
+    monkeypatch.delenv(compute.ENV_WORKERS, raising=False)
+    p = compute.plan(None, workers="auto")
+    assert p.workers == max(1, compute.physical_cores() // 4) and p.machine["core_share_percent"] == 25
+    for wrong in ("0", "101", "half"):
+        with pytest.raises(ValueError, match="core share"):
+            compute.core_share(wrong)
+
+
 def test_auto_takes_cuda_never_mps_and_explicit_devices_must_work():
     cuda = {"cuda": [{"index": 0, "name": "GPU", "memory_gb": 12.0, "capability": "8.0"}], "mps": False}
     assert compute._device("auto", cuda)[0] == "cuda"

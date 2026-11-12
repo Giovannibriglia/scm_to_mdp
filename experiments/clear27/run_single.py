@@ -11,6 +11,7 @@ Run from the repository root (or: bash experiments/clear27/run_single.sh ...):
         --seeds 0 1
     --save all|largest|none   the models of the first seed (tool/store.py; default all)
     --workers N|auto          as in the scripts (SCM_TO_MDP_WORKERS)
+    --core-share P            percent of the physical cores to use, 1-100 (default 100; utils/compute.py)
     --resume                  continue the latest run of this method, with the same --size, --n and --seeds
 
 Output: results/clear27_single/<domain>/<method>_<date>_<time>/ (results.csv, meta.json, grid.json, models/,
@@ -33,7 +34,7 @@ import common  # noqa: E402
 
 from scm_to_mdp.tool import report_grid  # noqa: E402
 from scm_to_mdp.tool.grid import run_grid  # noqa: E402
-from scm_to_mdp.tool.runs import STAMP, runs_of  # noqa: E402
+from scm_to_mdp.tool.runs import STAMP, add_core_share, runs_of, set_core_share  # noqa: E402
 from scm_to_mdp.tool.store import method_folder  # noqa: E402
 
 ORACLE = "oracle -> MDP"
@@ -99,7 +100,9 @@ def main(argv=None) -> int:
                         help="the models of the first seed: every n, the largest n, or none")  # fmt: skip
     parser.add_argument("--resume", action="store_true", help="continue the latest run of this method")
     parser.add_argument("--workers", metavar="N", help="parallel jobs: a number or 'auto'")
+    add_core_share(parser)
     args = parser.parse_args(argv)
+    set_core_share(parser, args.core_share)
     if args.list:
         for name, source in methods_of(args.domain).items():
             print(f"{name:<45} ({source})")

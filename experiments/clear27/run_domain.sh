@@ -8,6 +8,7 @@
 #   bash experiments/clear27/run_domain.sh sysadmin flat pcmci  # only these sources
 #   RESUME=1 bash experiments/clear27/run_domain.sh sysadmin    # continue the latest runs
 #   SMOKE=1 bash experiments/clear27/run_domain.sh sysadmin     # tiny grids into results/clear27_smoke
+#   CORE_SHARE=50 bash experiments/clear27/run_domain.sh sysadmin   # at most 50% of the physical cores
 #   SHOW=0 ...                                                  # log only (default: also show the output)
 # Logs: results/clear27[_smoke]/logs/ (chain.log: start, end and exit code of the pool; <domain>_pool.log).
 set -u
@@ -26,6 +27,7 @@ else
 fi
 FLAGS=()
 [ "${RESUME:-0}" = "1" ] && FLAGS=(--resume)
+[ -n "${CORE_SHARE:-}" ] && FLAGS+=(--core-share "$CORE_SHARE")
 ARGS=("$DOMAIN" --sources "${SOURCES[@]}" ${FLAGS[@]+"${FLAGS[@]}"})
 if [ "${SHOW:-1}" = "1" ]; then
     "$PY" experiments/clear27/run_pool.py "${ARGS[@]}" 2>&1 | tee -a "$LOG/${DOMAIN}_pool.log"

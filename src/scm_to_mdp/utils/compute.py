@@ -3,7 +3,9 @@
 An experiment script runs as is on a laptop or a server: at start the runner looks at the machine
 and chooses, then prints the choices and saves them in meta.json (key "machine").
 
-    workers   parallel (size, seed) jobs = min(physical cores, RAM rule), at least 1.
+    workers   parallel (size, seed) jobs = min(core share x physical cores, RAM rule), at least 1.
+              Core share: the part of the physical cores a run may take, 100% unless set (below), e.g.
+              to leave half of a shared machine free.
               RAM rule: workers x Limits.mem_gb <= 95% of the RAM (RAM_SHARE), so that a step is never
               killed because other steps took the memory; a "memout" then means the same on every
               machine. 5% stays for the system and the parent processes (Linux server, 135 GB: 21
@@ -20,7 +22,8 @@ and chooses, then prints the choices and saves them in meta.json (key "machine")
 
 Overrides (environment, or the experiment script's command line: --workers N --device D):
 
-    SCM_TO_MDP_WORKERS = N | auto
+    SCM_TO_MDP_WORKERS = N | auto         (a number wins over the core share)
+    SCM_TO_MDP_CORE_SHARE = P     (--core-share P: percent of the physical cores, 1..100)
     SCM_TO_MDP_DEVICE  = auto | cpu | cuda | cuda:1 | mps
     SCM_TO_MDP_THREADS = N        (torch threads of one CPU training)
 
@@ -31,6 +34,7 @@ break the processes it forks later (utils/limits.py).
 from __future__ import annotations
 
 import json
+import math
 import os
 import platform
 import subprocess
@@ -40,6 +44,7 @@ from dataclasses import asdict, dataclass, field
 import psutil
 
 ENV_WORKERS = "SCM_TO_MDP_WORKERS"
+ENV_CORE_SHARE = "SCM_TO_MDP_CORE_SHARE"
 ENV_DEVICE = "SCM_TO_MDP_DEVICE"
 ENV_THREADS = "SCM_TO_MDP_THREADS"
 BLAS_VARS = ("OMP_NUM_THREADS", "OPENBLAS_NUM_THREADS", "MKL_NUM_THREADS", "VECLIB_MAXIMUM_THREADS")
@@ -113,17 +118,35 @@ def probe_gpus() -> dict:
     return _probed
 
 
-def _workers(spec, mem_gb: float | None, cores: int, ram_gb: float) -> tuple[int, str]:
+def core_share(spec=None) -> float:
+    """The percent of the physical cores a run may take (spec, else SCM_TO_MDP_CORE_SHARE, else 100)."""
+    spec = os.environ.get(ENV_CORE_SHARE) if spec in (None, "") else spec
+    if spec in (None, ""):
+        return 100.0
+    try:
+        share = float(spec)
+    except (TypeError, ValueError):
+        share = math.nan
+    if not 1 <= share <= 100:
+        raise ValueError(f"the core share is a percent from 1 to 100, not {spec!r}")
+    return share
+
+
+def _workers(spec, mem_gb: float | None, cores: int, ram_gb: float, share: float = 100.0) -> tuple[int, str]:
     if spec not in (None, "", "auto"):
         n = int(spec)
         if n < 1:
             raise ValueError(f"workers must be >= 1 or 'auto', not {spec!r}")
         return n, "set by the user"
-    by_ram = int(RAM_SHARE * ram_gb // mem_gb) if mem_gb else cores
-    n = max(1, min(cores, by_ram))
-    if n == cores:
+    allowed = max(1, int(cores * share / 100 + 1e-9))  # the cores this run may take
+    by_ram = int(RAM_SHARE * ram_gb // mem_gb) if mem_gb else allowed
+    n = max(1, min(allowed, by_ram))
+    if n == allowed and share < 100:
+        return n, f"{share:g}% of the {cores} physical cores"
+    if n == allowed:
         return n, f"one per physical core ({cores})"
-    return n, f"RAM rule: {RAM_SHARE:g} x {ram_gb:.0f} GB / {mem_gb:g} GB per step; {cores} cores"
+    ram_rule = f"RAM rule: {RAM_SHARE:g} x {ram_gb:.0f} GB / {mem_gb:g} GB per step"
+    return n, f"{ram_rule}; {allowed} of {cores} cores"
 
 
 def _device(spec: str | None, gpus: dict) -> tuple[str, str]:
@@ -173,7 +196,8 @@ def plan(mem_gb: float | None, workers=None, device: str | None = None, n_jobs: 
     """The machine and the choices for a run (see the module docstring). Arguments left as None are
     read from the environment, else chosen automatically."""
     cores, ram_gb = physical_cores(), psutil.virtual_memory().total / 1e9
-    n, why_workers = _workers(workers or os.environ.get(ENV_WORKERS), mem_gb, cores, ram_gb)
+    share = core_share()
+    n, why_workers = _workers(workers or os.environ.get(ENV_WORKERS), mem_gb, cores, ram_gb, share)
     if n_jobs is not None and n_jobs < n:
         n, why_workers = max(1, n_jobs), f"{n_jobs} job(s) to run; the machine allows {n}"
     gpus = probe_gpus()
@@ -185,6 +209,7 @@ def plan(mem_gb: float | None, workers=None, device: str | None = None, n_jobs: 
         "arch": platform.machine(),
         "python": platform.python_version(),
         "physical_cores": cores,
+        "core_share_percent": share,
         "logical_cpus": os.cpu_count(),
         "ram_gb": round(ram_gb, 1),
         "torch": gpus.get("torch"),
