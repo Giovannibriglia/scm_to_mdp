@@ -25,6 +25,8 @@ Figures
                        single graph (below). Only graphs that finished in every seed.
   correlation          Spearman's rank correlation between each score and the value, and the promise,
                        one per dataset.
+  correlation_per_graph  the same correlation computed on the graphs averaged over the seeds (the dots of
+                       <score>_per_graph): one number per score and number of transitions.
   choice               what choosing by a score gives: value and promise of the best graph of each score,
                        of the true graph, of the graphs PCMCI+ and DYNOTEARS find, and of the best single
                        graph: the ONE graph with the highest mean value over the seeds at that number of
@@ -334,6 +336,36 @@ def correlation(graphs, datasets, machines: int, out: Path) -> None:
     save(out, machines, fig, "correlation", table)
 
 
+def correlation_per_graph(graphs, datasets, machines: int, out: Path) -> None:
+    rows = []
+    for score in SCORES:
+        per = graph_means(graphs, score)
+        for n, g in per.groupby("n_transitions"):
+            for quantity in QUANTITIES:
+                rows.append({"n_transitions": n, "score": score, "quantity": quantity, "graphs": len(g),
+                             "spearman": spearman(g["rank"], g[quantity])})  # fmt: skip
+    table = pd.DataFrame(rows)
+    ns = sorted(table["n_transitions"].unique())
+    fig, axes = plt.subplots(1, 2, figsize=(7.6, 3.0), sharey=True)
+    for ax, quantity in zip(axes, QUANTITIES, strict=True):
+        for score, (_, color) in SCORES.items():
+            t = table[(table["quantity"] == quantity) & (table["score"] == score)].set_index("n_transitions")
+            ax.plot(range(len(ns)), t["spearman"].reindex(ns).values, **paper.paper_line(color, "o", ms=5))
+        ax.axhline(0, **paper.ZERO_LINE)
+        ax.set_xticks(range(len(ns)))
+        ax.set_xticklabels([k(n) for n in ns])
+        ax.set_ylim(-1.05, 1.05)
+        ax.set_xlabel("transitions")
+        ax.set_title(f"with the {QUANTITIES[quantity]}", pad=4)
+    axes[0].set_ylabel("rank correlation of the score\n(graphs averaged over seeds)")
+    fig.tight_layout(w_pad=1.2)
+    handles = [
+        Line2D([], [], **paper.paper_line(color, "o", label, ms=5)) for label, color in SCORES.values()
+    ]
+    paper.legend_below(fig, handles, y=0.03)
+    save(out, machines, fig, "correlation_per_graph", table)
+
+
 def choice(graphs, datasets, machines: int, out: Path) -> None:
     marks = GRAPHS | {f"best_{score}": BEST[score] for score in SCORES}
     points = pd.concat([marked(graphs, datasets, marks), best_single(graphs)], ignore_index=True)
@@ -409,7 +441,8 @@ def _per_graph(score: str):
 
 FIGURES = {f"{score}_vs_{quantity}": _against(score, quantity) for score in SCORES for quantity in QUANTITIES}
 FIGURES |= {f"{score}_per_graph": _per_graph(score) for score in SCORES}
-FIGURES |= {"correlation": correlation, "choice": choice, "edges": edges}
+FIGURES |= {"correlation": correlation, "correlation_per_graph": correlation_per_graph, "choice": choice}
+FIGURES |= {"edges": edges}
 
 
 def plot_size(run: Path, machines: int, out: Path, only: list | None = None) -> list[str]:
