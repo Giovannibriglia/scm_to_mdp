@@ -111,3 +111,34 @@ def test_the_pool_runs_every_source_in_its_own_folder(tmp_path, monkeypatch):
     assert dict(pool.pool_grids(["sysadmin"], ["flat"], resume=False))["sysadmin_flat"].out_dir != old
     runner = (ROOT / "experiments" / "clear27" / "run_domain.sh").read_text()
     assert "run_pool.py" in runner
+
+
+def test_a_single_run_is_the_oracle_and_one_method_of_the_paper(capsys):
+    """run_single.py: the method as in its source's grid, a smaller grid on request, its own results folder;
+    a wrong method name or size is refused."""
+    sys.path.insert(0, str(ROOT / "experiments" / "clear27"))
+    single = importlib.import_module("run_single")
+    sys.path.pop(0)
+    paper = protocol.experiment_grid("drone", "pcmci")
+    g = single.single_grid("drone", "PCMCI+ -> IMDP (IA)")
+    assert list(g.methods) == ["oracle -> MDP", "PCMCI+ -> IMDP (IA)"]
+    assert g.methods["PCMCI+ -> IMDP (IA)"] == paper.methods["PCMCI+ -> IMDP (IA)"]
+    assert (g.sizes, g.n_transitions, g.seeds, g.limits) == (paper.sizes, paper.n_transitions, paper.seeds,
+                                                             paper.limits)  # fmt: skip
+    assert g.save_models == "all"
+    assert g.out_dir == ROOT / "results" / "clear27_single" / "drone" / "PCMCIplus_IMDP_(IA)"
+    small = single.single_grid("drone", "FOCUS", ["5-1"], ["1000", "5000"], ["0", "1"], save="none")
+    assert (small.sizes, small.n_transitions, small.seeds) == (["5-1"], [1000, 5000], [0, 1])
+    assert list(small.methods) == ["oracle -> MDP", "FOCUS"] and small.save_models == "none"
+    assert list(single.single_grid("sysadmin", "oracle -> MDP", ["3"]).methods) == ["oracle -> MDP"]
+    with pytest.raises(ValueError, match="no method"):
+        single.single_grid("drone", "PCMCI -> IMDP")
+    with pytest.raises(ValueError, match="--size"):
+        single.single_grid("drone", "FOCUS", ["99-1"])
+    assert single.main(["sepsis", "--list"]) == 0
+    listed = capsys.readouterr().out
+    assert all(name in listed for name in single.methods_of("sepsis")) and "sizes:" in listed
+    with pytest.raises(SystemExit):
+        single.main(["drone"])  # no method and no --list
+    runner = ROOT / "experiments" / "clear27" / "run_single.sh"
+    assert "run_single.py" in runner.read_text()
