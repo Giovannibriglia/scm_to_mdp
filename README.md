@@ -57,6 +57,19 @@ After (or during) the runs of a domain, one command draws every figure from its 
 Figures go to `outputs/clear27/<domain>/paper/` and `explore/` (PDF and PNG), with the numbers drawn in
 `outputs/clear27/<domain>/data/`. The sizes and panels of a domain are read from its results.
 
+## Ablations
+
+`experiments/clear27/ablations/<name>/` holds one ablation: `run.py` (results in
+`results/clear27/ablations/<name>/`) and `plot.py` (figures in `outputs/clear27/ablations/<name>/`).
+
+```bash
+.venv/bin/python experiments/clear27/ablations/ablation_bic_score/run.py --machines 2    # default: 2 3
+.venv/bin/python experiments/clear27/ablations/ablation_bic_score/plot.py
+```
+
+`ablation_bic_score`: on SysAdmin, every graph the constraints allow (2^(N(N+1)): 64 at N=2, 4,096 at N=3)
+is scored with BIC and run through the box IMDP, to see whether a better BIC gives a better policy.
+
 ## The tool in three parts
 
 ```
