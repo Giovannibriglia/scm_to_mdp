@@ -1,4 +1,4 @@
-"""The ablation experiments/clear27/ablations/ablation_bic_score: every graph our constraints allow has a
+"""The ablation experiments/clear27/ablations/ablation_graph_score: every graph our constraints allow has a
 number, its BIC is the sum of its families', and a run writes one row per graph and its figures."""
 
 import importlib
@@ -11,11 +11,11 @@ import pandas as pd
 import pytest
 
 ROOT = Path(__file__).resolve().parents[2]
-FOLDER = ROOT / "experiments" / "clear27" / "ablations" / "ablation_bic_score"
+FOLDER = ROOT / "experiments" / "clear27" / "ablations" / "ablation_graph_score"
 
 
 def load(name: str):
-    spec = importlib.util.spec_from_file_location(f"ablation_bic_score_{name}", FOLDER / f"{name}.py")
+    spec = importlib.util.spec_from_file_location(f"ablation_graph_score_{name}", FOLDER / f"{name}.py")
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module

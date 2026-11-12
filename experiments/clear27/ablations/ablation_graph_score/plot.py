@@ -1,13 +1,13 @@
 """Figures of the ablation "a score against performance, every graph" (run.py), one set per size N.
 
 Run from the repository root, after (or during) run.py:
-    .venv/bin/python experiments/clear27/ablations/ablation_bic_score/plot.py               # the latest run
-    .venv/bin/python experiments/clear27/ablations/ablation_bic_score/plot.py --machines 3
-    .venv/bin/python experiments/clear27/ablations/ablation_bic_score/plot.py --run <run folder>
+    .venv/bin/python experiments/clear27/ablations/ablation_graph_score/plot.py               # the latest run
+    .venv/bin/python experiments/clear27/ablations/ablation_graph_score/plot.py --machines 3
+    .venv/bin/python experiments/clear27/ablations/ablation_graph_score/plot.py --run <run folder>
 
-Input:  results/clear27/ablations/ablation_bic_score/sysadmin_<date>_<time>/N=<N>/ (run.py)
-Output: outputs/clear27/ablations/ablation_bic_score/N=<N>/<figure>.{pdf,png}
-        outputs/clear27/ablations/ablation_bic_score/data/N=<N>_<figure>.csv   the numbers drawn
+Input:  results/clear27/ablations/ablation_graph_score/sysadmin_<date>_<time>/N=<N>/ (run.py)
+Output: outputs/clear27/ablations/ablation_graph_score/N=<N>/<figure>.{pdf,png}
+        outputs/clear27/ablations/ablation_graph_score/data/N=<N>_<figure>.csv   the numbers drawn
 
 The scores: BIC, AIC and BDeu (run.py); for each, higher is better.
 
@@ -58,7 +58,7 @@ from scipy import stats  # noqa: E402
 
 HERE = Path(__file__).resolve()
 ROOT = HERE.parents[4]
-NAME = "ablation_bic_score"
+NAME = "ablation_graph_score"
 RESULTS = ROOT / "results" / "clear27" / "ablations" / NAME
 OUTPUTS = ROOT / "outputs" / "clear27" / "ablations" / NAME
 STAMP = "%Y-%m-%d_%H-%M-%S"

@@ -17,13 +17,13 @@ For SysAdmin with N machines, EVERY graph our constraints allow is scored and ru
 The data are clear27's (protocol.py: ring, uniform logger, the same seeds), so a dataset is the paper's.
 
 Run from the repository root:
-    .venv/bin/python experiments/clear27/ablations/ablation_bic_score/run.py            # N = 2 and 3
-    .venv/bin/python experiments/clear27/ablations/ablation_bic_score/run.py --machines 2 3 4 \
+    .venv/bin/python experiments/clear27/ablations/ablation_graph_score/run.py            # N = 2 and 3
+    .venv/bin/python experiments/clear27/ablations/ablation_graph_score/run.py --machines 2 3 4 \
         --transitions 100 1000
     --seeds 0 1 ...   --workers N|auto   --core-share P   --resume (continue the latest run)
-Then the figures: .venv/bin/python experiments/clear27/ablations/ablation_bic_score/plot.py
+Then the figures: .venv/bin/python experiments/clear27/ablations/ablation_graph_score/plot.py
 
-Output: results/clear27/ablations/ablation_bic_score/sysadmin_<date>_<time>/
+Output: results/clear27/ablations/ablation_graph_score/sysadmin_<date>_<time>/
     config.json                      the options, the commit, and the edge of every bit of a graph's number
     N=<N>/datasets.csv               one row per (seed, transitions): reference values, marked graphs
     N=<N>/graphs/seed=<s>_n=<n>.csv  one row per graph of that dataset
@@ -58,7 +58,7 @@ import common  # noqa: E402
 from scm_to_mdp.core import NEXT_MARK  # noqa: E402
 from scm_to_mdp.tool.runs import STAMP, add_core_share, runs_of, set_core_share  # noqa: E402
 
-NAME = "ablation_bic_score"
+NAME = "ablation_graph_score"
 DOMAIN = "sysadmin"
 RESULTS = common.ROOT / "results" / protocol.EXPERIMENT / "ablations" / NAME
 MACHINES = [2, 3]
