@@ -1,6 +1,9 @@
 # Results of experiment runs (large; regenerate with the experiment scripts)
 results/
 
+# Figures made from the results (experiments/clear27/plot.py)
+outputs/
+
 # uv / Python
 .venv/
 __pycache__/

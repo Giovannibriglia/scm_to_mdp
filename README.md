@@ -41,6 +41,22 @@ bash experiments/clear27/run_aircraft.sh
 Or the four in one pool, SysAdmin first (a free worker takes a job of the first domain that has one):
 `bash experiments/clear27/run_all.sh`. Results in `results/clear27/<domain>/` (smoke: `results/clear27_smoke/`); `RESUME=1` continues a stopped run.
 
+One method alone, with the oracle: `bash experiments/clear27/run_single.sh sysadmin --list`, then
+`bash experiments/clear27/run_single.sh sysadmin "PCMCI+ -> IMDP (IA)"`. `CORE_SHARE=50` in front of any
+launcher uses at most 50% of the physical cores.
+
+## Figures
+
+After (or during) the runs of a domain, one command draws every figure from its results:
+
+```bash
+.venv/bin/python experiments/clear27/plot.py sysadmin        # or: sepsis drone
+.venv/bin/python experiments/clear27/plot.py --list          # the figure names
+```
+
+Figures go to `outputs/clear27/<domain>/paper/` and `explore/` (PDF and PNG), with the numbers drawn in
+`outputs/clear27/<domain>/data/`. The sizes and panels of a domain are read from its results.
+
 ## The tool in three parts
 
 ```
