@@ -5,7 +5,9 @@ under every reward of the ladder (rewards.py: from the original, additive reward
 and traps), and each policy is evaluated on the true model under that reward.
 
     methods   the box interval MDP of: PCMCI+ and DYNOTEARS (their lagged arms: no edge inside a slice),
-              Strehl and Met-Rmax (fixed hull), the full graph, and the flat model (METHODS)
+              Strehl and Met-Rmax (fixed hull), the full graph, and the flat model (METHODS); and, as
+              a reference that is not one of the compared methods, the box interval MDP of the TRUE
+              graph: what a reward costs when the structure is known (REFERENCE)
     data      clear27's (protocol.py: ring, uniform logger, the same seeds): a dataset is the paper's
     limits    clear27's, per step (memory and time)
     rewards   10 at N=3, 11 at N=4, 19 from N=5 (rewards.py)
@@ -63,7 +65,9 @@ METHODS = {  # label -> (clear27 source, its arm)
     "Met-Rmax": ("met", "Met-Rmax (fixed hull) -> IMDP (IA)"),
     "full graph": ("fullfact", "full-fact -> IMDP (IA)"),
     "flat": ("flat", "flat IMDP"),
+    "true graph": ("truegraph", "true graph -> IMDP (IA)"),  # the reference (REFERENCE)
 }
+REFERENCE = "true graph"
 COLUMNS = [
     "machines", "seed", "n_transitions", "method", "level", "reward", "status", "failed_step", "value",
     "promise", "held", "true", "promise_raw", "V_star_obs", "V_random", "learn_s", "replan_s",
@@ -136,7 +140,8 @@ def run_seed(folder: str, machines: int, seed: int, transitions: tuple[int, ...]
                 raise ValueError("the additive reward of the ladder is not SysAdmin's reward")
             shared: dict = {}
             for label, method in s["methods"].items():
-                model = learn(data, method, exp.limits, None, seed=seed, shared=shared)
+                given = truth.true_parents if method.discovery == "oracle" else None  # the reference's graph
+                model = learn(data, method, exp.limits, given, seed=seed, shared=shared)
                 base = solve(model, data, exp.gamma, exp.limits, seed=seed, shared=shared)
                 seconds = sum(step["seconds"] for name, step in base.steps.items() if name != "solve")
                 learn_s += seconds
@@ -246,7 +251,9 @@ def main(argv=None) -> int:
     workers = os.environ.get(compute.ENV_WORKERS) or "auto"
     plan = compute.plan(limits.mem_gb if limits else None, workers=workers, n_jobs=max(len(jobs), 1))
     compute.apply(plan)
-    print(f"\n===== {NAME}: SysAdmin, {len(METHODS)} methods along the ladder of rewards -> {folder} =====")
+    compared = len(METHODS) - 1
+    print(f"\n===== {NAME}: SysAdmin, {compared} methods and the true-graph reference along the ladder of "
+          f"rewards -> {folder} =====")  # fmt: skip
     problems = 0
     for m in machines:
         n_rewards = len(rewards.names(m))
@@ -260,7 +267,7 @@ def main(argv=None) -> int:
     config = {
         "ablation": NAME, "domain": DOMAIN, "machines": machines, "transitions": list(transitions),
         "seeds": seeds, "commit": _commit(), "machine": compute.as_record(plan),
-        "methods": {label: arm for label, (_, arm) in METHODS.items()},
+        "methods": {label: arm for label, (_, arm) in METHODS.items()}, "reference": REFERENCE,
         "rewards": {str(m): [{"level": lv, "name": name} for lv, name in rewards.names(m)] for m in machines},
     }  # fmt: skip
     (folder / "config.json").write_text(json.dumps(config, indent=2))

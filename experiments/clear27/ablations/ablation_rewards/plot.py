@@ -74,6 +74,7 @@ STYLE = {  # method -> (colour, marker), the paper's
     "Met-Rmax": (paper.PURPLE, "v"),
     "full graph": (paper.TEAL, "^"),
     "flat": (paper.PURPLE, "X"),
+    "true graph": (paper.GOLD, "o"),  # the reference of run.py: in the time figure, in no panel
 }
 LEVELS = {1: "additive", 2: "subset", 3: "cost", 4: "threshold", 5: "goal", 6: "trap"}
 # quantity -> (column, y label, limits, in percent)

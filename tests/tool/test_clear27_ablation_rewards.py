@@ -68,9 +68,10 @@ def test_a_run_writes_one_row_per_policy_its_time_and_the_figures(tmp_path):
     assert "time per size" in done.stdout and "N=3: 10 rewards (levels 1-4)" in done.stdout
     (folder,) = tmp_path.glob("sysadmin_*")
     config = json.loads((folder / "config.json").read_text())
-    assert config["seeds"] == [0] and len(config["rewards"]["3"]) == 10 and len(config["methods"]) == 6
+    assert config["seeds"] == [0] and len(config["rewards"]["3"]) == 10 and len(config["methods"]) == 7
+    assert config["reference"] == "true graph"  # six compared methods and the true-graph reference
     runs = pd.read_csv(folder / "N=3" / "runs" / "seed=0.csv")
-    assert len(runs) == 2 * 6 * 10 and set(runs["status"]) == {"ok"}  # data sizes x methods x rewards
+    assert len(runs) == 2 * 7 * 10 and set(runs["status"]) == {"ok"}  # data sizes x methods x rewards
     assert set(runs["method"]) == set(config["methods"]) and set(runs["level"]) == {1, 2, 3, 4}
     assert (runs["learn_s"] >= 0).all() and (runs["replan_s"] > 0).all()
     one = runs[(runs["method"] == "PCMCI+") & (runs["n_transitions"] == 1000)]
