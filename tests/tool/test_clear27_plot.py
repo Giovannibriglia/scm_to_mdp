@@ -120,6 +120,7 @@ def test_sepsis_and_drone_are_drawn_with_the_box(tmp_path, capsys):
     """The exact solver stops beyond their smallest sizes, so their certified solver is the box and every
     size is kept; --solver (the solver argument) still overrides the domain's choice."""
     assert plot.DOMAIN_SETTINGS["sepsis"]["solver"] == plot.DOMAIN_SETTINGS["drone"]["solver"] == "IMDP (IA)"
+    assert plot.DOMAIN_SETTINGS["aircraft"] == {"solver": "IMDP (IA)"}  # its panels come from the data
     assert plot.DOMAIN_SETTINGS["drone"]["panels"] == ["3-1", "5-1", "7-1", "10-1", "12-1"]
     assert "solver" not in plot.DOMAIN_SETTINGS["sysadmin"]  # the default: exact
     sizes = {"3-1": 27, "5-1": 125, "7-1": 343, "10-1": 1000, "12-1": 1728}

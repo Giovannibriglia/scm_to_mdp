@@ -21,7 +21,7 @@ Conventions
 - normalised value = (V_true - V_random) / (V*_obs - V_random): 0 is the uniform random policy, 1 the best
   policy over the observed state. The promise is normalised in the same way.
 - "certified" = the interval MDP of a graph source solved with the domain's solver: "IMDP (exact)" for
-  SysAdmin, the box "IMDP (IA)" for Sepsis and Drone, where the exact solver runs out of memory beyond the
+  SysAdmin, the box "IMDP (IA)" for Sepsis, Drone and Aircraft, where the exact solver stops beyond the
   smallest sizes (DOMAIN_SETTINGS; --solver overrides it). The flat model has one interval MDP ("flat IMDP").
 - A point (method, size, transitions) is drawn only if at least MIN_OK of its seeds finished (status ok):
   the mean over the finished seeds, and a 95% t-interval as the band.
@@ -133,6 +133,7 @@ DOMAIN_SETTINGS = {
     # the exact solver runs out of memory at vitals=4 (Sepsis) and from side 5 on (Drone): the box finishes
     "sepsis": {"solver": "IMDP (IA)", "panels": ["2", "3", "4"]},
     "drone": {"solver": "IMDP (IA)", "panels": ["3-1", "5-1", "7-1", "10-1", "12-1"]},
+    "aircraft": {"solver": "IMDP (IA)"},  # the exact solver finishes at 4x3 only; panels from the data
 }
 
 # ==== 2. loading the runs ==========================================================================
