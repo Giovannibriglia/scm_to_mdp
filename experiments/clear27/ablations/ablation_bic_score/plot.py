@@ -18,6 +18,11 @@ Figures
                        are the ten datasets' best graphs, not ten graphs tied in one dataset). Line: the
                        mean value of the graphs in each twentieth of the ranks.
   <score>_vs_promise   the same with the normalised promise (the certified lower bound).
+  <score>_per_graph    one dot per GRAPH, averaged over the seeds: its mean rank by the score against its
+                       mean value (top row) and its mean promise (bottom row), coloured by the number of
+                       true edges it misses; with few graphs (at most ERROR_BARS), a bar of one standard
+                       deviation over the seeds. Marked: the true graph, the empty graph, and the best
+                       single graph (below). Only graphs that finished in every seed.
   correlation          Spearman's rank correlation between each score and the value, and the promise,
                        one per dataset.
   choice               what choosing by a score gives: value and promise of the best graph of each score,
@@ -67,6 +72,7 @@ def _paper():
 
 paper = _paper()
 BINS = 20  # the ranks are cut in twentieths for the mean line
+ERROR_BARS = 200  # per_graph: the spread over the seeds is drawn up to this number of graphs
 SCORES = {"bic": ("BIC", "#0b0b0b"), "aic": ("AIC", paper.TEAL), "bdeu": ("BDeu", paper.PURPLE)}
 # mark -> (column of datasets.csv, label, colour, marker); the best graph of a score is added per figure
 GRAPHS = {
@@ -214,6 +220,81 @@ def score_against(graphs, datasets, score: str, quantity: str, machines: int, ou
     save(out, machines, fig, f"{score}_vs_{quantity}", pd.concat(rows))
 
 
+def graph_means(graphs: pd.DataFrame, score: str) -> pd.DataFrame:
+    """One row per (number of transitions, graph): the mean over the seeds of its rank by the score, its
+    value and its promise, their standard deviations, and the share of seeds whose promise held. Only
+    the graphs with a value in every seed."""
+    rank = f"{score}_rank"
+    seeds = graphs.groupby("n_transitions")["seed"].nunique().rename("all_seeds")
+    done = graphs.dropna(subset=["value", "promise"])
+    per = done.groupby(["n_transitions", "graph"]).agg(
+        seeds=("seed", "nunique"), n_edges=("n_edges", "first"), missing=("missing", "first"),
+        extra=("extra", "first"), rank=(rank, "mean"), value=("value", "mean"), value_sd=("value", "std"),
+        promise=("promise", "mean"), promise_sd=("promise", "std"), held=("held", "mean"),
+    ).reset_index()  # fmt: skip
+    per = per.merge(seeds, on="n_transitions")
+    return per[per["seeds"] == per["all_seeds"]].drop(columns="all_seeds")
+
+
+def per_graph(graphs, datasets, score: str, machines: int, out: Path) -> None:
+    label = SCORES[score][0]
+    per = graph_means(graphs, score)
+    ns = sorted(per["n_transitions"].unique())
+    true_graph, single = int(datasets["true_graph"].iloc[0]), best_single(graphs)
+    most = max(int(per["missing"].max()), 1)
+    cmap = mpl.colors.LinearSegmentedColormap.from_list(
+        "missing", [paper.BLUE, "#b9cfee", "#e6e2da", paper.RED]
+    )
+    norm = mpl.colors.Normalize(0, most)
+    fig, axes = plt.subplots(2, len(ns), figsize=(2.5 * max(len(ns), 2), 4.9), sharex=True, sharey="row",
+                             squeeze=False)  # fmt: skip
+    for row, quantity in enumerate(QUANTITIES):
+        limits = LIMITS[quantity]
+        for ax, n in zip(axes[row], ns, strict=True):
+            g = per[per["n_transitions"] == n]
+            if len(g) <= ERROR_BARS:
+                ax.errorbar(g["rank"], g[quantity], yerr=g[f"{quantity}_sd"].fillna(0), fmt="none", lw=0.5,
+                            ecolor=paper.MUTED, alpha=0.5, zorder=1)  # fmt: skip
+            few = len(g) <= ERROR_BARS
+            ax.scatter(g["rank"], g[quantity].clip(*limits), c=g["missing"], cmap=cmap, norm=norm,
+                       s=16 if few else 4, lw=0.3 if few else 0, edgecolor="white", rasterized=not few,
+                       zorder=2)  # fmt: skip
+            marks = {
+                "true graph": (true_graph, paper.GOLD, "o"),
+                "empty graph": (0, "#0b0b0b", "s"),
+                "best single graph": (
+                    int(single[single["n_transitions"] == n]["graph"].iloc[0]),
+                    "#0b0b0b",
+                    "^",
+                ),
+            }
+            for graph, color, marker in marks.values():
+                m = g[g["graph"] == graph]
+                ax.scatter(m["rank"], m[quantity].clip(*limits), s=52, marker=marker, facecolor="none",
+                           edgecolor=color, linewidth=1.2, zorder=4)  # fmt: skip
+            rho = spearman(g["rank"], g[quantity])
+            note = f"ρ = {rho:.2f}" if np.isfinite(rho) else "ρ: no spread"
+            ax.text(0.04, 0.96, note, transform=ax.transAxes, va="top", fontsize=8.5, color=paper.INK2)
+            ax.axhline(0, **paper.ZERO_LINE)
+            ax.set_xlim(-0.03, 1.03)
+            ax.set_ylim(*limits)
+            ax.set_xticks([0, 0.5, 1])
+            if row == 0:
+                ax.set_title(f"{k(n)} transitions", pad=4)
+            else:
+                ax.set_xlabel(f"mean {label} rank (1 = best)")
+        axes[row, 0].set_ylabel(f"{QUANTITIES[quantity]}\n(mean over seeds)")
+    fig.tight_layout(w_pad=1.0, h_pad=0.9)
+    handles = [mark_handle(text, color, marker, True) for text, (_, color, marker) in marks.items()]
+    paper.legend_below(fig, handles, y=0.035)
+    cax = fig.add_axes([0.72, -0.015, 0.2, 0.018])
+    bar = fig.colorbar(mpl.cm.ScalarMappable(norm=norm, cmap=cmap), cax=cax, orientation="horizontal")
+    bar.set_label("true edges missing", fontsize=8.5)
+    bar.set_ticks(sorted({0, most // 2, most}))
+    bar.outline.set_visible(False)
+    save(out, machines, fig, f"{score}_per_graph", per)
+
+
 def correlations(graphs: pd.DataFrame) -> pd.DataFrame:
     """Spearman's correlation between each score and each quantity, one row per dataset."""
     rows = []
@@ -322,7 +403,12 @@ def _against(score: str, quantity: str):
     )
 
 
+def _per_graph(score: str):
+    return lambda graphs, datasets, machines, out: per_graph(graphs, datasets, score, machines, out)
+
+
 FIGURES = {f"{score}_vs_{quantity}": _against(score, quantity) for score in SCORES for quantity in QUANTITIES}
+FIGURES |= {f"{score}_per_graph": _per_graph(score) for score in SCORES}
 FIGURES |= {"correlation": correlation, "choice": choice, "edges": edges}
 
 
