@@ -63,15 +63,21 @@ Figures go to `outputs/clear27/<domain>/paper/` and `explore/` (PDF and PNG), wi
 `results/clear27/ablations/<name>/`) and `plot.py` (figures in `outputs/clear27/ablations/<name>/`).
 
 ```bash
-.venv/bin/python experiments/clear27/ablations/ablation_rewards/run.py --machines 3 4 --seeds 3   # default: N=3..10, 10 seeds
-.venv/bin/python experiments/clear27/ablations/ablation_rewards/plot.py
+bash experiments/clear27/ablations/ablation_rewards/run_sysadmin.sh    # the run, then its figures; also
+bash experiments/clear27/ablations/ablation_rewards/run_sepsis.sh      # run_drone.sh (RESUME=1, SIZES=...)
+.venv/bin/python experiments/clear27/ablations/ablation_rewards/run.py --domain drone --sizes 3 4 --seeds 3
+.venv/bin/python experiments/clear27/ablations/ablation_rewards/plot.py --domain drone
 .venv/bin/python experiments/clear27/ablations/ablation_graph_score/run.py --machines 2           # default: 2 3
 .venv/bin/python experiments/clear27/ablations/ablation_graph_score/plot.py
 ```
 
-`ablation_rewards` (the first): on SysAdmin, six box IMDPs (PCMCI+, DYNOTEARS, Strehl, Met-Rmax, the full
-graph, the flat model) learn one model per dataset, which is re-planned under a ladder of rewards from the
-original one to goals in rare states and traps (`rewards.py`: 10 rewards at N=3, 11 at N=4, 19 from N=5).
+`ablation_rewards` (the first): on SysAdmin, Sepsis and Drone, every method learns one model per dataset,
+which is re-planned under a ladder of rewards from the original one to goals in rare states and traps
+(`rewards.py`: 10 to 19 rewards per size on SysAdmin, 16 or 17 on Sepsis, 15 on Drone). Twelve methods: the
+box IMDP of PCMCI+, DYNOTEARS, the full graph, the flat model and the true graph (with a promise); the
+plug-in MDP of the same five; and SLF-Rmax and Met-Rmax as their papers run them (their own structure and
+predictions, the papers' thresholds, value iteration). Results and figures have one folder per domain:
+`results/clear27/ablations/ablation_rewards/<domain>/` and `outputs/clear27/ablations/ablation_rewards/<domain>/`.
 
 `ablation_graph_score` (the second): on SysAdmin, every graph the constraints allow (2^(N(N+1)): 64 at N=2, 4,096 at N=3)
 is scored with BIC, AIC and BDeu and run through the box IMDP, to see whether a better score gives a

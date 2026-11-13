@@ -1,28 +1,42 @@
-"""Ablation: how robust are the methods to the reward? A ladder of rewards, SysAdmin (S8, S9).
+"""Ablation: how robust are the methods to the reward? A ladder of rewards on SysAdmin, Sepsis and Drone
+(S8, S9).
 
 Each method learns ONE model per dataset, as in clear27; that model is then re-planned (not re-learned)
-under every reward of the ladder (rewards.py: from the original, additive reward to goals in rare states
+under every reward of the ladder (rewards.py: from the environment's own reward to goals in rare states
 and traps), and each policy is evaluated on the true model under that reward.
 
-    methods   the box interval MDP of: PCMCI+ and DYNOTEARS (their lagged arms: no edge inside a slice),
-              Strehl and Met-Rmax (fixed hull), the full graph, and the flat model (METHODS); and, as
-              a reference that is not one of the compared methods, the box interval MDP of the TRUE
-              graph: what a reward costs when the structure is known (REFERENCE)
-    data      clear27's (protocol.py: ring, uniform logger, the same seeds): a dataset is the paper's
+    methods   with a promise: the box interval MDP of PCMCI+ and DYNOTEARS (their lagged arms: no edge
+              inside a slice), of the full graph, of the true graph (the reference: what a reward costs
+              when the structure is known) and the flat interval MDP;
+              without a promise: the plug-in MDP (point estimates, value iteration) of the same five
+              structures ("<structure> MDP"), and the two structure learners of factored RL as their
+              papers run them (KWIK_PAPER): SLF-Rmax (Strehl, Diuk, Littman, AAAI 2007) and Met-Rmax (Diuk,
+              Li, Leffler, ICML 2009), i.e. the learner's own structure and predictions with the papers'
+              thresholds, planned by value iteration. Offline, their optimism for "don't know" (it drives
+              exploration) is replaced by pessimism: such a pair halts with the worst value
+              (scm_learning/kwik_intervals.py). The value a point model gives its policy is recorded in
+              `promise`, but it is no bound (CERTIFIED lists the methods whose promise is one)
+    data      clear27's (protocol.py: the uniform logger, the same seeds): a dataset is the paper's
     limits    clear27's, per step (memory and time)
-    rewards   10 at N=3, 11 at N=4, 19 from N=5 (rewards.py)
+    rewards   rewards.py: 10 to 19 per size on SysAdmin, 16 or 17 on Sepsis, 15 on Drone
 
 Run from the repository root:
-    .venv/bin/python experiments/clear27/ablations/ablation_rewards/run.py                  # N = 3..10
-    .venv/bin/python experiments/clear27/ablations/ablation_rewards/run.py --machines 3 4 --seeds 3
+    .venv/bin/python experiments/clear27/ablations/ablation_rewards/run.py                  # SysAdmin
+    .venv/bin/python experiments/clear27/ablations/ablation_rewards/run.py --domain sepsis  # 2, 3, 4 vitals
+    .venv/bin/python experiments/clear27/ablations/ablation_rewards/run.py --domain drone --sizes 3 4 5
+    --sizes: machines (SysAdmin), vitals (Sepsis), the side of the grid (Drone)
     --transitions 10 100 ...   --workers N|auto   --core-share P   --resume (continue the latest run)
     --seeds K: the first K seeds (0 .. K-1; default: the paper's 10)
-Then the figures: .venv/bin/python experiments/clear27/ablations/ablation_rewards/plot.py
+Then the figures: .venv/bin/python experiments/clear27/ablations/ablation_rewards/plot.py --domain <domain>
 
-Output: results/clear27/ablations/ablation_rewards/sysadmin_<date>_<time>/
-    config.json               the options, the commit, the methods and the rewards of every size
-    timing.csv                one row per (N, seed): seconds in all, and per step (summed over its methods)
-    N=<N>/runs/seed=<s>.csv   one row per (transitions, method, reward)
+One launch script per domain (the paper's sizes and data sizes, then the figures; run_domain.sh):
+    bash experiments/clear27/ablations/ablation_rewards/run_sysadmin.sh    # also run_sepsis.sh, run_drone.sh
+
+Output: results/clear27/ablations/ablation_rewards/<domain>/<domain>_<date>_<time>/
+    config.json                    the options, the commit, the methods and the rewards of every size
+    timing.csv                     one row per (size, seed): seconds in all, and per step (summed over its
+                                   methods)
+    <size>=<s>/runs/seed=<s>.csv   one row per (transitions, method, reward); <size> is N, vitals or side
 
 Columns of a run: value and promise are normalised with the reward's own references,
 (V - V_random) / (V*_obs - V_random); `held`: promise <= true value in every observed live state;
@@ -38,6 +52,7 @@ A step a method does not have is empty (the flat model has no discovery and no b
 
 import argparse
 import csv
+import dataclasses
 import json
 import os
 import subprocess
@@ -60,22 +75,42 @@ import rewards  # noqa: E402
 from scm_to_mdp.tool.runs import STAMP, add_core_share, runs_of, set_core_share  # noqa: E402
 
 NAME = "ablation_rewards"
-DOMAIN = "sysadmin"
 RESULTS = common.ROOT / "results" / protocol.EXPERIMENT / "ablations" / NAME
-MACHINES = [3, 4, 5, 6, 7, 8, 9, 10]
+# domain -> (title, default sizes, the name of a size on an axis, in a folder)
+DOMAINS = {
+    "sysadmin": ("SysAdmin", [3, 4, 5, 6, 7, 8, 9, 10], "machines N", "N"),
+    "sepsis": ("Sepsis", [2, 3, 4], "vitals", "vitals"),
+    "drone": ("Drone", [3, 4, 5, 6, 7, 8, 9], "side of the grid", "side"),
+}
 TRANSITIONS = [10, 100, 1000, 10_000]
 METHODS = {  # label -> (clear27 source, its arm)
     "PCMCI+": ("pcmci_lagged", "PCMCI+ (lagged) -> IMDP (IA)"),
     "DYNOTEARS": ("dynotears_lagged", "DYNOTEARS (lagged) -> IMDP (IA)"),
-    "Strehl": ("strehl", "Strehl (fixed hull) -> IMDP (IA)"),
-    "Met-Rmax": ("met", "Met-Rmax (fixed hull) -> IMDP (IA)"),
     "full graph": ("fullfact", "full-fact -> IMDP (IA)"),
     "flat": ("flat", "flat IMDP"),
     "true graph": ("truegraph", "true graph -> IMDP (IA)"),  # the reference (REFERENCE)
+    "PCMCI+ MDP": ("pcmci_lagged", "PCMCI+ (lagged) -> MDP (plug-in)"),
+    "DYNOTEARS MDP": ("dynotears_lagged", "DYNOTEARS (lagged) -> MDP (plug-in)"),
+    "full graph MDP": ("fullfact", "full-fact -> MDP (plug-in)"),
+    "flat MDP": ("flat", "flat -> MDP (plug-in)"),
+    "true graph MDP": ("truegraph", "true graph -> MDP (plug-in)"),
+    "SLF-Rmax": ("strehl", "Strehl-KWIK -> MDP (plug-in)"),  # with KWIK_PAPER's thresholds
+    "Met-Rmax": ("met", "Met-Rmax-KWIK -> MDP (plug-in)"),
 }
 REFERENCE = "true graph"
+CERTIFIED = ["PCMCI+", "DYNOTEARS", "full graph", "flat", "true graph"]  # their promise is a bound
+# The thresholds of the papers' experiments (k: the bound on the parents, the domain's as in clear27).
+# SLF-Rmax: m = 30, eps1 = 0.2 on SysAdmin (Diuk et al. 2009, Sec. 3.3.2; m = 20 on Stock trading, Strehl et
+# al. 2007, p. 650). Met-Rmax: m = 50 on SysAdmin (Sec. 3.3.2; 7 on Stock trading), "the number of samples
+# required by each meteorologist before it assumes its prediction is known" (Sec. 3.3.1): the paper gives
+# one m, used here for both thresholds of Alg. 1 (m_sub and line 18); its eps is not stated (SLF-Rmax's).
+# Sepsis and Drone have no published setting: SysAdmin's.
+KWIK_PAPER = {
+    "SLF-Rmax": lambda k: {"k": k, "m": 30, "eps1": 0.2, "delta": protocol.DELTA},
+    "Met-Rmax": lambda k: {"D": k, "m": 50, "m_sub": 50, "eps": 0.2, "delta": protocol.DELTA},
+}
 COLUMNS = [
-    "machines", "seed", "n_transitions", "method", "level", "reward", "status", "failed_step", "value",
+    "size", "seed", "n_transitions", "method", "level", "reward", "status", "failed_step", "value",
     "promise", "held", "true", "promise_raw", "V_star_obs", "V_random", "learn_s", "replan_s",
     "discovery_s", "selection_s", "learning_s", "relax_s", "solve_s",
 ]  # fmt: skip
@@ -85,21 +120,35 @@ REWARD_STEPS = ("relax", "solve")  # once per reward
 _SETUP: dict = {}
 
 
-def setup() -> dict:
-    """clear27's SysAdmin setting and the methods (once per process)."""
-    if not _SETUP:
+def env_size(domain: str, size: int):
+    """The size as clear27's grid names it (Drone: "<side>-<drones>", one drone)."""
+    return f"{size}-1" if domain == "drone" else size
+
+
+def size_folder(domain: str, size: int) -> str:
+    return f"{DOMAINS[domain][3]}={size}"
+
+
+def setup(domain: str) -> dict:
+    """clear27's setting of the domain and the methods (once per process)."""
+    if domain not in _SETUP:
         from scm_to_mdp.tool.grid import experiments
 
         methods, exp = {}, None
+        parents = protocol.DOMAINS[domain].sl_spibb_parents
         for label, (source, arm) in METHODS.items():
-            exp = experiments(protocol.experiment_grid(DOMAIN, source))[0]
+            exp = experiments(protocol.experiment_grid(domain, source))[0]
             methods[label] = exp.methods[arm]
-        _SETUP.update(exp=exp, methods=methods)
-    return _SETUP
+            if label in KWIK_PAPER:
+                methods[label] = dataclasses.replace(
+                    methods[label], discovery_options=KWIK_PAPER[label](parents)
+                )
+        _SETUP[domain] = {"exp": exp, "methods": methods}
+    return _SETUP[domain]
 
 
-def run_seed(folder: str, machines: int, seed: int, transitions: tuple[int, ...]) -> dict:
-    """Every dataset of one (size, seed): writes N=<N>/runs/seed=<s>.csv and returns its timing."""
+def run_seed(folder: str, domain: str, size: int, seed: int, transitions: tuple[int, ...]) -> dict:
+    """Every dataset of one (size, seed): writes <size>=<s>/runs/seed=<s>.csv and returns its timing."""
     warnings.filterwarnings("ignore")
     import numpy as np
 
@@ -111,9 +160,9 @@ def run_seed(folder: str, machines: int, seed: int, transitions: tuple[int, ...]
     from scm_to_mdp.tool.evaluate import reference_values
     from scm_to_mdp.tool.methods import learn, replan, solve
 
-    start, s = time.monotonic(), setup()
+    start, s = time.monotonic(), setup(domain)
     exp = s["exp"]
-    env = exp.make_env(machines, seed)
+    env = exp.make_env(env_size(domain, size), seed)
     truth = env.ground_truth()
     table = exp.collect(env, max(*transitions, max(protocol.N_TRANSITIONS)))  # the paper's table
     truth.check_data(table)
@@ -123,7 +172,12 @@ def run_seed(folder: str, machines: int, seed: int, transitions: tuple[int, ...]
     terminal = np.asarray(full.reward.terminal, dtype=bool)
     observed = truth.observed_index()
     tasks = []  # (rung, the truth under its reward, V_target, V*_obs, V_random)
-    for rung in rewards.ladder(full.B, np.asarray(truth.actions), terminal, visits):
+    # Sepsis and Drone: "rare" counts the arrivals (a state seen only as a start cannot be reached)
+    arrivals = np.bincount(full.state_index(full.df[full.next_vars].to_numpy()), minlength=len(full.B))
+    world = rewards.World(full.B, list(full.state_vars), np.asarray(truth.actions), terminal,
+                          np.asarray(full.reward.r_next, dtype=float),
+                          visits if domain == "sysadmin" else arrivals)  # fmt: skip
+    for rung in rewards.ladder_of(domain, world):
         on_truth = rung.task.for_truth(observed)
         on_observed = Reward(rung.task.R, rung.task.r_next, rung.task.terminal)
         task_truth = truth.with_reward(lambda B, a, r=on_truth: r, lambda B, a, r=on_observed: r)
@@ -136,7 +190,7 @@ def run_seed(folder: str, machines: int, seed: int, transitions: tuple[int, ...]
     def seconds_of(result, steps) -> list:
         return [result.steps[name]["seconds"] if name in result.steps else None for name in steps]
 
-    out = Path(folder) / f"N={machines}" / "runs"
+    out = Path(folder) / size_folder(domain, size) / "runs"
     out.mkdir(parents=True, exist_ok=True)
     final = out / f"seed={seed}.csv"
     partial = final.with_suffix(".csv.partial")
@@ -150,7 +204,7 @@ def run_seed(folder: str, machines: int, seed: int, transitions: tuple[int, ...]
             if not np.allclose(original.R, data.reward.R) or not np.allclose(
                 original.r_next, data.reward.r_next
             ):
-                raise ValueError("the additive reward of the ladder is not SysAdmin's reward")
+                raise ValueError(f"level 1 of the ladder is not the reward of {domain}")
             shared: dict = {}
             for label, method in s["methods"].items():
                 given = truth.true_parents if method.discovery == "oracle" else None  # the reference's graph
@@ -162,7 +216,7 @@ def run_seed(folder: str, machines: int, seed: int, transitions: tuple[int, ...]
                 for name, x in zip(MODEL_STEPS, model_s, strict=True):
                     spent_in[name] += x or 0.0
                 for rung, task_truth, V_target, V_best, V_rand in tasks:
-                    row = [machines, seed, n, label, rung.level, rung.name]
+                    row = [size, seed, n, label, rung.level, rung.name]
                     if not base.ok or base.solution is None:  # the model was not learned: no reward runs
                         failed = [base.status, base.failed_step, *[None] * 7, seconds, None]
                         writer.writerow([*row, *failed, *model_s, None, None])
@@ -189,7 +243,7 @@ def run_seed(folder: str, machines: int, seed: int, transitions: tuple[int, ...]
                                      V_rand, *times])  # fmt: skip
     os.replace(partial, final)  # a file with this name is a finished (size, seed) (--resume)
     timing = {
-        "machines": machines, "seed": seed, "datasets": len(transitions), "rewards": len(tasks),
+        "size": size, "seed": seed, "datasets": len(transitions), "rewards": len(tasks),
         "seconds": round(time.monotonic() - start, 2), "setup_s": round(setup_s, 2),
         "learn_s": round(learn_s, 2), "replan_s": round(replan_s, 2),
         **{f"{name}_s": round(x, 2) for name, x in spent_in.items()},
@@ -217,18 +271,18 @@ def run_folder(base: Path, resume: bool) -> Path:
     return Path(f"{base}_{datetime.now().strftime(STAMP)}")
 
 
-def done(folder: Path, machines: int, seed: int) -> bool:
-    return (folder / f"N={machines}" / "runs" / f"seed={seed}.json").exists()
+def done(folder: Path, domain: str, size: int, seed: int) -> bool:
+    return (folder / size_folder(domain, size) / "runs" / f"seed={seed}.json").exists()
 
 
 def write_timing(folder: Path):
     """timing.csv from the finished (size, seed) of the run; returns the table (or None)."""
     import pandas as pd
 
-    rows = [json.loads(p.read_text()) for p in sorted(folder.glob("N=*/runs/*.json"))]
+    rows = [json.loads(p.read_text()) for p in sorted(folder.glob("*=*/runs/*.json"))]
     if not rows:
         return None
-    table = pd.DataFrame(rows).sort_values(["machines", "seed"])
+    table = pd.DataFrame(rows).sort_values(["size", "seed"])
     table.to_csv(folder / "timing.csv", index=False)
     return table
 
@@ -241,8 +295,16 @@ def duration(seconds: float) -> str:
 
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description="clear27 ablation: the methods along a ladder of rewards.")
-    parser.add_argument("--machines", nargs="+", type=int, default=MACHINES, metavar="N",
-                        help=f"SysAdmin sizes (default {MACHINES[0]}..{MACHINES[-1]})")  # fmt: skip
+    parser.add_argument("--domain", choices=list(DOMAINS), default="sysadmin", help="default: sysadmin")
+    parser.add_argument(
+        "--sizes",
+        "--machines",
+        dest="sizes",
+        nargs="+",
+        type=int,
+        metavar="N",
+        help="machines (SysAdmin, 3..10), vitals (Sepsis, 2..4), side (Drone, 3..9)",
+    )
     parser.add_argument("--transitions", nargs="+", type=int, default=TRANSITIONS, metavar="n",
                         help=f"data sizes (default {' '.join(map(str, TRANSITIONS))})")  # fmt: skip
     parser.add_argument("--seeds", type=int, default=len(common.SEEDS), metavar="K",
@@ -253,13 +315,22 @@ def main(argv=None) -> int:
     parser.add_argument("--results", type=Path, default=RESULTS, help=argparse.SUPPRESS)
     args = parser.parse_args(argv)
     set_core_share(parser, args.core_share)
-    if min(args.machines) < 3 or min(args.transitions) < 1 or args.seeds < 1:
-        parser.error("--machines must be >= 3, --transitions >= 1 and --seeds >= 1")
+    domain = args.domain
+    title, default_sizes, size_name, prefix = DOMAINS[domain]
+    sizes = sorted(set(args.sizes or default_sizes))
+    known = [s for s in protocol.SIZES[domain] if s != 2 or domain != "sysadmin"]  # the ladder needs N >= 3
+    unknown = [s for s in sizes if env_size(domain, s) not in known]
+    if unknown:
+        parser.error(
+            f"{title} has no size {unknown}: choose among {' '.join(str(s).split('-')[0] for s in known)}"
+        )
+    if min(args.transitions) < 1 or args.seeds < 1:
+        parser.error("--transitions must be >= 1 and --seeds >= 1")
     if args.workers is not None:
         if args.workers != "auto" and not (args.workers.isdigit() and int(args.workers) >= 1):
             parser.error(f"--workers must be a positive number or 'auto', not {args.workers!r}")
         os.environ["SCM_TO_MDP_WORKERS"] = args.workers
-    machines, transitions = sorted(set(args.machines)), tuple(sorted(set(args.transitions)))
+    transitions = tuple(sorted(set(args.transitions)))
     seeds = list(range(args.seeds))
 
     from tqdm import tqdm
@@ -267,51 +338,61 @@ def main(argv=None) -> int:
     from scm_to_mdp.utils import compute
     from scm_to_mdp.utils.parallel import run_dynamic
 
-    folder = run_folder(args.results / DOMAIN, args.resume)
-    jobs = [(str(folder), m, s, transitions) for m in machines for s in seeds if not done(folder, m, s)]
-    limits = setup()["exp"].limits
+    folder = run_folder(args.results / domain / domain, args.resume)
+    jobs = [
+        (str(folder), domain, size, seed, transitions)
+        for size in sizes
+        for seed in seeds
+        if not done(folder, domain, size, seed)
+    ]
+    limits = setup(domain)["exp"].limits
     workers = os.environ.get(compute.ENV_WORKERS) or "auto"
     plan = compute.plan(limits.mem_gb if limits else None, workers=workers, n_jobs=max(len(jobs), 1))
     compute.apply(plan)
-    compared = len(METHODS) - 1
-    print(f"\n===== {NAME}: SysAdmin, {compared} methods and the true-graph reference along the ladder of "
-          f"rewards -> {folder} =====")  # fmt: skip
+    print(f"\n===== {NAME}: {title}, {len(METHODS)} methods ({len(CERTIFIED)} with a promise) along the "
+          f"ladder of rewards -> {folder} =====")  # fmt: skip
     problems = 0
-    for m in machines:
-        n_rewards = len(rewards.names(m))
+    for size in sizes:
+        levels = sorted({level for level, _ in rewards.names_of(domain, size)})
+        n_rewards = len(rewards.names_of(domain, size))
         problems += n_rewards * len(transitions) * len(seeds)
-        print(f"  N={m}: {n_rewards} rewards (levels {rewards.levels_of(m)[0]}-{rewards.levels_of(m)[-1]}), "
+        print(f"  {prefix}={size}: {n_rewards} rewards (levels {levels[0]}-{levels[-1]}), "
               f"{len(transitions)} data sizes, {len(seeds)} seeds")  # fmt: skip
     print(f"  {problems:,} problem instances, {problems * len(METHODS):,} policies; "
-          f"{len(jobs)} of {len(machines) * len(seeds)} (size, seed) jobs to run")  # fmt: skip
+          f"{len(jobs)} of {len(sizes) * len(seeds)} (size, seed) jobs to run")  # fmt: skip
     print(plan.describe())
     folder.mkdir(parents=True, exist_ok=True)
     config = {
-        "ablation": NAME, "domain": DOMAIN, "machines": machines, "transitions": list(transitions),
-        "seeds": seeds, "commit": _commit(), "machine": compute.as_record(plan),
-        "methods": {label: arm for label, (_, arm) in METHODS.items()}, "reference": REFERENCE,
-        "rewards": {str(m): [{"level": lv, "name": name} for lv, name in rewards.names(m)] for m in machines},
+        "ablation": NAME, "domain": domain, "sizes": sizes, "size_name": size_name, "size_prefix": prefix,
+        "transitions": list(transitions), "seeds": seeds, "commit": _commit(),
+        "machine": compute.as_record(plan), "methods": {label: arm for label, (_, arm) in METHODS.items()},
+        "reference": REFERENCE, "certified": CERTIFIED,
+        "kwik_paper": {label: options(protocol.DOMAINS[domain].sl_spibb_parents)
+                       for label, options in KWIK_PAPER.items()},
+        "levels": {str(level): name for level, name in rewards.LEVEL_NAMES[domain].items()},
+        "rewards": {str(size): [{"level": lv, "name": name} for lv, name in rewards.names_of(domain, size)]
+                    for size in sizes},
     }  # fmt: skip
     (folder / "config.json").write_text(json.dumps(config, indent=2))
     bar = tqdm(total=len(jobs), desc=f"{NAME} ({plan.workers} workers)", unit="job", dynamic_ncols=True)
     started, failed = time.monotonic(), []
     try:
         # the small sizes first: their figures can be drawn while a large size still runs
-        for job, row in run_dynamic(run_seed, jobs, plan.workers, bar=bar, priority=lambda job: job[1]):
+        for job, row in run_dynamic(run_seed, jobs, plan.workers, bar=bar, priority=lambda job: job[2]):
             if row.get("crashed"):  # no file for this (size, seed): --resume runs it again
                 failed.append(job)
-                bar.write(f"   N={job[1]} seed={job[2]} failed: {row.get('error', 'the worker died')}")
+                bar.write(f"   {prefix}={job[2]} seed={job[3]} failed: {row.get('error', 'the worker died')}")
     finally:
         bar.close()
         timing = write_timing(folder)
     wall = time.monotonic() - started
     if timing is not None:
         steps = [f"{name}_s" for name in MODEL_STEPS + REWARD_STEPS]
-        by_size = timing.groupby("machines")[["seconds", *steps]].sum()
+        by_size = timing.groupby("size")[["seconds", *steps]].sum()
         print("time per size (summed over its seeds and methods):")
         for m, t in by_size.iterrows():
             parts = ", ".join(f"{name[:-2]} {duration(t[name])}" for name in steps)
-            print(f"  N={m}: {duration(t['seconds'])} ({parts})")
+            print(f"  {prefix}={m}: {duration(t['seconds'])} ({parts})")
         print(f"  all: {duration(timing['seconds'].sum())} of computation, {duration(wall)} of wall clock "
               f"for this launch")  # fmt: skip
     note = f" ({len(failed)} job(s) failed: run again with --resume)" if failed else ""
