@@ -1,5 +1,6 @@
 """The ablation experiments/clear27/ablations/ablation_rewards: the ladders of rewards of the three domains,
-a small run of each with its figures, and the re-planning of a model with HALT pairs."""
+a small run of each with its figures, a run that extends another, and the re-planning of a learned model
+(with HALT pairs; SPIBB's and FOCUS's) under another reward."""
 
 import importlib.util
 import json
@@ -178,6 +179,107 @@ def test_a_model_with_halt_pairs_is_replanned_under_the_new_reward():
     assert not np.allclose(again.solution.V, base.solution.V)  # the reward did change the values
 
 
+@pytest.mark.parametrize("label", ["FOCUS", "flat SPIBB", "SL-SPIBB", "DYNOTEARS SPIBB"])
+def test_spibb_and_focus_are_replanned_under_the_new_reward(label):
+    """A SPIBB model carries its reward, and FOCUS's reward carries its uncertainty penalty (on the
+    reward's scale): re-planned under another reward, the model gives the values of one learned with it."""
+    run = load("run")
+    from scm_to_mdp import reward_family as rf
+    from scm_to_mdp.data import first_transitions
+    from scm_to_mdp.tool.methods import learn, replan, solve
+
+    s = run.setup("sysadmin", (label,))
+    exp, method = s["exp"], s["methods"][label]
+    assert list(s["methods"]) == [label]
+    env = exp.make_env(4, 0)
+    truth = env.ground_truth()
+    data = truth.learner_spec.read(first_transitions(exp.collect(env, 2000), 2000))
+    base = solve(learn(data, method, exp.limits, seed=0), data, exp.gamma, exp.limits, seed=0)
+    assert base.ok
+    terminal = np.asarray(data.reward.terminal, dtype=bool)
+    visits = np.ones(len(data.B), dtype=int)
+    ladder = {r.name: r for r in rewards.ladder(data.B, np.asarray(truth.actions), terminal, visits)}
+    for name in ("cost_2", "subset_m0", "threshold_2"):  # another scale of the reward, too (FOCUS's penalty)
+        other = rf.with_task(data, ladder[name].task, truth.actions_of(data))
+        again = replan(base, other, exp.gamma, exp.limits, seed=0)
+        fresh = solve(learn(other, method, exp.limits, seed=0), other, exp.gamma, exp.limits, seed=0)
+        assert again.ok and fresh.ok and np.allclose(again.solution.V, fresh.solution.V), name
+        assert np.array_equal(again.solution.pi, fresh.solution.pi), name
+        assert not np.allclose(again.solution.V, base.solution.V)  # the reward did change the values
+
+
+def test_every_method_has_a_panel_and_a_row_shows_the_methods_of_the_run():
+    run, plot = load("run"), load("plot")
+    drawn = [m for methods in plot.PANELS.values() for m in methods]
+    assert sorted(drawn) == sorted(run.METHODS) and len(drawn) == 20 and set(drawn) <= set(plot.STYLE)
+    assert set(run.CERTIFIED) == set(next(iter(plot.PANELS.values())))  # the row of the promise
+    new = pd.DataFrame({"method": ["sparse", "FOCUS", "flat SPIBB"]})
+    assert list(plot.panels_of("value", new).values()) == [["sparse"], ["flat SPIBB", "FOCUS"]]
+    assert list(plot.panels_of("promise", new).values()) == [["sparse"]]
+    assert plot.panels_of("held", pd.DataFrame({"method": ["FOCUS", "flat MDP"]})) == {}  # no promise
+    assert len(plot.panels_of("value", pd.DataFrame({"method": list(run.METHODS)}))) == 3
+
+
+def test_a_run_of_more_methods_extends_the_latest_run_and_is_drawn_with_it(tmp_path):
+    """--methods on a few labels, then other labels with --extends: the second run records the first,
+    a resume keeps its methods, and plot.py draws the methods of both."""
+    common = [sys.executable, str(FOLDER / "run.py"), "--machines", "3", "--seeds", "1", "--transitions",
+              "100", "--workers", "1", "--results", str(tmp_path)]  # fmt: skip
+    first = subprocess.run([*common, "--methods", "true graph", "flat MDP"], capture_output=True, text=True,
+                           cwd=ROOT)  # fmt: skip
+    assert first.returncode == 0, first.stderr[-2000:]
+    assert "2 methods (1 with a promise)" in first.stdout and "(extends" not in first.stdout
+    (base,) = (tmp_path / "sysadmin").glob("sysadmin_*")
+    assert json.loads((base / "config.json").read_text())["extends"] is None
+    more = [*common, "--methods", "FOCUS", "sparse", "flat SPIBB"]
+    refused = subprocess.run([*more, "--resume"], capture_output=True, text=True, cwd=ROOT)
+    assert refused.returncode == 2 and "has the methods true graph, flat MDP" in refused.stderr
+    refused = subprocess.run([*common, "--resume", "--extends"], capture_output=True, text=True, cwd=ROOT)
+    assert refused.returncode == 2 and "extends no run" in refused.stderr
+    second = subprocess.run([*more, "--extends"], capture_output=True, text=True, cwd=ROOT)
+    assert second.returncode == 0, second.stderr[-2000:]
+    assert f"(extends {base.name})" in second.stdout and "3 methods (1 with a promise)" in second.stdout
+    base, extension = sorted((tmp_path / "sysadmin").glob("sysadmin_*"))
+    config = json.loads((extension / "config.json").read_text())
+    assert config["extends"] == base.name and config["certified"] == ["sparse"]
+    assert list(config["methods"]) == ["sparse", "flat SPIBB", "FOCUS"]  # in the order of METHODS
+    runs = pd.read_csv(extension / "N=3" / "runs" / "seed=0.csv")
+    assert len(runs) == 3 * 10 and set(runs["status"]) == {"ok"} and runs["value"].notna().all()
+    assert set(runs["method"]) == set(config["methods"])
+    assert set(pd.read_csv(base / "N=3" / "runs" / "seed=0.csv")["method"]) == {"true graph", "flat MDP"}
+    # a resume without --methods (or with the same) keeps the run's methods and the run it extends
+    again = subprocess.run([*common, "--resume"], capture_output=True, text=True, cwd=ROOT)
+    assert again.returncode == 0 and "0 of 1 (size, seed) jobs to run" in again.stdout
+    assert f"3 methods (1 with a promise) along the ladder of rewards -> {extension} (extends" in again.stdout
+    assert json.loads((extension / "config.json").read_text())["methods"] == config["methods"]
+
+    plot = [sys.executable, str(FOLDER / "plot.py"), "--results", str(tmp_path), "--out",
+            str(tmp_path / "out")]  # fmt: skip
+    drawn = subprocess.run(plot, capture_output=True, text=True, cwd=ROOT)
+    assert drawn.returncode == 0, drawn.stderr[-2000:]
+    assert f"{extension} with {base.name}" in drawn.stdout
+    assert "50 policies" in drawn.stdout and "100.0% finished" in drawn.stdout  # 5 methods x 10 rewards
+    out = tmp_path / "out" / "sysadmin"
+    both = {"true graph", "flat MDP", "sparse", "flat SPIBB", "FOCUS"}
+    assert set(pd.read_csv(out / "data" / "N=3_value_by_level.csv")["method"]) == both
+    assert set(pd.read_csv(out / "data" / "summary_value_by_size_n=100.csv")["method"]) == both
+    assert (out / "N=3" / "value_by_level.png").stat().st_size > 0
+    assert (out / "N=3" / "promise_by_level.png").stat().st_size > 0
+    times = pd.read_csv(out / "data" / "summary_time.csv")
+    assert both <= set(times["method"].dropna())
+    (total,) = times[times["step"] == "job totals"].to_dict("records")  # the jobs of the two runs
+    seconds = sum(
+        json.loads((r / "N=3" / "runs" / "seed=0.json").read_text())["seconds"] for r in (base, extension)
+    )
+    assert total["seconds"] == pytest.approx(seconds, abs=0.02)
+    # the base alone (--run): its two rows of panels, nothing of the extension
+    alone = subprocess.run([*plot, "--run", str(base), "--out", str(tmp_path / "alone")],
+                           capture_output=True, text=True, cwd=ROOT)  # fmt: skip
+    assert alone.returncode == 0, alone.stderr[-2000:]
+    data = tmp_path / "alone" / "sysadmin" / "data"
+    assert set(pd.read_csv(data / "N=3_value_by_level.csv")["method"]) == {"true graph", "flat MDP"}
+
+
 @pytest.mark.parametrize(("domain", "size", "folder", "n_rewards"), [("sepsis", 2, "vitals=2", 16),
                                                                     ("drone", 3, "side=3", 15)])  # fmt: skip
 def test_sepsis_and_drone_run_and_draw(tmp_path, domain, size, folder, n_rewards):
@@ -188,7 +290,7 @@ def test_sepsis_and_drone_run_and_draw(tmp_path, domain, size, folder, n_rewards
     assert done.returncode == 0, done.stderr[-2000:]
     (result,) = (tmp_path / domain).glob(f"{domain}_*")
     runs = pd.read_csv(result / folder / "runs" / "seed=0.csv")
-    assert len(runs) == 12 * n_rewards and set(runs["status"]) == {"ok"} and set(runs["size"]) == {size}
+    assert len(runs) == 20 * n_rewards and set(runs["status"]) == {"ok"} and set(runs["size"]) == {size}
     assert (
         runs["value"].notna().all() and (runs["V_star_obs"] > runs["V_random"]).all()
     )  # every reward is a task
@@ -209,12 +311,13 @@ def test_a_run_writes_one_row_per_policy_its_time_and_the_figures(tmp_path):
     assert "time per size" in done.stdout and "N=3: 10 rewards (levels 1-4)" in done.stdout
     (folder,) = (tmp_path / "sysadmin").glob("sysadmin_*")  # a folder per domain
     config = json.loads((folder / "config.json").read_text())
-    assert config["seeds"] == [0] and len(config["rewards"]["3"]) == 10 and len(config["methods"]) == 12
+    assert config["seeds"] == [0] and len(config["rewards"]["3"]) == 10 and len(config["methods"]) == 20
     assert config["reference"] == "true graph" and config["domain"] == "sysadmin" and config["sizes"] == [3]
-    assert config["certified"] == ["PCMCI+", "DYNOTEARS", "full graph", "flat", "true graph"]
+    assert config["certified"] == ["PCMCI+", "DYNOTEARS", "full graph", "flat", "true graph", "sparse"]
+    assert config["extends"] is None
     assert config["kwik_paper"]["SLF-Rmax"]["m"] == 30 and config["kwik_paper"]["Met-Rmax"]["m_sub"] == 50
     runs = pd.read_csv(folder / "N=3" / "runs" / "seed=0.csv")
-    assert len(runs) == 2 * 12 * 10 and set(runs["status"]) == {"ok"}  # data sizes x methods x rewards
+    assert len(runs) == 2 * 20 * 10 and set(runs["status"]) == {"ok"}  # data sizes x methods x rewards
     assert set(runs["method"]) == set(config["methods"]) and set(runs["level"]) == {1, 2, 3, 4}
     assert (runs["learn_s"] >= 0).all() and (runs["replan_s"] > 0).all()
     one = runs[(runs["method"] == "PCMCI+") & (runs["n_transitions"] == 1000)]

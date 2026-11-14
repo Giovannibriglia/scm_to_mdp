@@ -15,7 +15,13 @@ and traps), and each policy is evaluated on the true model under that reward.
               thresholds, planned by value iteration. Offline, their optimism for "don't know" (it drives
               exploration) is replaced by pessimism: such a pair halts with the worst value
               (scm_learning/kwik_intervals.py). The value a point model gives its policy is recorded in
-              `promise`, but it is no bound (CERTIFIED lists the methods whose promise is one)
+              `promise`, but it is no bound (CERTIFIED lists the methods whose promise is one);
+              also without a promise on the value, the other model-based methods of the paper's
+              comparison: SPIBB on a graph ("<structure> SPIBB": Factored SPIBB on the graph of
+              DYNOTEARS, of PCMCI+ and on the true one), SL-SPIBB, flat SPIBB and FOCUS. The sparse
+              graph is one more structure, in both forms. The model-free methods of the paper (offline
+              DQN, offline CQL, DiFaRL) are left out: they learn no model, so a new reward would need a
+              new training (tool/methods.py, MODEL_FREE)
     data      clear27's (protocol.py: the uniform logger, the same seeds): a dataset is the paper's
     limits    clear27's, per step (memory and time)
     rewards   rewards.py: 10 to 19 per size on SysAdmin, 16 or 17 on Sepsis, 15 on Drone
@@ -27,6 +33,11 @@ Run from the repository root:
     --sizes: machines (SysAdmin), vitals (Sepsis), the side of the grid (Drone)
     --transitions 10 100 ...   --workers N|auto   --core-share P   --resume (continue the latest run)
     --seeds K: the first K seeds (0 .. K-1; default: the paper's 10)
+    --methods A B ...: only these methods (default: all), into a new run folder; with --extends the
+    new run is recorded as an extension of the latest one, and plot.py draws the two together
+    (the datasets depend on the seed only, so the problems of the two runs are the same).
+    A resumed run keeps the methods and the extended run of its config.json: --resume with other
+    --methods, or with --extends on a run that is not an extension, is refused
 Then the figures: .venv/bin/python experiments/clear27/ablations/ablation_rewards/plot.py --domain <domain>
 
 One launch script per domain (the paper's sizes and data sizes, then the figures; run_domain.sh):
@@ -96,9 +107,17 @@ METHODS = {  # label -> (clear27 source, its arm)
     "true graph MDP": ("truegraph", "true graph -> MDP (plug-in)"),
     "SLF-Rmax": ("strehl", "Strehl-KWIK -> MDP (plug-in)"),  # with KWIK_PAPER's thresholds
     "Met-Rmax": ("met", "Met-Rmax-KWIK -> MDP (plug-in)"),
+    "sparse": ("sparse", "sparse -> IMDP (IA)"),
+    "sparse MDP": ("sparse", "sparse -> MDP (plug-in)"),
+    "DYNOTEARS SPIBB": ("dynotears_lagged", "DYNOTEARS (lagged) -> Factored SPIBB"),  # the paper's CD-SPIBB
+    "PCMCI+ SPIBB": ("pcmci_lagged", "PCMCI+ (lagged) -> Factored SPIBB"),
+    "true graph SPIBB": ("truegraph", "true graph -> Factored SPIBB"),
+    "SL-SPIBB": ("sota", "SL-SPIBB"),
+    "flat SPIBB": ("sota", "flat SPIBB"),
+    "FOCUS": ("sota", "FOCUS"),
 }
 REFERENCE = "true graph"
-CERTIFIED = ["PCMCI+", "DYNOTEARS", "full graph", "flat", "true graph"]  # their promise is a bound
+CERTIFIED = ["PCMCI+", "DYNOTEARS", "full graph", "flat", "true graph", "sparse"]  # their promise is a bound
 # The thresholds of the papers' experiments (k: the bound on the parents, the domain's as in clear27).
 # SLF-Rmax: m = 30, eps1 = 0.2 on SysAdmin (Diuk et al. 2009, Sec. 3.3.2; m = 20 on Stock trading, Strehl et
 # al. 2007, p. 650). Met-Rmax: m = 50 on SysAdmin (Sec. 3.3.2; 7 on Stock trading), "the number of samples
@@ -129,25 +148,29 @@ def size_folder(domain: str, size: int) -> str:
     return f"{DOMAINS[domain][3]}={size}"
 
 
-def setup(domain: str) -> dict:
-    """clear27's setting of the domain and the methods (once per process)."""
-    if domain not in _SETUP:
+def setup(domain: str, labels: tuple[str, ...] | None = None) -> dict:
+    """clear27's setting of the domain and the methods `labels` (all of them by default), once per
+    process."""
+    labels = tuple(labels or METHODS)
+    if (domain, labels) not in _SETUP:
         from scm_to_mdp.tool.grid import experiments
 
         methods, exp = {}, None
         parents = protocol.DOMAINS[domain].sl_spibb_parents
-        for label, (source, arm) in METHODS.items():
+        for label in labels:
+            source, arm = METHODS[label]
             exp = experiments(protocol.experiment_grid(domain, source))[0]
             methods[label] = exp.methods[arm]
             if label in KWIK_PAPER:
                 methods[label] = dataclasses.replace(
                     methods[label], discovery_options=KWIK_PAPER[label](parents)
                 )
-        _SETUP[domain] = {"exp": exp, "methods": methods}
-    return _SETUP[domain]
+        _SETUP[(domain, labels)] = {"exp": exp, "methods": methods}
+    return _SETUP[(domain, labels)]
 
 
-def run_seed(folder: str, domain: str, size: int, seed: int, transitions: tuple[int, ...]) -> dict:
+def run_seed(folder: str, domain: str, size: int, seed: int, transitions: tuple[int, ...],
+             labels: tuple[str, ...] | None = None) -> dict:  # fmt: skip
     """Every dataset of one (size, seed): writes <size>=<s>/runs/seed=<s>.csv and returns its timing."""
     warnings.filterwarnings("ignore")
     import numpy as np
@@ -160,7 +183,7 @@ def run_seed(folder: str, domain: str, size: int, seed: int, transitions: tuple[
     from scm_to_mdp.tool.evaluate import reference_values
     from scm_to_mdp.tool.methods import learn, replan, solve
 
-    start, s = time.monotonic(), setup(domain)
+    start, s = time.monotonic(), setup(domain, labels)
     exp = s["exp"]
     env = exp.make_env(env_size(domain, size), seed)
     truth = env.ground_truth()
@@ -310,11 +333,19 @@ def main(argv=None) -> int:
     parser.add_argument("--seeds", type=int, default=len(common.SEEDS), metavar="K",
                         help=f"how many seeds: 0 .. K-1 (default {len(common.SEEDS)})")  # fmt: skip
     parser.add_argument("--resume", action="store_true", help="continue the latest run")
+    parser.add_argument("--methods", nargs="+", choices=list(METHODS), metavar="METHOD",
+                        help="only these methods (default: all): " + ", ".join(METHODS))  # fmt: skip
+    parser.add_argument(
+        "--extends",
+        action="store_true",
+        help="a new run that extends the latest one (plot.py draws them together)",
+    )
     parser.add_argument("--workers", metavar="N", help="parallel (size, seed) jobs: a number or 'auto'")
     add_core_share(parser)
     parser.add_argument("--results", type=Path, default=RESULTS, help=argparse.SUPPRESS)
     args = parser.parse_args(argv)
     set_core_share(parser, args.core_share)
+    labels = tuple(m for m in METHODS if m in (args.methods or METHODS))
     domain = args.domain
     title, default_sizes, size_name, prefix = DOMAINS[domain]
     sizes = sorted(set(args.sizes or default_sizes))
@@ -338,19 +369,40 @@ def main(argv=None) -> int:
     from scm_to_mdp.utils import compute
     from scm_to_mdp.utils.parallel import run_dynamic
 
+    earlier = runs_of(args.results / domain / domain)
     folder = run_folder(args.results / domain / domain, args.resume)
+    extends = None  # the run this one adds methods to
+    if (folder / "config.json").exists():  # a resumed run keeps its methods and the run it extends
+        recorded = json.loads((folder / "config.json").read_text())
+        extends = recorded.get("extends")
+        kept = tuple(m for m in METHODS if m in recorded.get("methods", METHODS))
+        if args.methods and labels != kept:
+            parser.error(
+                f"--resume: {folder.name} has the methods {', '.join(kept)}; --methods asks for "
+                f"{', '.join(labels)}. A run has one set of methods: drop --resume for a new run"
+            )
+        if args.extends and not extends:
+            parser.error(f"--resume --extends: the latest run, {folder.name}, extends no run; drop --resume "
+                         f"to start its extension")  # fmt: skip
+        labels = kept
+    elif args.extends:
+        if not earlier:
+            parser.error(f"--extends: no earlier run of {domain} in {args.results / domain}")
+        extends = earlier[-1].name
     jobs = [
-        (str(folder), domain, size, seed, transitions)
+        (str(folder), domain, size, seed, transitions, labels)
         for size in sizes
         for seed in seeds
         if not done(folder, domain, size, seed)
     ]
-    limits = setup(domain)["exp"].limits
+    limits = setup(domain, labels)["exp"].limits
     workers = os.environ.get(compute.ENV_WORKERS) or "auto"
     plan = compute.plan(limits.mem_gb if limits else None, workers=workers, n_jobs=max(len(jobs), 1))
     compute.apply(plan)
-    print(f"\n===== {NAME}: {title}, {len(METHODS)} methods ({len(CERTIFIED)} with a promise) along the "
-          f"ladder of rewards -> {folder} =====")  # fmt: skip
+    certified = [m for m in labels if m in CERTIFIED]
+    extension = f" (extends {extends})" if extends else ""
+    print(f"\n===== {NAME}: {title}, {len(labels)} methods ({len(certified)} with a promise) along the "
+          f"ladder of rewards -> {folder}{extension} =====")  # fmt: skip
     problems = 0
     for size in sizes:
         levels = sorted({level for level, _ in rewards.names_of(domain, size)})
@@ -358,15 +410,15 @@ def main(argv=None) -> int:
         problems += n_rewards * len(transitions) * len(seeds)
         print(f"  {prefix}={size}: {n_rewards} rewards (levels {levels[0]}-{levels[-1]}), "
               f"{len(transitions)} data sizes, {len(seeds)} seeds")  # fmt: skip
-    print(f"  {problems:,} problem instances, {problems * len(METHODS):,} policies; "
+    print(f"  {problems:,} problem instances, {problems * len(labels):,} policies; "
           f"{len(jobs)} of {len(sizes) * len(seeds)} (size, seed) jobs to run")  # fmt: skip
     print(plan.describe())
     folder.mkdir(parents=True, exist_ok=True)
     config = {
         "ablation": NAME, "domain": domain, "sizes": sizes, "size_name": size_name, "size_prefix": prefix,
         "transitions": list(transitions), "seeds": seeds, "commit": _commit(),
-        "machine": compute.as_record(plan), "methods": {label: arm for label, (_, arm) in METHODS.items()},
-        "reference": REFERENCE, "certified": CERTIFIED,
+        "machine": compute.as_record(plan), "methods": {label: METHODS[label][1] for label in labels},
+        "extends": extends, "reference": REFERENCE, "certified": certified,
         "kwik_paper": {label: options(protocol.DOMAINS[domain].sl_spibb_parents)
                        for label, options in KWIK_PAPER.items()},
         "levels": {str(level): name for level, name in rewards.LEVEL_NAMES[domain].items()},

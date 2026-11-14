@@ -5,6 +5,8 @@
 #   RESUME=1 bash .../run_domain.sh sepsis          # continue the latest run of the domain
 #   SIZES="3 4" SEEDS=2 bash .../run_domain.sh drone   # fewer sizes (machines, vitals, side) and seeds
 #   TRANSITIONS="100 1000" ...   WORKERS=8 ...   CORE_SHARE=50 ...   PLOT=0 (the run only)
+#   METHODS="sparse,flat SPIBB,FOCUS" EXTENDS=1 bash .../run_domain.sh drone   # only these methods (comma-
+#       separated: a name can hold a space), as an extension of the latest run (drawn together with it)
 #
 # Defaults: the sizes of run.py (SysAdmin N = 3..8 here, as in the paper; Sepsis 2 3 4 vitals; Drone side
 # 3..9), 10 seeds, 10 ... 100,000 transitions.
@@ -27,6 +29,11 @@ ARGS=(--domain "$DOMAIN" --transitions $TRANSITIONS)
 [ -n "${WORKERS:-}" ] && ARGS+=(--workers "$WORKERS")
 [ -n "${CORE_SHARE:-}" ] && ARGS+=(--core-share "$CORE_SHARE")
 [ "${RESUME:-0}" = "1" ] && ARGS+=(--resume)
+[ "${EXTENDS:-0}" = "1" ] && ARGS+=(--extends)
+if [ -n "${METHODS:-}" ]; then
+    IFS=',' read -r -a CHOSEN <<< "$METHODS"   # comma-separated: a method's name can hold a space
+    ARGS+=(--methods "${CHOSEN[@]}")
+fi
 echo "$(date '+%F %T') start $DOMAIN: ${ARGS[*]}" | tee -a "$OUT/launch.log"
 "$PY" "$HERE/run.py" "${ARGS[@]}" 2>&1 | tee -a "$OUT/launch.log"
 rc=${PIPESTATUS[0]}

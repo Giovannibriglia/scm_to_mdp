@@ -12,10 +12,16 @@ Output: outputs/clear27/ablations/ablation_rewards/<domain>/
             summary/<figure>.{pdf,png}      across the sizes
             data/<where>_<figure>.csv       the numbers drawn
 
-Two rows of panels (PANELS), the same structures in both:
-    with a promise   the interval MDPs: DYNOTEARS, PCMCI+, the full graph, the flat model, the true graph
+Three rows of panels (PANELS; a row shows the methods the run has, and is left out when it has none):
+    with a promise   the interval MDPs: DYNOTEARS, PCMCI+, the sparse and the full graph, the flat model,
+                     the true graph
     no promise       their plug-in MDPs (the same colours), and SLF-Rmax and Met-Rmax as their papers run them
-The figures of the promise (promise, held, promised) have the first row only: a point model gives no bound.
+    other methods    SPIBB on a graph (the colour of the graph), SL-SPIBB, flat SPIBB and FOCUS
+The figures of the promise (promise, held, promised) have the first row only: the others give no bound
+(a run with no method of the first row has no such figure).
+A run that extends another (run.py --extends: more methods on the same problems) is drawn with it: the
+rows of the two runs are put together (a row of both is the extension's), and so are the times of
+their jobs. Where the extension is behind (a size or a seed it has not finished), its methods are missing.
 
 Figures, per size (x: the level of the ladder, 1 = the original reward ... 6 = traps; one column per
 number of transitions):
@@ -78,10 +84,13 @@ def _paper():
 
 paper = _paper()
 MDP = " MDP"  # run.py's suffix of a structure's plug-in MDP
+SPIBB = " SPIBB"  # and of Factored SPIBB on a structure
 PANELS = {
-    "with a promise\n(interval MDP)": ["DYNOTEARS", "PCMCI+", "full graph", "flat", "true graph"],
-    "no promise\n(point MDP)": ["DYNOTEARS MDP", "PCMCI+ MDP", "full graph MDP", "flat MDP", "true graph MDP",
-                                "SLF-Rmax", "Met-Rmax"],
+    "with a promise\n(interval MDP)": ["DYNOTEARS", "PCMCI+", "sparse", "full graph", "flat", "true graph"],
+    "no promise\n(point MDP)": ["DYNOTEARS MDP", "PCMCI+ MDP", "sparse MDP", "full graph MDP", "flat MDP",
+                                "true graph MDP", "SLF-Rmax", "Met-Rmax"],
+    "other methods\n(no promise)": ["DYNOTEARS SPIBB", "PCMCI+ SPIBB", "true graph SPIBB", "SL-SPIBB",
+                                    "flat SPIBB", "FOCUS"],
 }  # fmt: skip
 STYLE = {  # method -> (colour, marker), the paper's; a structure's plug-in MDP is drawn as the structure
     "DYNOTEARS": (paper.BLUE, "D"),
@@ -91,11 +100,18 @@ STYLE = {  # method -> (colour, marker), the paper's; a structure's plug-in MDP 
     "true graph": (paper.GOLD, "o"),
     "SLF-Rmax": (paper.GREEN, "P"),
     "Met-Rmax": (paper.WINE, "v"),
+    "sparse": (paper.PINK, "v"),
+    "SL-SPIBB": (paper.NAVY, "P"),
+    "flat SPIBB": (paper.PURPLE, "X"),
+    "FOCUS": (paper.OLIVE, "*"),
 }
-STYLE |= {name + MDP: STYLE[name] for name in ["DYNOTEARS", "PCMCI+", "full graph", "flat", "true graph"]}
+STYLE |= {
+    name + MDP: STYLE[name] for name in ["DYNOTEARS", "PCMCI+", "sparse", "full graph", "flat", "true graph"]
+}
+STYLE |= {name + SPIBB: STYLE[name] for name in ["DYNOTEARS", "PCMCI+", "true graph"]}
 # DYNOTEARS and PCMCI+ often find the same graph, so their lines coincide: DYNOTEARS is drawn wider and
 # behind, and stays visible around the line of PCMCI+
-WIDE = {name: dict(lw=3.4, ms=6.0, zorder=1.5) for name in ("DYNOTEARS", "DYNOTEARS" + MDP)}
+WIDE = {"DYNOTEARS" + form: dict(lw=3.4, ms=6.0, zorder=1.5) for form in ("", MDP, SPIBB)}
 # What the figures read from the run's config.json (main): the names of the levels and of a size
 RUN = {
     "levels": {1: "additive", 2: "subset", 3: "cost", 4: "threshold", 5: "goal", 6: "trap"},
@@ -113,8 +129,13 @@ QUANTITIES = {
 OF_THE_PROMISE = ("promise", "held", "promised")  # the first row of panels only
 
 
-def panels_of(quantity: str) -> dict:
-    return dict(list(PANELS.items())[:1]) if quantity in OF_THE_PROMISE else PANELS
+def panels_of(quantity: str, runs: pd.DataFrame) -> dict:
+    """The rows of panels of a figure, each with its methods that `runs` has (a row with none is left
+    out); for a quantity of the promise, the row of the promise only (no row when no method has one)."""
+    present = set(runs["method"].unique())
+    rows = dict(list(PANELS.items())[:1]) if quantity in OF_THE_PROMISE else PANELS
+    rows = {title: [m for m in methods if m in present] for title, methods in rows.items()}
+    return {title: methods for title, methods in rows.items() if methods}
 
 
 # ---- loading --------------------------------------------------------------------------------------
@@ -129,14 +150,42 @@ def latest_run(results: Path, domain: str) -> Path | None:
     return max(found) if found else None
 
 
-def load(run: Path) -> tuple[pd.DataFrame, pd.DataFrame]:
-    """(runs, timing): every finished (size, seed) of the run. runs gets `ok`, `held` as 0/1, `solved`
-    and `promised` (the value at least SOLVED, the promise at least PROMISED; a stopped run is neither).
-    A run of before the domains has the column `machines`: it is read as `size`."""
+def extended(run: Path) -> list[Path]:
+    """The run and, before it, the runs it extends (config.json's "extends", a folder beside the run):
+    the base first. A base that is not there (or has no finished job) is told and left out."""
+    chain = [run]
+    while True:
+        config = chain[0] / "config.json"
+        name = json.loads(config.read_text()).get("extends") if config.exists() else None
+        if not name:
+            return chain
+        base = run.parent / name
+        if base in chain or not any(base.glob("*=*/runs/*.json")):
+            print(f"  the run extends {name}, which has no finished job in {run.parent}: drawn alone")
+            return chain
+        chain.insert(0, base)
+
+
+def read(run: Path) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """(runs, timing) of one run folder as written: every finished (size, seed), with the name of the
+    run in `run`. A run of before the domains has the column `machines`: it is read as `size`."""
     done = sorted(run.glob("*=*/runs/*.json"))
     runs = pd.concat([pd.read_csv(p.with_suffix(".csv")) for p in done], ignore_index=True)
     timing = pd.DataFrame([json.loads(p.read_text()) for p in done])
-    runs, timing = (t.rename(columns={"machines": "size"}) for t in (runs, timing))
+    runs, timing = (t.rename(columns={"machines": "size"}).assign(run=run.name) for t in (runs, timing))
+    return runs, timing
+
+
+def load(run: Path) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """(runs, timing): every finished (size, seed) of the run, after those of the runs it extends (more
+    methods on the same problems; a row of two runs is the later one's; timing keeps one row per run and
+    (size, seed)). runs gets `ok`, `held` as 0/1, `solved` and `promised` (the value at least SOLVED,
+    the promise at least PROMISED; a stopped run is neither)."""
+    tables = [read(folder) for folder in extended(run)]
+    runs = pd.concat([r for r, _ in tables], ignore_index=True)
+    timing = pd.concat([t for _, t in tables], ignore_index=True)
+    key = ["size", "seed", "n_transitions", "method", "reward"]
+    runs = runs.drop_duplicates(key, keep="last").reset_index(drop=True)
     runs["ok"] = runs["status"].eq("ok")
     runs["held"] = runs["held"].map({True: 1.0, False: 0.0, "True": 1.0, "False": 0.0})
     runs["solved"] = (runs["ok"] & (runs["value"] >= SOLVED)).astype(float)
@@ -239,7 +288,9 @@ def panel_legends(fig, axes, panels: dict) -> None:
 def by_level(runs: pd.DataFrame, quantity: str, where: str, out: Path) -> None:
     """Rows: the panels; columns: the numbers of transitions; x: the level of the ladder."""
     column, ylabel, limits, percent = QUANTITIES[quantity]
-    panels = panels_of(quantity)
+    panels = panels_of(quantity, runs)
+    if not panels:  # a figure of the promise, and no method with one
+        return
     ns = sorted(runs["n_transitions"].unique())
     levels = sorted(runs["level"].unique())
     positions = {level: i for i, level in enumerate(levels)}
@@ -271,10 +322,11 @@ def value_by_size(runs: pd.DataFrame, n: int, out: Path) -> None:
     sizes, levels = sorted(d["size"].unique()), sorted(d["level"].unique())
     positions = {m: i for i, m in enumerate(sizes)}
     table = by_seed(d, "value", ["method", "level", "size"])
-    size = (1.9 * max(len(levels), 2) + 1.6, 4.4)
-    fig, axes = plt.subplots(len(PANELS), len(levels), figsize=size, sharex=True,
+    panels = panels_of("value", d)
+    size = (1.9 * max(len(levels), 2) + 1.6, 2.2 * len(panels))
+    fig, axes = plt.subplots(len(panels), len(levels), figsize=size, sharex=True,
                              sharey=True, squeeze=False)  # fmt: skip
-    for row, methods in enumerate(PANELS.values()):
+    for row, methods in enumerate(panels.values()):
         for ax, level in zip(axes[row], levels, strict=True):
             draw_lines(ax, table[table["level"] == level], "size", positions, methods, False)
             ax.axhline(0, **paper.ZERO_LINE)
@@ -283,11 +335,11 @@ def value_by_size(runs: pd.DataFrame, n: int, out: Path) -> None:
             ax.set_xticklabels(sizes)
             if row == 0:
                 ax.set_title(f"{level}: {RUN['levels'][level]}", pad=4)
-            else:
+            if row == len(panels) - 1:
                 ax.set_xlabel(RUN["size_name"])
         axes[row, 0].set_ylabel("normalised value")
     fig.tight_layout(w_pad=0.8, h_pad=0.9)
-    panel_legends(fig, axes, PANELS)
+    panel_legends(fig, axes, panels)
     save(out, "summary", fig, f"value_by_size_n={n}", table.assign(n_transitions=n))
 
 
@@ -305,13 +357,14 @@ def time(runs: pd.DataFrame, timing: pd.DataFrame, out: Path) -> None:
     Rows: the panels (a point model has no box to compile)."""
     models = runs.drop_duplicates(["size", "seed", "n_transitions", "method"])
     sizes = sorted(runs["size"].unique())
-    fig, axes = plt.subplots(len(PANELS), len(STEPS), figsize=(2.75 * len(STEPS) + 1.6, 2.6 * len(PANELS)),
+    panels = panels_of("time", runs)
+    fig, axes = plt.subplots(len(panels), len(STEPS), figsize=(2.75 * len(STEPS) + 1.6, 2.6 * len(panels)),
                              sharex=True, sharey=True, squeeze=False)  # fmt: skip
     rows = []
     for col, (column, (title, per)) in enumerate(STEPS.items()):
         source = models if per == "model" else runs
         table = source.groupby(["method", "size"])[column].mean().reset_index(name="seconds")
-        for row, methods in enumerate(PANELS.values()):
+        for row, methods in enumerate(panels.values()):
             ax = axes[row, col]
             for method in methods:
                 t = table[(table["method"] == method) & table["seconds"].notna()].sort_values("size")
@@ -320,13 +373,13 @@ def time(runs: pd.DataFrame, timing: pd.DataFrame, out: Path) -> None:
             ax.set_xticks(sizes)
             if row == 0:
                 ax.set_title(title, pad=4, fontsize=9)
-            else:
+            if row == len(panels) - 1:
                 ax.set_xlabel(RUN["size_name"])
         rows.append(table.assign(step=column))
     for ax in axes[:, 0]:
         ax.set_ylabel("seconds (mean)")
     fig.tight_layout(w_pad=1.0)
-    panel_legends(fig, axes, PANELS)
+    panel_legends(fig, axes, panels)
     selection = models.groupby(["method", "size"])["selection_s"].mean().reset_index(name="seconds")
     rows.append(selection.assign(step="selection_s"))
     total = timing.groupby("size").sum(numeric_only=True).drop(columns=["seed"]).reset_index()
@@ -362,7 +415,14 @@ def main(argv=None) -> int:
         parser.error(f"no finished job of size {missing} in {run}; sizes with results: {sizes}")
     chosen = args.sizes or sizes
     runs, timing = runs[runs["size"].isin(chosen)], timing[timing["size"].isin(chosen)]
-    print(f"===== {NAME}, {domain}: {run} -> {out} =====")
+    bases = [name for name in runs["run"].unique() if name != run.name]
+    print(f"===== {NAME}, {domain}: {run}{' with ' + ', '.join(bases) if bases else ''} -> {out} =====")
+    unknown = sorted(set(runs["method"]) - {m for methods in PANELS.values() for m in methods})
+    if unknown:
+        print(f"  not drawn (in no row of PANELS): {', '.join(unknown)}")
+        runs = runs[~runs["method"].isin(unknown)]
+        if runs.empty:
+            parser.error(f"{run} has no method that the figures draw")
     print(f"sizes {[int(m) for m in chosen]}: {len(runs):,} policies, {runs['seed'].nunique()} seeds, "
           f"{100 * runs['ok'].mean():.1f}% finished")  # fmt: skip
     with mpl.rc_context(paper.PAPER_STYLE):
