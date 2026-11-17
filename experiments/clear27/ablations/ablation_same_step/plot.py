@@ -304,7 +304,7 @@ def same_step_trios(instances: pd.DataFrame, runs: pd.DataFrame, to) -> list[str
 
         handles = [Line2D([], [], **(line_of(m, twin, "IMDP", to, None) | {"ms": 4.5}))
                    for m, twin in learners]  # fmt: skip
-        paper.save_trio(to, "", "solved_safely", [solved("imdp"), solved("mdp")], handles, ncol=2,
+        paper.save_trio(to, "", "solved_safely", [solved("imdp"), solved("mdp")], handles, ncol=4,
                         panel_ncol=1)  # fmt: skip
         written.append(f"{to.name}/solved_safely")
     g = graphs_of(runs)
@@ -332,7 +332,7 @@ def same_step_trios(instances: pd.DataFrame, runs: pd.DataFrame, to) -> list[str
                    for m, twin in learners_in(g)]  # fmt: skip
         panels = [errors("missing_share", "true arrows missed (share)"),
                   errors("extra_per_var", "extra arrows per variable")]  # fmt: skip
-        paper.save_trio(to, "", "graph_errors_split", panels, handles, ncol=2, panel_ncol=1)
+        paper.save_trio(to, "", "graph_errors_split", panels, handles, ncol=4, panel_ncol=1)
         written.append(f"{to.name}/graph_errors_split")
     return written
 
