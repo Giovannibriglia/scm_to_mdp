@@ -159,7 +159,7 @@ def sample_efficiency_grid(
     save(fig, stem)
 
 
-def needed_vs_model_size(points, policies, methods, styles, grid, title, stem):
+def needed_vs_model_size(points, policies, methods, styles, grid, title, stem, target: float = 0.9):
     """points: rows (policy, knob, size, method, true_rows, median_t). One panel per policy."""
     setup()
     top = grid[-1] * 3
@@ -190,7 +190,7 @@ def needed_vs_model_size(points, policies, methods, styles, grid, title, stem):
         _budget_axis(ax, grid, top)
         ax.set_title(policy)
     fig.supxlabel("parent rows of the true factored model (log scale)", fontsize=8, y=0.17)
-    axes[0, 0].set_ylabel("transitions for 95% (median)")
+    axes[0, 0].set_ylabel(f"transitions for {target:.0%} (median)")
     _legend(fig, _method_handles(methods, styles))
     fig.tight_layout(rect=(0, 0.18, 1, 0.95))
     save(fig, stem)
@@ -212,10 +212,9 @@ def promise_heatmap(held: pd.DataFrame, title, stem):
     ax.set_xticks(range(held.shape[1]), labels, rotation=90, fontsize=6.5)
     ax.set_yticks(range(held.shape[0]), held.index)
     ax.grid(False)
-    fig.colorbar(
-        image, ax=ax, fraction=0.025, label="share of finished runs: promise <= true value in every state"
-    )
-    ax.set_title(f"{title}: where the promise holds (over every size and number of transitions)")
+    label = "share of finished runs: reported value <= true value in every state"
+    fig.colorbar(image, ax=ax, fraction=0.025, label=label)
+    ax.set_title(f"{title}: where the reported value is reliable (every size and number of transitions)")
     fig.tight_layout()
     save(fig, stem)
 
@@ -333,7 +332,7 @@ def confounding(points, policies, methods, styles, title, stem):
     fig.supxlabel(
         "confounding bias of the data (mean total variation over the logged pairs)", fontsize=8, y=0.1
     )
-    fig.supylabel("promise − true value, start (> 0: violated)", fontsize=8)
+    fig.supylabel("lower bound − true value, start (> 0: violated)", fontsize=8)
     handles = [
         Line2D([], [], ls="none", marker="o", color=POLICY_COLOURS[k % 6], label=p)
         for k, p in enumerate(policies)

@@ -78,15 +78,15 @@ ERROR_BARS = 200  # per_graph: the spread over the seeds is drawn up to this num
 SCORES = {"bic": ("BIC", "#0b0b0b"), "aic": ("AIC", paper.TEAL), "bdeu": ("BDeu", paper.PURPLE)}
 # mark -> (column of datasets.csv, label, colour, marker); the best graph of a score is added per figure
 GRAPHS = {
-    "true": ("true_graph", "true graph", paper.GOLD, "o"),
-    "pcmci": ("pcmci_graph", "PCMCI+", paper.RED, "s"),
-    "dynotears": ("dynotears_graph", "DYNOTEARS", paper.BLUE, "D"),
+    "true": ("true_graph", "true graph", *paper.METHODS["true graph"][:2]),  # clear27's registry
+    "pcmci": ("pcmci_graph", "PCMCI+", *paper.METHODS["PCMCI+"][:2]),
+    "dynotears": ("dynotears_graph", "DYNOTEARS", *paper.METHODS["DYNOTEARS"][:2]),
 }
 BEST = {
     score: (f"best_{score}_graph", f"best {label}", color, "o") for score, (label, color) in SCORES.items()
 }
 SINGLE = "single"  # the best single graph (see the module docstring)
-QUANTITIES = {"value": "normalised value", "promise": "normalised promise"}
+QUANTITIES = {"value": "normalised value", "promise": "normalised lower bound"}
 LIMITS = {"value": (-1.3, 1.15), "promise": (-3.2, 1.15)}
 DASH = (0, (4, 2))
 BY = ["seed", "n_transitions"]

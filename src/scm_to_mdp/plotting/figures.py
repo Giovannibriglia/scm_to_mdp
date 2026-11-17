@@ -14,7 +14,7 @@ after such a stop) has its marker on the limit line, at every size concerned.
 
 Figure over the problem size and the number of transitions:
     sample_efficiency   transitions (samples) needed for a policy that is at
-                        least 95% optimal
+                        least 90% optimal
     coverage_efficiency transitions needed for probability sets that contain >= 99% of the true
                         probabilities (left), and are also small: mean width <= 0.2 (right)
     guarantee_efficiency transitions needed for a promise that holds (left), and that also proves the
@@ -175,9 +175,9 @@ def performance(res, axis: Axis, methods, styles, k: int, title: str, stem):
     fig, axes = plt.subplots(2, 2, figsize=(FULL_WIDTH, 5.6), sharex=True)
     panels = [
         ("regret", "Regret, nominal start", "regret  V*_obs − V^π"),
-        ("gap", "Promise − true value, nominal start", "promise − V^π"),
+        ("gap", "Lower bound − true value, nominal start", "lower bound − V^π"),
         ("regret_K", f"Regret, {k} random starts", "regret  V*_obs − V^π"),
-        ("gap_K", f"Promise − true value, {k} random starts", "promise − V^π"),
+        ("gap_K", f"Lower bound − true value, {k} random starts", "lower bound − V^π"),
     ]
     shown = []
     unsafe = _as_float(res["safe"]) == 0.0
@@ -197,7 +197,7 @@ def performance(res, axis: Axis, methods, styles, k: int, title: str, stem):
             ax.axhspan(0, top, color="#d62728", alpha=0.06, lw=0)
             ax.set_ylim(low, top)
             ax.text(
-                0.01, 0.97, "promise violated", transform=ax.transAxes, va="top", fontsize=7, color="#d62728"
+                0.01, 0.97, "not reliable", transform=ax.transAxes, va="top", fontsize=7, color="#d62728"
             )
         ax.set_title(panel)
         axis.finish(ax, ylabel)
@@ -208,7 +208,7 @@ def performance(res, axis: Axis, methods, styles, k: int, title: str, stem):
         marker="o",
         color="k",
         markerfacecolor="white",
-        label="promise > true value in some state",
+        label="reported value > true value in some state",
     )
     _legend(fig, shown, styles, extra=[hollow])
     fig.tight_layout(rect=(0, 0.1, 1, 1))
@@ -325,13 +325,13 @@ def gated_comparison(res, axis: Axis, methods, styles, delta: float, title: str,
     valid = validity_gate(data, delta)
     fig, axes = plt.subplots(2, 2, figsize=(FULL_WIDTH, 5.8), sharex=True)
     panels = [
-        ("norm_value", "True value, methods whose promise holds", "(V^π − V_rand) / (V*_obs − V_rand)"),
+        ("norm_value", "True value, methods whose lower bound holds", "(V^π − V_rand) / (V*_obs − V_rand)"),
         (
             "norm_promise",
-            "Guaranteed value (promise), same methods",
-            "(promise − V_rand) / (V*_obs − V_rand)",
+            "Guaranteed value (lower bound), same methods",
+            "(lower bound − V_rand) / (V*_obs − V_rand)",
         ),
-        ("safe_rate", "Hold rate of the promise", "share of seeds"),
+        ("safe_rate", "Reliability of the lower bound", "share of seeds"),
         (
             "norm_cert_gap",
             "Certificate V_opt − V_rob (robust methods)",
@@ -372,7 +372,7 @@ def gated_comparison(res, axis: Axis, methods, styles, delta: float, title: str,
         axis.finish(ax, ylabel)
     for ax in axes[0]:
         ax.set_xlabel("")
-    failed = "promise failed (not gated in)"
+    failed = "lower bound failed (not gated in)"
     extra = [Line2D([], [], ls="none", marker="x", color="grey", alpha=0.5, label=failed)]
     _legend(fig, shown, styles, extra)
     fig.tight_layout(rect=(0, 0.1, 1, 1))
@@ -445,9 +445,9 @@ def validity(res, axis: Axis, methods, styles, delta: float | None, title: str, 
     data = res.assign(coverage=_as_float(res["safe"]))
     fig, axes = plt.subplots(1, 3, figsize=(FULL_WIDTH, 2.9), sharex=True)
     panels = [
-        ("coverage", "Hold rate of the promise", "share of runs"),
+        ("coverage", "Reliability of the lower bound", "share of runs"),
         ("violation_rate", "Violation rate", "share of states"),
-        ("worst_violation", "Worst violation", "max (promise − V^π)⁺"),
+        ("worst_violation", "Worst violation", "max (lower bound − V^π)⁺"),
     ]
     shown = []
     for ax, (metric, panel, ylabel) in zip(axes, panels, strict=True):
@@ -682,7 +682,7 @@ def resources(res, axis: Axis, methods, styles, unit: str, limits: dict, title: 
 
 
 # ==========================================================================================
-# Rollouts needed for a 95%-optimal policy
+# Rollouts needed for a 90%-optimal policy
 # ==========================================================================================
 def target_value(res: pd.DataFrame) -> pd.Series:
     """The value a policy is compared with: V_star_obs (the best over the observed state) when the
@@ -693,7 +693,7 @@ def target_value(res: pd.DataFrame) -> pd.Series:
 
 
 def transitions_needed(
-    res: pd.DataFrame, target: float = 0.95, condition: pd.Series | None = None
+    res: pd.DataFrame, target: float = 0.9, condition: pd.Series | None = None
 ) -> pd.DataFrame:
     """For every (size, seed, method): n* = the smallest number of transitions n of the grid
     such that the policy is at least `target` optimal (true >= target * V_star_obs at the nominal start)
@@ -1053,7 +1053,7 @@ def guarantee_efficiency(
     better = "random" if useful == 0 else f"{useful:g} of the gap from random to optimal"
     proof = "\n" + r"$V_{\mathrm{rob}} \geq V_{\mathrm{rand}}$" if useful == 0 else ""
     heads = (
-        "the promise holds in every state",
+        "the lower bound holds in every state",
         f"it holds and proves the policy better than {better}{proof}",
     )
     if stem is not None:  # None: the tables only
