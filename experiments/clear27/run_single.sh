@@ -3,8 +3,8 @@
 # The progress bar and every stopped step are shown, and also appended to the log.
 #
 #   bash experiments/clear27/run_single.sh drone --list                       # the method names and sizes
-#   bash experiments/clear27/run_single.sh drone "PCMCI+ -> IMDP (IA)"        # the paper's whole grid
-#   bash experiments/clear27/run_single.sh drone "PCMCI+ -> IMDP (IA)" --size 5-1 --n 1000 5000 --seeds 0 1
+#   bash experiments/clear27/run_single.sh drone "PCMCI+ (lagged) -> IMDP (IA)"        # the paper's whole grid
+#   bash experiments/clear27/run_single.sh drone "PCMCI+ (lagged) -> IMDP (IA)" --size 5-1 --n 1000 5000 --seeds 0 1
 #   ... --save all|largest|none   --workers N|auto   --resume                 # see run_single.py
 #   ... --core-share 50   (or CORE_SHARE=50 ...)                              # at most 50% of the physical cores
 #   SHOW=0 ...                                                                # log only
@@ -12,7 +12,7 @@
 set -u
 cd "$(dirname "$0")/../.."
 PY=${PY:-.venv/bin/python}
-: "${1:?usage: run_single.sh sysadmin|sepsis|drone|aircraft \"<method>\" [--size S ...] [--n N ...] [--seeds SEED ...]}"
+: "${1:?usage: run_single.sh sysadmin|sepsis|drone \"<method>\" [--size S ...] [--n N ...] [--seeds SEED ...]}"
 for arg in "$@"; do
     if [ "$arg" = "--list" ] || [ "$arg" = "-h" ] || [ "$arg" = "--help" ]; then
         exec "$PY" experiments/clear27/run_single.py "$@"

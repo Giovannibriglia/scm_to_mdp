@@ -63,7 +63,6 @@ A step a method does not have is empty (the flat model has no discovery and no b
 
 import argparse
 import csv
-import dataclasses
 import json
 import os
 import subprocess
@@ -118,16 +117,8 @@ METHODS = {  # label -> (clear27 source, its arm)
 }
 REFERENCE = "true graph"
 CERTIFIED = ["PCMCI+", "DYNOTEARS", "full graph", "flat", "true graph", "sparse"]  # their promise is a bound
-# The thresholds of the papers' experiments (k: the bound on the parents, the domain's as in clear27).
-# SLF-Rmax: m = 30, eps1 = 0.2 on SysAdmin (Diuk et al. 2009, Sec. 3.3.2; m = 20 on Stock trading, Strehl et
-# al. 2007, p. 650). Met-Rmax: m = 50 on SysAdmin (Sec. 3.3.2; 7 on Stock trading), "the number of samples
-# required by each meteorologist before it assumes its prediction is known" (Sec. 3.3.1): the paper gives
-# one m, used here for both thresholds of Alg. 1 (m_sub and line 18); its eps is not stated (SLF-Rmax's).
-# Sepsis and Drone have no published setting: SysAdmin's.
-KWIK_PAPER = {
-    "SLF-Rmax": lambda k: {"k": k, "m": 30, "eps1": 0.2, "delta": protocol.DELTA},
-    "Met-Rmax": lambda k: {"D": k, "m": 50, "m_sub": 50, "eps": 0.2, "delta": protocol.DELTA},
-}
+# The thresholds of the papers' experiments, as in the main runs (protocol.KWIK_PAPER, with its sources).
+KWIK_PAPER = {"SLF-Rmax": protocol.KWIK_PAPER["strehl"], "Met-Rmax": protocol.KWIK_PAPER["met"]}
 COLUMNS = [
     "size", "seed", "n_transitions", "method", "level", "reward", "status", "failed_step", "value",
     "promise", "held", "true", "promise_raw", "V_star_obs", "V_random", "learn_s", "replan_s",
@@ -156,15 +147,10 @@ def setup(domain: str, labels: tuple[str, ...] | None = None) -> dict:
         from scm_to_mdp.tool.grid import experiments
 
         methods, exp = {}, None
-        parents = protocol.DOMAINS[domain].sl_spibb_parents
         for label in labels:
             source, arm = METHODS[label]
             exp = experiments(protocol.experiment_grid(domain, source))[0]
-            methods[label] = exp.methods[arm]
-            if label in KWIK_PAPER:
-                methods[label] = dataclasses.replace(
-                    methods[label], discovery_options=KWIK_PAPER[label](parents)
-                )
+            methods[label] = exp.methods[arm]  # SLF-Rmax and Met-Rmax: the papers' thresholds (KWIK_PAPER)
         _SETUP[(domain, labels)] = {"exp": exp, "methods": methods}
     return _SETUP[(domain, labels)]
 
@@ -326,7 +312,7 @@ def main(argv=None) -> int:
         nargs="+",
         type=int,
         metavar="N",
-        help="machines (SysAdmin, 3..10), vitals (Sepsis, 2..4), side (Drone, 3..9)",
+        help="machines (SysAdmin, 2..11), vitals (Sepsis, 2..4), side (Drone, 3..9)",
     )
     parser.add_argument("--transitions", nargs="+", type=int, default=TRANSITIONS, metavar="n",
                         help=f"data sizes (default {' '.join(map(str, TRANSITIONS))})")  # fmt: skip
@@ -349,7 +335,9 @@ def main(argv=None) -> int:
     domain = args.domain
     title, default_sizes, size_name, prefix = DOMAINS[domain]
     sizes = sorted(set(args.sizes or default_sizes))
-    known = [s for s in protocol.SIZES[domain] if s != 2 or domain != "sysadmin"]  # the ladder needs N >= 3
+    known = list(
+        protocol.SIZES[domain]
+    )  # N = 2 of SysAdmin allowed since 2026-11-15 (levels 1-4, duplicates dropped)
     unknown = [s for s in sizes if env_size(domain, s) not in known]
     if unknown:
         parser.error(

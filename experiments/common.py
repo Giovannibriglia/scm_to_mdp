@@ -19,7 +19,7 @@
                 REWARD_FAMILY's random rewards and the domain's own alternative rewards
                 (scm_to_mdp/reward_family.py: does the promise hold for every reward at once?)
     report      tool.report_grid: values as the IQM over seeds with a 95% bootstrap interval
-                (plotting/stats.py); the transitions needed for a 95%-optimal policy as the median and
+                (plotting/stats.py); the transitions needed for a 90%-optimal policy as the median and
                 its exact 95% interval (some seeds may never get there)
 
 A script (experiments/exp<k>/<domain>_<kind>.py) builds its grid with grid(...) and calls main(...).
@@ -53,7 +53,7 @@ FAILURE_HORIZON = 256  # the failure probabilities: "fail within 256 steps", in 
 SEEDS = list(range(10))
 N_STARTS = 20  # random starts of the evaluation (besides the nominal start)
 DELTA = 0.05  # confidence of the interval sets (S4)
-TARGET = 0.95  # "a 95%-optimal policy": the threshold of the transitions-needed tables
+TARGET = 0.9  # "a 90%-optimal policy": the threshold of the transitions-needed tables
 LIMITS = Limits(  # per step of a method, every domain; "solve": the fallback when no oracle finished
     mem_gb=8.0,
     timeout_s={"discovery": 1800.0, "selection": 1800.0, "learning": 1800.0, "training": 3600.0,

@@ -63,7 +63,8 @@ def kernel_at(bounds: FactorBounds | IntervalMDP, V: np.ndarray, gamma: float, r
     nature_kernel's kernel; with V within tol of it (the last iterate or the sound bound of that solve),
     the worst MDP's value is within about 3 tol of the robust value, from above (a fixed nature can only
     help the agent; the contraction bound gamma / (1 - gamma) times the last step, twice, plus value
-    iteration's own tol: badings_claude and kallenberg_claude, 2026-11-05; Meggendorfer et al., AAAI 2025,
+    iteration's own tol: Badings, Robust Verification of Stochastic Systems, 2025, Lemma 3.32; Kallenberg,
+    Markov Decision Processes, lecture notes, 2016, Thm 3.3; Meggendorfer et al., AAAI 2025,
     App. C, Lemma 4, at the exact point)."""
     nature = "adversarial" if choice == "worst" else "cooperative"
     W = bounds.reward.backup(V, gamma)

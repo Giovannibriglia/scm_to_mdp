@@ -15,7 +15,7 @@ Every table is built from lower levels only, and every level is saved in <out_di
                            C_all_bound, unvisited_pairs) and confounding bias (bias_max, bias_mean),
                            V_star_obs, V_star and the size of the true model
   level 1  transitions_needed_by_seed.csv   n* per (knob, policy, size, seed, method): the fewest
-                           transitions from which the policy is >= 95% of V_star_obs (inf:
+                           transitions from which the policy is >= 90% of V_star_obs (inf:
                            never), and t*, the transitions (samples) of that dataset
   level 2  cells.csv       per (knob, policy, size, n_transitions, method) and metric: mean, standard
                            error, min, max and number of seeds (long format)
@@ -325,7 +325,7 @@ def _fmt_n(r) -> str:
     return f"{samples_label(r['median_t'])} [{samples_label(r['ci_lo_t'])}, {hi}]"
 
 
-def report_grid(out_dir, target: float = 0.95, delta: float | None = 0.05, settings_too: bool = True) -> dict:
+def report_grid(out_dir, target: float = 0.9, delta: float | None = 0.05, settings_too: bool = True) -> dict:
     """Write <out_dir>/summary/ (the CSV levels above, figures/, figure_data/, tables.md, README.md)
     from grid.json and the settings' results.csv. target: the share of V_star_obs (the best policy
     over the observed state) that counts as optimal; delta: the failure probability of the promises

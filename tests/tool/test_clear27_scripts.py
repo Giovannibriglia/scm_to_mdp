@@ -13,10 +13,10 @@ sys.path.insert(0, str(ROOT / "experiments" / "clear27"))
 protocol = importlib.import_module("protocol")
 sys.path.pop(0)
 
-DOMAINS = ("sysadmin", "sepsis", "drone", "aircraft")
+DOMAINS = ("sysadmin", "sepsis", "drone")
 POINT_2 = (
-    [f"IMDP ({r})" for r in ("IA", "McCormick", "exact")]
-    + [f"MDP ({c}, {r})" for c in ("worst", "best") for r in ("IA", "McCormick", "exact")]
+    ["IMDP (IA)"]
+    + [f"MDP ({c}, IA)" for c in ("worst", "best")]
     + ["MDP (plug-in)", "Factored SPIBB"]
 )
 
@@ -26,6 +26,23 @@ def test_every_script_exists_and_names_its_grid():
         for s in protocol.SOURCES:
             text = (ROOT / "experiments" / "clear27" / d / f"{d}_{s}.py").read_text()
             assert f'experiment_grid("{d}", "{s}")' in text
+
+
+def test_the_same_step_twins_are_no_source_of_the_main_runs():
+    """DYNOTEARS and PCMCI+ run without same-step links in the main runs; their twins with such links
+    are built by the same code, for ablations/ablation_same_step only: no script, not in run_domain.sh."""
+    assert len(protocol.SOURCES) == 9 and protocol.SAME_STEP_SOURCES == {"dynotears": "dynotears_lagged",
+                                                                         "pcmci": "pcmci_lagged"}  # fmt: skip
+    runner = (ROOT / "experiments" / "clear27" / "run_domain.sh").read_text()
+    sources = runner.split("SOURCES=(flat", 1)[1].split(")", 1)[0].split()
+    for twin, lagged in protocol.SAME_STEP_SOURCES.items():
+        assert twin not in protocol.SOURCES and lagged in protocol.SOURCES
+        assert twin not in sources and lagged in sources
+        for d in DOMAINS:
+            assert not (ROOT / "experiments" / "clear27" / d / f"{d}_{twin}.py").exists()
+        assert "oracle -> MDP" in protocol.source_methods(twin, protocol.DOMAINS["sysadmin"])  # still built
+    with pytest.raises(ValueError, match="source must be one of"):
+        protocol.source_methods("ges", protocol.DOMAINS["sysadmin"])
 
 
 @pytest.mark.parametrize("domain", DOMAINS)
@@ -74,9 +91,9 @@ def test_every_source_has_the_oracle_and_point_2(source):
         assert set(methods) == {"oracle -> MDP"} | {f"{names[source]} -> {c}" for c in POINT_2}
     if source in ("strehl", "met"):
         title = "Strehl" if source == "strehl" else "Met-Rmax"
-        for hull in ("fixed", "accepted"):  # without KWIK: no point model, so the set arms only
-            assert sum(n.startswith(f"{title} ({hull} hull)") for n in methods) == 9
-        assert sum(n.startswith(f"{title}-KWIK") for n in methods) == 11
+        for hull in ("fixed", "accepted"):  # without KWIK: no point model, so the set arms only (the box)
+            assert sum(n.startswith(f"{title} ({hull} hull)") for n in methods) == 3
+        assert sum(n.startswith(f"{title}-KWIK") for n in methods) == 5
 
 
 def test_learned_graphs_pay_the_union_bound_and_lagged_drops_same_step():
@@ -101,8 +118,8 @@ def test_the_pool_runs_every_source_in_its_own_folder(tmp_path, monkeypatch):
     real = protocol.experiment_grid
     monkeypatch.setattr(protocol, "experiment_grid",
                         lambda d, s: dataclasses.replace(real(d, s), out_dir=tmp_path / f"{d}_{s}"))  # fmt: skip
-    grids = pool.pool_grids(["sysadmin", "drone"], ["flat", "pcmci"], resume=True)  # nothing yet: new folders
-    assert [n for n, _ in grids] == ["sysadmin_flat", "sysadmin_pcmci", "drone_flat", "drone_pcmci"]
+    grids = pool.pool_grids(["sysadmin", "drone"], ["flat", "sparse"], resume=True)  # nothing yet: new
+    assert [n for n, _ in grids] == ["sysadmin_flat", "sysadmin_sparse", "drone_flat", "drone_sparse"]
     assert len({g.out_dir for _, g in grids}) == 4
     old = tmp_path / "sysadmin_flat_2026-11-05_12-20-54"
     old.mkdir()
@@ -119,20 +136,22 @@ def test_a_single_run_is_the_oracle_and_one_method_of_the_paper(capsys):
     sys.path.insert(0, str(ROOT / "experiments" / "clear27"))
     single = importlib.import_module("run_single")
     sys.path.pop(0)
-    paper = protocol.experiment_grid("drone", "pcmci")
-    g = single.single_grid("drone", "PCMCI+ -> IMDP (IA)")
-    assert list(g.methods) == ["oracle -> MDP", "PCMCI+ -> IMDP (IA)"]
-    assert g.methods["PCMCI+ -> IMDP (IA)"] == paper.methods["PCMCI+ -> IMDP (IA)"]
+    paper = protocol.experiment_grid("drone", "pcmci_lagged")
+    g = single.single_grid("drone", "PCMCI+ (lagged) -> IMDP (IA)")
+    assert list(g.methods) == ["oracle -> MDP", "PCMCI+ (lagged) -> IMDP (IA)"]
+    assert g.methods["PCMCI+ (lagged) -> IMDP (IA)"] == paper.methods["PCMCI+ (lagged) -> IMDP (IA)"]
     assert (g.sizes, g.n_transitions, g.seeds, g.limits) == (paper.sizes, paper.n_transitions, paper.seeds,
                                                              paper.limits)  # fmt: skip
     assert g.save_models == "all"
-    assert g.out_dir == ROOT / "results" / "clear27_single" / "drone" / "PCMCIplus_IMDP_(IA)"
+    assert g.out_dir == ROOT / "results" / "clear27_single" / "drone" / "PCMCIplus_(lagged)_IMDP_(IA)"
     small = single.single_grid("drone", "FOCUS", ["5-1"], ["1000", "5000"], ["0", "1"], save="none")
     assert (small.sizes, small.n_transitions, small.seeds) == (["5-1"], [1000, 5000], [0, 1])
     assert list(small.methods) == ["oracle -> MDP", "FOCUS"] and small.save_models == "none"
     assert list(single.single_grid("sysadmin", "oracle -> MDP", ["3"]).methods) == ["oracle -> MDP"]
     with pytest.raises(ValueError, match="no method"):
         single.single_grid("drone", "PCMCI -> IMDP")
+    with pytest.raises(ValueError, match="no method"):  # the twin with same-step links: the ablation's
+        single.single_grid("drone", "PCMCI+ -> IMDP (IA)")
     with pytest.raises(ValueError, match="--size"):
         single.single_grid("drone", "FOCUS", ["99-1"])
     assert single.main(["sepsis", "--list"]) == 0

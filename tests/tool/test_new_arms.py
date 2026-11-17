@@ -116,7 +116,7 @@ def test_factored_solvers_are_not_applicable_with_same_step_links(truth, dataset
 def test_the_worst_mdp_reuses_the_imdp_solve_of_the_same_set(truth, dataset):
     """Option A: "MDP (worst, X)" takes nature's kernel at the IMDP arm's robust value (one inner problem
     per (s, a)) instead of the robust iteration again; its value is within about 3 tol of the full solve's
-    (badings_claude, kallenberg_claude), and a stopped IMDP solve is inherited."""
+    (Badings 2025, Lemma 3.32; Kallenberg 2016, Thm 3.3), and a stopped IMDP solve is inherited."""
     for relaxation, robust in (
         ("ia", "box_robust_vi"),
         ("mccormick", "mccormick_robust_vi"),

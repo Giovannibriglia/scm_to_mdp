@@ -371,3 +371,111 @@ def test_a_run_writes_one_row_per_policy_its_time_and_the_figures(tmp_path):
     ):  # every data size
         assert (out / "summary" / f"{name}.png").stat().st_size > 0
     assert (out / "data" / "summary_time.csv").stat().st_size > 0
+    # the pooled figures (clear27's plot.py), in their two sets: 10 instances (rewards) per data size
+    assert load("plot").SOLVED == 0.9  # one threshold, clear27's
+    assert "up to 10 instances per data size" in drawn.stdout
+    assert "skipped paper/vs_baselines/solved_vs_time: no run at 100,000 transitions" in drawn.stdout
+    for group in ("paper", "appendix"):
+        for name in ("imdp_by_graph/solved_vs_transitions", "mdp_by_graph/solved_vs_transitions", "tradeoff",
+                     "tradeoff_pareto", "tradeoff_data_needed", "solved_and_tradeoff", "reported_vs_true",
+                     "reported_vs_true_common"):  # fmt: skip
+            assert (out / group / f"{name}.png").stat().st_size > 0
+    # reported_vs_true: one dot per run of every reward, a panel per method the ablation has (none model-free)
+    scatter = pd.read_csv(out / "data" / "paper_reported_vs_true.csv")
+    order = ["DYNOTEARS", "DYNOTEARS MDP", "flat MDP", "full graph MDP", "FOCUS", "SL-SPIBB", "flat SPIBB",
+             "SLF-Rmax", "Met-Rmax"]  # fmt: skip
+    assert list(scatter["method"]) == [m for m in order if m in set(scatter["method"])] and len(scatter)
+    assert not {"DiFaRL", "offline DQN", "offline CQL"} & set(scatter["method"])
+    assert list(scatter["panel"]) == list(range(1, len(scatter) + 1))
+    assert set(scatter["domain"]) == {"sysadmin"} and (scatter["runs"] > 0).all()
+    assert scatter["reported_le_true"].between(0, 100).all()
+    assert scatter.set_index("method").loc["DYNOTEARS", "reported_le_true"] == 100  # its lower bound held
+    pooled = pd.read_csv(out / "data" / "paper_vs_baselines_solved_vs_transitions.csv")
+    assert set(pooled["instances"]) == {10} and {"DYNOTEARS", "DYNOTEARS MDP", "FOCUS"} <= set(
+        pooled["method"]
+    )
+    assert "CD-IMDP (ours)" in set(pooled["label"]) and not pooled["method"].str.contains("PCMCI").any()
+    both = pd.read_csv(out / "data" / "appendix_vs_baselines_solved_vs_transitions.csv")
+    assert {"PCMCI+-IMDP (ours)", "PCMCI+-MDP (ours)", "DYNOTEARS-IMDP (ours)"} <= set(both["label"])
+    again = subprocess.run(plot, capture_output=True, text=True, cwd=ROOT)  # they are not stale files
+    assert again.returncode == 0 and "stale" not in again.stdout
+    assert (out / "data" / "paper_tradeoff.csv").exists() and (out / "appendix" / "tradeoff.pdf").exists()
+    everywhere = subprocess.run([*plot, "--domain", "all_domains"], capture_output=True, text=True, cwd=ROOT)
+    assert everywhere.returncode == 2 and "needs a finished run of drone" in everywhere.stderr
+
+
+def test_the_colours_of_the_ablation_are_those_of_the_registry_of_clear27():
+    plot = load("plot")
+    for method, style in plot.STYLE.items():
+        assert style == plot.paper.look_of(method)[:2], method
+    assert plot.STYLE["DYNOTEARS"] == (plot.paper.BLUE, "D")
+    assert plot.STYLE["DYNOTEARS MDP"] == (plot.paper.CORAL, "D")  # its own colour (paper.OWN_COLOUR)
+    assert plot.STYLE["flat MDP"][0] == plot.paper.MAGENTA != plot.STYLE["flat"][0]
+    assert plot.STYLE["full graph MDP"][0] == plot.paper.ROSE != plot.STYLE["full graph"][0]
+    assert plot.STYLE["PCMCI+ MDP"] == plot.STYLE["PCMCI+"]  # the other plug-in MDPs: as their structure
+
+
+def fake_ablation_run(folder: Path, stamp: str, sizes: list, transitions: list, methods: list,
+                      finished: bool = True) -> Path:  # fmt: skip
+    """A run folder of the ablation on SysAdmin as run.py writes it: one csv and json per (size, seed);
+    a job that did not finish has a .partial file only."""
+    run = folder / "sysadmin" / f"sysadmin_{stamp}"
+    for size in sizes:
+        (run / f"N={size}" / "runs").mkdir(parents=True)
+        for seed in range(2):
+            rows = [
+                {"size": size, "seed": seed, "n_transitions": n, "method": method, "level": level,
+                 "reward": reward, "status": "ok", "failed_step": None, "value": 0.95, "promise": 0.5,
+                 "held": n < 1000, "true": 9.5 + size, "promise_raw": 5.0, "V_star_obs": 10.0 + size,
+                 "V_random": float(size), "learn_s": 3.0, "replan_s": 3.0, "discovery_s": 1.0,
+                 "selection_s": None, "learning_s": 2.0, "relax_s": 1.0, "solve_s": 2.0}
+                for n in transitions for method in methods
+                for level, reward in ((1, "additive"), (3, "cost_1"))
+            ]  # fmt: skip
+            name = run / f"N={size}" / "runs" / f"seed={seed}"
+            if finished:
+                pd.DataFrame(rows).to_csv(name.with_suffix(".csv"), index=False)
+                name.with_suffix(".json").write_text(json.dumps({"size": size, "seed": seed, "seconds": 6.0}))
+            else:
+                pd.DataFrame(rows[:1]).to_csv(f"{name}.csv.partial", index=False)
+    (run / "config.json").write_text(json.dumps({
+        "domain": "sysadmin", "extends": None, "commit": "abc1234",
+        "kwik_paper": {"SLF-Rmax": {"m": 30, "eps1": 0.2}, "Met-Rmax": {"m": 50, "eps": 0.2}},
+    }))  # fmt: skip
+    return run
+
+
+def test_the_runs_of_a_domain_are_drawn_together_without_the_sizes_left_out(tmp_path):
+    """More sizes and more numbers of transitions come as run folders of their own: plot.py reads every
+    folder of the domain together, a job that did not finish is not read, and the sizes of LEFT_OUT
+    (SysAdmin N = 10 and 11) are in no figure. --run reads one folder."""
+    plot = load("plot")
+    assert plot.LEFT_OUT == {"sysadmin": [10, 11]}
+    methods = ["true graph", "DYNOTEARS", "SLF-Rmax"]
+    first = fake_ablation_run(tmp_path, "2026-11-13_15-30-09", [3], [100, 1000], methods)
+    large = fake_ablation_run(tmp_path, "2026-11-14_16-37-35", [9, 11], [100, 1000], methods)
+    fake_ablation_run(tmp_path, "2026-11-14_16-40-00", [10], [100, 1000], methods, finished=False)
+    more_data = fake_ablation_run(tmp_path, "2026-11-14_21-42-06", [3, 9], [200_000], methods)
+    folders = plot.runs_of(tmp_path / "sysadmin", "sysadmin")
+    assert folders == [
+        first,
+        large,
+        more_data,
+    ]  # the earliest first; the folder with no finished job: not one
+    runs, timing = plot.load(folders, "sysadmin")
+    assert set(runs["size"]) == {3, 9} and set(timing["size"]) == {3, 9}
+    assert set(runs["n_transitions"]) == {100, 1000, 200_000}
+    assert len(runs) == 2 * 2 * 3 * 3 * 2  # sizes x seeds x data sizes x methods x rewards
+    assert set(plot.load(folders)[0]["size"]) == {3, 9, 11}  # LEFT_OUT is the domain's
+    out = tmp_path / "out"
+    arguments = ["--results", str(tmp_path), "--out", str(out)]
+    assert plot.main(arguments) == 0
+    drawn = pd.read_csv(out / "sysadmin" / "data" / "summary_solved_by_level.csv")
+    assert set(drawn["n_transitions"]) == {100, 1000, 200_000}
+    assert (out / "sysadmin" / "N=9" / "value_by_level.png").exists()
+    assert not (out / "sysadmin" / "N=11").exists() and not (out / "sysadmin" / "N=10").exists()
+    pooled = pd.read_csv(out / "sysadmin" / "data" / "paper_imdp_by_graph_solved_vs_transitions.csv")
+    assert set(pooled["instances"]) == {2 * 2 * 2}  # sizes x seeds x rewards, at every data size
+    assert plot.main([*arguments, "--run", str(first), "--out", str(tmp_path / "alone")]) == 0
+    alone = pd.read_csv(tmp_path / "alone" / "sysadmin" / "data" / "summary_solved_by_level.csv")
+    assert set(alone["n_transitions"]) == {100, 1000}

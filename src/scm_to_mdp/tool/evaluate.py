@@ -8,12 +8,12 @@ With a ground truth (MDPGroundTruth), every value is exact:
     V_star           the optimal value of an agent that sees every variable (an upper reference)
     regret           V_star_obs - true;  norm_regret = (1 - gamma) * regret (values scale with
                      1 / (1 - gamma));  regret_oracle = V_star - true
-    optimal_share    true / V_star_obs  (the policy is "95% optimal" when it is >= 0.95; needs
+    optimal_share    true / V_star_obs  (the policy is "90% optimal" when it is >= 0.9; needs
                      V_star_obs > 0);  optimal_share_oracle = true / V_star
     gap              promise - true (<= 0: the promise holds);  safe: it holds in every state
     regret_K, gap_K  the same averaged over k start states;  violation_rate, worst_violation
     shd, missing, extra, sid   the selected graph against the true one (if true_parents is known)
-    V_random         the value of the uniformly random policy (how hard "95% optimal" is)
+    V_random         the value of the uniformly random policy (how hard "90% optimal" is)
     s4_width, s4_coverage, s4_unseen, s4_rows   the learned probability sets against the truth, for
                      the methods with a guarantee (evaluation.interval_metrics)
     action_edges, action_missing, action_recall   the true action -> state edges and how many the

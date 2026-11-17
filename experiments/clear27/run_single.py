@@ -6,9 +6,9 @@ seeds). A progress bar counts the (size, seed) jobs, and a step that stops is pr
 
 Run from the repository root (or: bash experiments/clear27/run_single.sh ...):
     .venv/bin/python experiments/clear27/run_single.py drone --list                # the method names
-    .venv/bin/python experiments/clear27/run_single.py drone "PCMCI+ -> IMDP (IA)"  # the paper's whole grid
-    .venv/bin/python experiments/clear27/run_single.py drone "PCMCI+ -> IMDP (IA)" --size 5-1 --n 1000 5000 \
-        --seeds 0 1
+    .venv/bin/python experiments/clear27/run_single.py drone "PCMCI+ (lagged) -> IMDP (IA)"   # its whole grid
+    .venv/bin/python experiments/clear27/run_single.py drone "PCMCI+ (lagged) -> IMDP (IA)" --size 5-1 \
+        --n 1000 5000 --seeds 0 1
     --save all|largest|none   the models of the first seed (tool/store.py; default all)
     --workers N|auto          as in the scripts (SCM_TO_MDP_WORKERS)
     --core-share P            percent of the physical cores to use, 1-100 (default 100; utils/compute.py)

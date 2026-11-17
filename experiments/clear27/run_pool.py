@@ -11,7 +11,7 @@ source can also be resumed or reported by its own script.
 Run from the repository root:
     .venv/bin/python experiments/clear27/run_pool.py sysadmin                        # every source, new runs
     .venv/bin/python experiments/clear27/run_pool.py sysadmin --resume               # continue the latest runs
-    .venv/bin/python experiments/clear27/run_pool.py sysadmin drone sepsis aircraft --resume  # one pool for all:
+    .venv/bin/python experiments/clear27/run_pool.py sysadmin drone sepsis --resume  # one pool for all:
                                                      # a free worker takes a job of the first domain that has one
     .venv/bin/python experiments/clear27/run_pool.py sysadmin --sources flat pcmci   # only these sources
     --workers N|auto and --core-share P as in the scripts (SCM_TO_MDP_WORKERS, SCM_TO_MDP_CORE_SHARE:

@@ -7,7 +7,7 @@ writes into out_dir:
     figures/transitions=<n>/{performance,validity,structure,time,memory}.{pdf,png}
                                                  the figures over the problem size (x: observed
                                                  states), one folder per transition budget n
-    figures/sample_efficiency.{pdf,png}          transitions needed for a 95%-optimal policy
+    figures/sample_efficiency.{pdf,png}          transitions needed for a 90%-optimal policy
 n_transitions in results.csv is the dataset's budget: its first n logged transitions.
 and prints the main tables. Baselines, oracle methods and ours are told apart by the role column
 (set by the Method: flat_rmdp, flat_mdp and difarl are the baselines).
@@ -49,7 +49,7 @@ def _table(res: pd.DataFrame, sizes, labels, size_name, methods, column: str, fm
     return table.to_string(float_format=fmt, na_rep="—")
 
 
-def report(out_dir, target: float = 0.95, delta: float | None = 0.05, show: bool = True) -> dict:
+def report(out_dir, target: float = 0.9, delta: float | None = 0.05, show: bool = True) -> dict:
     """Tables and figures of the sweep in out_dir. target: the share of V*_obs (the best policy over
     the observed state) that counts as "optimal"; delta: the failure probability of the promises
     (the 1 - delta line of the validity panel).

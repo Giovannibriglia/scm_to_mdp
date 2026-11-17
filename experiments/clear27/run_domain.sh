@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# clear27: one domain's 11 graph sources in ONE pool of workers (run_pool.py), from the repository root: a
+# clear27: one domain's 9 graph sources in ONE pool of workers (run_pool.py), from the repository root: a
 # free worker takes the next (size, seed) job of any source, while each source keeps its waves by size and
 # writes to its own folder. A stopped run continues with RESUME=1 (each source resumes its latest run
 # folder, or starts one: RESUME=1 is also safe for a first launch).
@@ -13,7 +13,7 @@
 # Logs: results/clear27[_smoke]/logs/ (chain.log: start, end and exit code of the pool; <domain>_pool.log).
 set -u
 cd "$(dirname "$0")/../.."
-DOMAIN=${1:?usage: run_domain.sh sysadmin|sepsis|drone|aircraft [source ...]}
+DOMAIN=${1:?usage: run_domain.sh sysadmin|sepsis|drone [source ...]}
 shift
 PY=${PY:-.venv/bin/python}
 EXP=clear27
@@ -23,7 +23,7 @@ mkdir -p "$LOG"
 if [ "$#" -gt 0 ]; then
     SOURCES=("$@")
 else
-    SOURCES=(flat truegraph fullfact sparse dynotears_lagged dynotears pcmci_lagged pcmci sota met strehl)
+    SOURCES=(flat truegraph fullfact sparse dynotears_lagged pcmci_lagged sota met strehl)
 fi
 FLAGS=()
 [ "${RESUME:-0}" = "1" ] && FLAGS=(--resume)
