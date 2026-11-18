@@ -121,12 +121,22 @@ PANELS = {
         "SLF-Rmax", "Met-Rmax"],
     "other methods\n(no lower bound)": [
         "DYNOTEARS SPIBB", "PCMCI+ SPIBB", "true graph SPIBB", "SL-SPIBB", "flat SPIBB", "FOCUS"],
+    "structure learners of\nfactored RL (other forms)": [
+        "SLF-Rmax KWIK", "Met-Rmax KWIK", "SLF-Rmax (theorem)", "Met-Rmax (theorem)",
+        "SLF-Rmax KWIK (theorem)", "Met-Rmax KWIK (theorem)"],
+    "model-free\n(retrained per reward)": ["DiFaRL", "offline DQN", "offline CQL"],
+}  # fmt: skip
+# a form of a KWIK learner is drawn in the colour and marker of the learner, with a line of its own
+TWIN = {name: name.split(" ")[0] for name in PANELS["structure learners of\nfactored RL (other forms)"]}
+FORM_LINE = {
+    "SLF-Rmax KWIK": "--", "Met-Rmax KWIK": "--", "SLF-Rmax (theorem)": ":", "Met-Rmax (theorem)": ":",
+    "SLF-Rmax KWIK (theorem)": "-.", "Met-Rmax KWIK (theorem)": "-.",
 }  # fmt: skip
 # method -> (colour, marker): those of clear27's registry (paper.METHODS), one per method in every figure;
 # a structure's plug-in MDP is drawn as the structure (that of DYNOTEARS: in its own colour,
 # paper.OWN_COLOUR); SPIBB on a learned graph is a method of its own
 STYLE = {
-    method: paper.look_of(method)[:2]
+    method: paper.look_of(TWIN.get(method, method))[:2]
     for methods in PANELS.values()
     for method in methods
 }
@@ -302,7 +312,8 @@ def k(n: int) -> str:
 
 def line_of(method: str, label: str | None = None, **more) -> dict:
     """The paper's line in the colour and marker of the method; wider and behind if it is in WIDE."""
-    return paper.paper_line(*STYLE[method], label, **(more | WIDE.get(method, {})))
+    form = {"ls": FORM_LINE[method]} if method in FORM_LINE else {}
+    return paper.paper_line(*STYLE[method], label, **(more | form | WIDE.get(method, {})))
 
 
 def handles_of(methods: list[str]) -> list[Line2D]:

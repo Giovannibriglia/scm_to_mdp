@@ -211,13 +211,13 @@ def test_spibb_and_focus_are_replanned_under_the_new_reward(label):
 def test_every_method_has_a_panel_and_a_row_shows_the_methods_of_the_run():
     run, plot = load("run"), load("plot")
     drawn = [m for methods in plot.PANELS.values() for m in methods]
-    assert sorted(drawn) == sorted(run.METHODS) and len(drawn) == 20 and set(drawn) <= set(plot.STYLE)
+    assert sorted(drawn) == sorted(run.METHODS) and len(drawn) == 29 and set(drawn) <= set(plot.STYLE)
     assert set(run.CERTIFIED) == set(next(iter(plot.PANELS.values())))  # the row of the promise
     new = pd.DataFrame({"method": ["sparse", "FOCUS", "flat SPIBB"]})
     assert list(plot.panels_of("value", new).values()) == [["sparse"], ["flat SPIBB", "FOCUS"]]
     assert list(plot.panels_of("promise", new).values()) == [["sparse"]]
     assert plot.panels_of("held", pd.DataFrame({"method": ["FOCUS", "flat MDP"]})) == {}  # no promise
-    assert len(plot.panels_of("value", pd.DataFrame({"method": list(run.METHODS)}))) == 3
+    assert len(plot.panels_of("value", pd.DataFrame({"method": list(run.METHODS)}))) == 5
 
 
 def test_a_run_of_more_methods_extends_the_latest_run_and_is_drawn_with_it(tmp_path):
@@ -280,17 +280,23 @@ def test_a_run_of_more_methods_extends_the_latest_run_and_is_drawn_with_it(tmp_p
     assert set(pd.read_csv(data / "N=3_value_by_level.csv")["method"]) == {"true graph", "flat MDP"}
 
 
+MODEL_FREE_LABELS = ("DiFaRL", "offline DQN", "offline CQL")  # trained again on every reward: slow
+
+
 @pytest.mark.parametrize(("domain", "size", "folder", "n_rewards"), [("sepsis", 2, "vitals=2", 16),
                                                                     ("drone", 3, "side=3", 15)])  # fmt: skip
 def test_sepsis_and_drone_run_and_draw(tmp_path, domain, size, folder, n_rewards):
-    """The smallest size of the domain, one seed and one data size, through the scripts."""
+    """The smallest size of the domain, one seed and one data size, through the scripts; every method but
+    the model-free ones (their own test)."""
+    labels = [m for m in load("run").METHODS if m not in MODEL_FREE_LABELS]
     run = [sys.executable, str(FOLDER / "run.py"), "--domain", domain, "--sizes", str(size), "--seeds", "1",
-           "--transitions", "1000", "--workers", "1", "--results", str(tmp_path)]  # fmt: skip
+           "--transitions", "1000", "--workers", "1", "--results", str(tmp_path),
+           "--methods", *labels]  # fmt: skip
     done = subprocess.run(run, capture_output=True, text=True, cwd=ROOT)
     assert done.returncode == 0, done.stderr[-2000:]
     (result,) = (tmp_path / domain).glob(f"{domain}_*")
     runs = pd.read_csv(result / folder / "runs" / "seed=0.csv")
-    assert len(runs) == 20 * n_rewards and set(runs["status"]) == {"ok"} and set(runs["size"]) == {size}
+    assert len(runs) == 26 * n_rewards and set(runs["status"]) == {"ok"} and set(runs["size"]) == {size}
     assert (
         runs["value"].notna().all() and (runs["V_star_obs"] > runs["V_random"]).all()
     )  # every reward is a task
@@ -302,22 +308,26 @@ def test_sepsis_and_drone_run_and_draw(tmp_path, domain, size, folder, n_rewards
     assert (tmp_path / "out" / domain / "summary" / "time.png").stat().st_size > 0
 
 
+
 def test_a_run_writes_one_row_per_policy_its_time_and_the_figures(tmp_path):
-    """N=3, one seed, two numbers of transitions, through the scripts as a user launches them."""
+    """N=3, one seed, two numbers of transitions, through the scripts as a user launches them; every method
+    but the model-free ones (trained again on every reward: their own test below, to keep this one short)."""
+    labels = [m for m in load("run").METHODS if m not in MODEL_FREE_LABELS]
     run = [sys.executable, str(FOLDER / "run.py"), "--machines", "3", "--seeds", "1", "--transitions", "100",
-           "1000", "--workers", "1", "--results", str(tmp_path)]  # fmt: skip
+           "1000", "--workers", "1", "--results", str(tmp_path), "--methods", *labels]  # fmt: skip
     done = subprocess.run(run, capture_output=True, text=True, cwd=ROOT)
     assert done.returncode == 0, done.stderr[-2000:]
     assert "time per size" in done.stdout and "N=3: 10 rewards (levels 1-4)" in done.stdout
     (folder,) = (tmp_path / "sysadmin").glob("sysadmin_*")  # a folder per domain
     config = json.loads((folder / "config.json").read_text())
-    assert config["seeds"] == [0] and len(config["rewards"]["3"]) == 10 and len(config["methods"]) == 20
+    assert config["seeds"] == [0] and len(config["rewards"]["3"]) == 10 and len(config["methods"]) == 26
     assert config["reference"] == "true graph" and config["domain"] == "sysadmin" and config["sizes"] == [3]
     assert config["certified"] == ["PCMCI+", "DYNOTEARS", "full graph", "flat", "true graph", "sparse"]
     assert config["extends"] is None
     assert config["kwik_paper"]["SLF-Rmax"]["m"] == 30 and config["kwik_paper"]["Met-Rmax"]["m_sub"] == 50
     runs = pd.read_csv(folder / "N=3" / "runs" / "seed=0.csv")
-    assert len(runs) == 2 * 20 * 10 and set(runs["status"]) == {"ok"}  # data sizes x methods x rewards
+    assert len(runs) == 2 * 26 * 10 and set(runs["status"]) == {"ok"}  # data sizes x methods x rewards
+    assert runs["retrain_s"].isna().all() and runs["reinference_s"].isna().all()  # model-based: re-planned
     assert set(runs["method"]) == set(config["methods"]) and set(runs["level"]) == {1, 2, 3, 4}
     assert (runs["learn_s"] >= 0).all() and (runs["replan_s"] > 0).all()
     one = runs[(runs["method"] == "PCMCI+") & (runs["n_transitions"] == 1000)]
@@ -406,8 +416,9 @@ def test_a_run_writes_one_row_per_policy_its_time_and_the_figures(tmp_path):
 
 def test_the_colours_of_the_ablation_are_those_of_the_registry_of_clear27():
     plot = load("plot")
-    for method, style in plot.STYLE.items():
-        assert style == plot.paper.look_of(method)[:2], method
+    for method, style in plot.STYLE.items():  # a form of a KWIK learner: the learner's, with its own line
+        assert style == plot.paper.look_of(plot.TWIN.get(method, method))[:2], method
+    assert set(plot.TWIN.values()) == {"SLF-Rmax", "Met-Rmax"} and set(plot.FORM_LINE) == set(plot.TWIN)
     assert plot.STYLE["DYNOTEARS"] == (plot.paper.BLUE, "D")
     assert plot.STYLE["DYNOTEARS MDP"] == (plot.paper.CORAL, "D")  # its own colour (paper.OWN_COLOUR)
     assert plot.STYLE["flat MDP"][0] == plot.paper.MAGENTA != plot.STYLE["flat"][0]
@@ -479,3 +490,81 @@ def test_the_runs_of_a_domain_are_drawn_together_without_the_sizes_left_out(tmp_
     assert plot.main([*arguments, "--run", str(first), "--out", str(tmp_path / "alone")]) == 0
     alone = pd.read_csv(tmp_path / "alone" / "sysadmin" / "data" / "summary_solved_by_level.csv")
     assert set(alone["n_transitions"]) == {100, 1000}
+
+
+def test_the_kwik_learners_run_in_four_forms():
+    """SLF-Rmax and Met-Rmax: the papers' or the theorems' thresholds, each as the plug-in MDP or in KWIK
+    form (the learner's predictions with its accuracy as intervals, the box interval MDP)."""
+    run = load("run")
+    forms = ("SLF-Rmax", "SLF-Rmax KWIK", "SLF-Rmax (theorem)", "SLF-Rmax KWIK (theorem)",
+             "Met-Rmax", "Met-Rmax KWIK", "Met-Rmax (theorem)", "Met-Rmax KWIK (theorem)")  # fmt: skip
+    methods = run.setup("sysadmin", forms)["methods"]
+    for label, method in methods.items():
+        theorem = "(theorem)" in label
+        options = method.discovery_options
+        threshold = options["m"] if label.startswith("SLF") else options["m_sub"]
+        assert threshold == ("calibrated" if theorem else (30 if label.startswith("SLF") else 50)), label
+        assert method.learner == "kwik" and options["delta"] == 0.05, label
+        if "KWIK" in label:
+            assert method.solver == "box_robust_vi" and method.learning_options["mode"] == "kwik", label
+        else:
+            assert method.solver == "vi" and method.learning_options["mode"] == "point", label
+
+
+class _Result:  # the parts of tool.methods.Result that retrain_times and fresh read
+    def __init__(self, steps):
+        self.steps, self.info = steps, {"a": 1}
+
+
+def test_retrain_times_and_a_fresh_copy():
+    run = load("run")
+    network = _Result({"training": {"seconds": 12.0}, "solve": {"seconds": 0.01}})
+    assert run.retrain_times(network, True) == [12.0, 0.01]  # offline DQN / CQL: training, then the policy
+    assert run.retrain_times(_Result({"discovery": {"seconds": 1.0}, "solve": {"seconds": 3.0}}), True) == [
+        3.0,
+        None,
+    ]  # DiFaRL: the fit gives the policy
+    assert run.retrain_times(network, False) == [None, None]  # a model-based method is re-planned
+    copy = run.fresh(network)
+    copy.steps["training"] = {"seconds": 99.0}
+    copy.info["b"] = 2
+    assert network.steps["training"]["seconds"] == 12.0 and network.info == {"a": 1}
+
+
+def test_the_model_free_methods_are_trained_again_on_every_reward(tmp_path):
+    """DiFaRL (fast) through run.py: one fit per reward (retrain_s on every row, no reinference_s), the
+    policy changes with the reward; the true graph beside it is re-planned (no retrain_s)."""
+    run = [sys.executable, str(FOLDER / "run.py"), "--machines", "3", "--seeds", "1", "--transitions", "1000",
+           "--workers", "1", "--results", str(tmp_path), "--methods", "true graph", "DiFaRL"]  # fmt: skip
+    done = subprocess.run(run, capture_output=True, text=True, cwd=ROOT)
+    assert done.returncode == 0, done.stderr[-2000:]
+    (folder,) = (tmp_path / "sysadmin").glob("sysadmin_*")
+    runs = pd.read_csv(folder / "N=3" / "runs" / "seed=0.csv")
+    difarl, graph = runs[runs["method"] == "DiFaRL"], runs[runs["method"] == "true graph"]
+    assert len(difarl) == 10 and set(difarl["status"]) == {"ok"}
+    assert (difarl["retrain_s"] > 0).all() and difarl["reinference_s"].isna().all()
+    assert difarl["true"].nunique() > 1  # trained on each reward: the values follow the reward
+    assert graph["retrain_s"].isna().all() and graph["reinference_s"].isna().all()
+    timing = json.loads((folder / "N=3" / "runs" / "seed=0.json").read_text())
+    assert timing["retrain_s"] == pytest.approx(difarl["retrain_s"].sum(), abs=0.05)
+
+
+def test_a_failed_training_stays_on_its_reward(tmp_path, monkeypatch):
+    """solve works in place: a training that fails on one reward must not mark the later rewards failed
+    (each training starts from a fresh copy of the learned model)."""
+    run = load("run")
+    from scm_to_mdp.tool import methods as tm
+
+    calls, original = [], tm.solve
+
+    def failing_second_training(result, data, *args, **kwargs):
+        calls.append(1)
+        out = original(result, data, *args, **kwargs)
+        if len(calls) == 3:  # the base solve, then the trainings on rewards 2 and 3: the latter fails
+            out.status, out.failed_step = "timeout", "solve"
+        return out
+
+    monkeypatch.setattr(tm, "solve", failing_second_training)
+    run.run_seed(str(tmp_path), "sysadmin", 3, 0, (1000,), ("DiFaRL",))
+    rows = pd.read_csv(tmp_path / "N=3" / "runs" / "seed=0.csv")
+    assert list(rows["status"]) == ["ok", "ok", "timeout"] + ["ok"] * 7

@@ -19,9 +19,12 @@ and traps), and each policy is evaluated on the true model under that reward.
               also without a promise on the value, the other model-based methods of the paper's
               comparison: SPIBB on a graph ("<structure> SPIBB": Factored SPIBB on the graph of
               DYNOTEARS, of PCMCI+ and on the true one), SL-SPIBB, flat SPIBB and FOCUS. The sparse
-              graph is one more structure, in both forms. The model-free methods of the paper (offline
-              DQN, offline CQL, DiFaRL) are left out: they learn no model, so a new reward would need a
-              new training (tool/methods.py, MODEL_FREE)
+              graph is one more structure, in both forms. SLF-Rmax and Met-Rmax also run with their
+              theorems' thresholds ("(theorem)"), and both thresholds also in KWIK form ("KWIK": the
+              learner's predictions with its accuracy as intervals, the box interval MDP). The
+              model-free methods of the paper (DiFaRL, offline DQN, offline CQL) learn no model: they
+              are trained again on every reward but the environment's own (MODEL_FREE), and their rows
+              record the time of that training (retrain_s) and of computing its policy (reinference_s)
     data      clear27's (protocol.py: the uniform logger, the same seeds): a dataset is the paper's
     limits    clear27's, per step (memory and time)
     rewards   rewards.py: 10 to 19 per size on SysAdmin, 16 or 17 on Sepsis, 15 on Drone
@@ -58,10 +61,16 @@ Times, in seconds, per step of the method:
     relax_s       compiling the model to the box   } once per reward
     solve_s       robust value iteration           }   (replan_s: the wall time of both, with the
                                                        cost of starting the limited steps)
+    retrain_s     model-free methods only: training on the row's reward (offline DQN and CQL: the
+                  network; DiFaRL: its fitted Q-iteration, which also gives the policy); on the
+                  environment's reward, the original training
+    reinference_s model-free methods only: the greedy policy of the trained network over the states
+                  (offline DQN and CQL; empty for DiFaRL, whose policy comes with the fit)
 A step a method does not have is empty (the flat model has no discovery and no box to compile).
 """
 
 import argparse
+import copy
 import csv
 import json
 import os
@@ -114,6 +123,21 @@ METHODS = {  # label -> (clear27 source, its arm)
     "SL-SPIBB": ("sota", "SL-SPIBB"),
     "flat SPIBB": ("sota", "flat SPIBB"),
     "FOCUS": ("sota", "FOCUS"),
+    # the two KWIK learners in their four forms (2026-11-18): the papers' thresholds (KWIK_PAPER) or their
+    # theorems' (protocol.kwik_options level "theorem": m calibrated at delta), each as the plug-in MDP
+    # above (point predictions, HALT for "don't know") or in KWIK form: the learner's predictions with its
+    # stated accuracy as intervals, solved as the box interval MDP
+    "SLF-Rmax KWIK": ("strehl", "Strehl-KWIK -> IMDP (IA)"),
+    "Met-Rmax KWIK": ("met", "Met-Rmax-KWIK -> IMDP (IA)"),
+    "SLF-Rmax (theorem)": ("strehl_theorem", "Strehl-KWIK -> MDP (plug-in)"),
+    "Met-Rmax (theorem)": ("met_theorem", "Met-Rmax-KWIK -> MDP (plug-in)"),
+    "SLF-Rmax KWIK (theorem)": ("strehl_theorem", "Strehl-KWIK -> IMDP (IA)"),
+    "Met-Rmax KWIK (theorem)": ("met_theorem", "Met-Rmax-KWIK -> IMDP (IA)"),
+    # the model-free methods of the paper (2026-11-18): no model to re-plan, so they are trained again on
+    # every reward of the ladder but the first (MODEL_FREE; retrain_s, reinference_s)
+    "DiFaRL": ("sota", "DiFaRL"),
+    "offline DQN": ("sota", "offline DQN"),
+    "offline CQL": ("sota", "offline CQL"),
 }
 REFERENCE = "true graph"
 CERTIFIED = ["PCMCI+", "DYNOTEARS", "full graph", "flat", "true graph", "sparse"]  # their promise is a bound
@@ -122,12 +146,32 @@ KWIK_PAPER = {"SLF-Rmax": protocol.KWIK_PAPER["strehl"], "Met-Rmax": protocol.KW
 COLUMNS = [
     "size", "seed", "n_transitions", "method", "level", "reward", "status", "failed_step", "value",
     "promise", "held", "true", "promise_raw", "V_star_obs", "V_random", "learn_s", "replan_s",
-    "discovery_s", "selection_s", "learning_s", "relax_s", "solve_s",
+    "discovery_s", "selection_s", "learning_s", "relax_s", "solve_s", "retrain_s", "reinference_s",
 ]  # fmt: skip
 MODEL_STEPS = ("discovery", "selection", "learning")  # once per model
 REWARD_STEPS = ("relax", "solve")  # once per reward
 
 _SETUP: dict = {}
+
+
+def fresh(result):
+    """A copy of a learned Result that a solve can change without touching the original (tool.methods.solve
+    works in place): its own steps and info."""
+    out = copy.copy(result)
+    out.steps, out.info = dict(result.steps), dict(result.info)
+    return out
+
+
+def retrain_times(result, model_free: bool) -> list:
+    """[retrain_s, reinference_s] of a model-free method's result (README of the columns); [None, None]
+    for a model-based one. DiFaRL's fit gives its policy: no separate inference time."""
+    if not model_free:
+        return [None, None]
+    steps = result.steps
+    if "training" in steps:  # offline DQN and CQL: the network, then its greedy policy ("solve")
+        solve_s = steps["solve"]["seconds"] if "solve" in steps else None
+        return [steps["training"]["seconds"], solve_s]
+    return [steps["solve"]["seconds"] if "solve" in steps else None, None]  # DiFaRL: FQI
 
 
 def env_size(domain: str, size: int):
@@ -167,7 +211,7 @@ def run_seed(folder: str, domain: str, size: int, seed: int, transitions: tuple[
     from scm_to_mdp.data import first_transitions
     from scm_to_mdp.evaluation import random_starts
     from scm_to_mdp.tool.evaluate import reference_values
-    from scm_to_mdp.tool.methods import learn, replan, solve
+    from scm_to_mdp.tool.methods import MODEL_FREE, learn, replan, solve
 
     start, s = time.monotonic(), setup(domain, labels)
     exp = s["exp"]
@@ -194,7 +238,7 @@ def run_seed(folder: str, domain: str, size: int, seed: int, transitions: tuple[
         _, V_target = task_truth.observed_optimal(exp.gamma)
         tasks.append((rung, task_truth, V_target, ref["V_star_obs"], ref["V_random"]))
     setup_s, learn_s, replan_s = time.monotonic() - start, 0.0, 0.0
-    spent_in = dict.fromkeys(MODEL_STEPS + REWARD_STEPS, 0.0)  # the seconds of every step, summed
+    spent_in = dict.fromkeys(MODEL_STEPS + REWARD_STEPS + ("retrain", "reinference"), 0.0)  # seconds, summed
 
     def seconds_of(result, steps) -> list:
         return [result.steps[name]["seconds"] if name in result.steps else None for name in steps]
@@ -218,27 +262,39 @@ def run_seed(folder: str, domain: str, size: int, seed: int, transitions: tuple[
             for label, method in s["methods"].items():
                 given = truth.true_parents if method.discovery == "oracle" else None  # the reference's graph
                 model = learn(data, method, exp.limits, given, seed=seed, shared=shared)
+                model_free = method.learner in MODEL_FREE
+                learned = fresh(model) if model_free else None  # solve works in place: keep the learned one
                 base = solve(model, data, exp.gamma, exp.limits, seed=seed, shared=shared)
                 model_s = seconds_of(base, MODEL_STEPS)
                 seconds = sum(x for x in model_s if x is not None)
                 learn_s += seconds
                 for name, x in zip(MODEL_STEPS, model_s, strict=True):
                     spent_in[name] += x or 0.0
-                for rung, task_truth, V_target, V_best, V_rand in tasks:
+                for k, (rung, task_truth, V_target, V_best, V_rand) in enumerate(tasks):
                     row = [size, seed, n, label, rung.level, rung.name]
                     if not base.ok or base.solution is None:  # the model was not learned: no reward runs
                         failed = [base.status, base.failed_step, *[None] * 7, seconds, None]
-                        writer.writerow([*row, *failed, *model_s, None, None])
+                        writer.writerow(
+                            [*row, *failed, *model_s, None, None, *retrain_times(base, model_free)]
+                        )
                         continue
                     task_data = rf.with_task(data, rung.task, true_actions)
                     again = time.monotonic()
-                    planned = replan(base, task_data, exp.gamma, exp.limits, seed=seed)
+                    if model_free and k > 0:  # no model to re-plan: train again on this reward
+                        planned = solve(fresh(learned), task_data, exp.gamma, exp.limits, seed=seed)
+                    elif model_free:  # the environment's own reward: the original training
+                        planned = base
+                    else:
+                        planned = replan(base, task_data, exp.gamma, exp.limits, seed=seed)
                     spent = time.monotonic() - again
                     replan_s += spent
                     reward_s = seconds_of(planned, REWARD_STEPS)
                     for name, x in zip(REWARD_STEPS, reward_s, strict=True):
                         spent_in[name] += x or 0.0
-                    times = [seconds, spent, *model_s, *reward_s]
+                    again_s = retrain_times(planned, model_free)
+                    for name, x in zip(("retrain", "reinference"), again_s, strict=True):
+                        spent_in[name] += x or 0.0
+                    times = [seconds, spent, *model_s, *reward_s, *again_s]
                     if not planned.ok or planned.solution is None:
                         stopped = [planned.status, planned.failed_step, *[None] * 5]
                         writer.writerow([*row, *stopped, V_best, V_rand, *times])
