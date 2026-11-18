@@ -568,3 +568,17 @@ def test_a_failed_training_stays_on_its_reward(tmp_path, monkeypatch):
     run.run_seed(str(tmp_path), "sysadmin", 3, 0, (1000,), ("DiFaRL",))
     rows = pd.read_csv(tmp_path / "N=3" / "runs" / "seed=0.csv")
     assert list(rows["status"]) == ["ok", "ok", "timeout"] + ["ok"] * 7
+
+
+def test_first_seed_runs_only_the_later_seeds(tmp_path):
+    """--first-seed F with --seeds K: the jobs of seeds F .. K-1 only (the earlier ones ran elsewhere)."""
+    run = [sys.executable, str(FOLDER / "run.py"), "--machines", "3", "--seeds", "2", "--first-seed", "1",
+           "--transitions", "100", "--workers", "1", "--results", str(tmp_path),
+           "--methods", "true graph"]  # fmt: skip
+    done = subprocess.run(run, capture_output=True, text=True, cwd=ROOT)
+    assert done.returncode == 0, done.stderr[-2000:]
+    (folder,) = (tmp_path / "sysadmin").glob("sysadmin_*")
+    assert json.loads((folder / "config.json").read_text())["seeds"] == [1]
+    assert sorted(p.name for p in (folder / "N=3" / "runs").glob("*.csv")) == ["seed=1.csv"]
+    bad = subprocess.run([*run[:-2], "--first-seed", "2"], capture_output=True, text=True, cwd=ROOT)
+    assert bad.returncode == 2 and "--first-seed" in bad.stderr

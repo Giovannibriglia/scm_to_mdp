@@ -4,6 +4,7 @@
 #   bash experiments/clear27/ablations/ablation_rewards/run_domain.sh sysadmin   # or run_sysadmin.sh
 #   RESUME=1 bash .../run_domain.sh sepsis          # continue the latest run of the domain
 #   SIZES="3 4" SEEDS=2 bash .../run_domain.sh drone   # fewer sizes (machines, vitals, side) and seeds
+#   FIRST_SEED=2 ...                                 # seeds 2 .. SEEDS-1 (skip seeds another run finished)
 #   TRANSITIONS="100 1000" ...   WORKERS=8 ...   CORE_SHARE=50 ...   PLOT=0 (the run only)
 #   METHODS="sparse,flat SPIBB,FOCUS" EXTENDS=1 bash .../run_domain.sh drone   # only these methods (comma-
 #       separated: a name can hold a space), as an extension of the latest run (drawn together with it)
@@ -26,6 +27,7 @@ ARGS=(--domain "$DOMAIN" --transitions $TRANSITIONS)
 # shellcheck disable=SC2206
 [ -n "${SIZES:-}" ] && ARGS+=(--sizes $SIZES)
 [ -n "${SEEDS:-}" ] && ARGS+=(--seeds "$SEEDS")
+[ -n "${FIRST_SEED:-}" ] && ARGS+=(--first-seed "$FIRST_SEED")
 [ -n "${WORKERS:-}" ] && ARGS+=(--workers "$WORKERS")
 [ -n "${CORE_SHARE:-}" ] && ARGS+=(--core-share "$CORE_SHARE")
 [ "${RESUME:-0}" = "1" ] && ARGS+=(--resume)

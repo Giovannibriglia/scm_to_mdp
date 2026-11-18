@@ -35,7 +35,7 @@ Run from the repository root:
     .venv/bin/python experiments/clear27/ablations/ablation_rewards/run.py --domain drone --sizes 3 4 5
     --sizes: machines (SysAdmin), vitals (Sepsis), the side of the grid (Drone)
     --transitions 10 100 ...   --workers N|auto   --core-share P   --resume (continue the latest run)
-    --seeds K: the first K seeds (0 .. K-1; default: the paper's 10)
+    --seeds K: the first K seeds (0 .. K-1; default: the paper's 10); --first-seed F: seeds F .. K-1
     --methods A B ...: only these methods (default: all), into a new run folder; with --extends the
     new run is recorded as an extension of the latest one, and plot.py draws the two together
     (the datasets depend on the seed only, so the problems of the two runs are the same).
@@ -374,6 +374,9 @@ def main(argv=None) -> int:
                         help=f"data sizes (default {' '.join(map(str, TRANSITIONS))})")  # fmt: skip
     parser.add_argument("--seeds", type=int, default=len(common.SEEDS), metavar="K",
                         help=f"how many seeds: 0 .. K-1 (default {len(common.SEEDS)})")  # fmt: skip
+    parser.add_argument("--first-seed", type=int, default=0, metavar="F",
+                        help="start at seed F: seeds F .. K-1 (default 0), e.g. to skip seeds another run "
+                             "finished")  # fmt: skip
     parser.add_argument("--resume", action="store_true", help="continue the latest run")
     parser.add_argument("--methods", nargs="+", choices=list(METHODS), metavar="METHOD",
                         help="only these methods (default: all): " + ", ".join(METHODS))  # fmt: skip
@@ -401,12 +404,14 @@ def main(argv=None) -> int:
         )
     if min(args.transitions) < 1 or args.seeds < 1:
         parser.error("--transitions must be >= 1 and --seeds >= 1")
+    if not 0 <= args.first_seed < args.seeds:
+        parser.error("--first-seed must be >= 0 and below --seeds")
     if args.workers is not None:
         if args.workers != "auto" and not (args.workers.isdigit() and int(args.workers) >= 1):
             parser.error(f"--workers must be a positive number or 'auto', not {args.workers!r}")
         os.environ["SCM_TO_MDP_WORKERS"] = args.workers
     transitions = tuple(sorted(set(args.transitions)))
-    seeds = list(range(args.seeds))
+    seeds = list(range(args.first_seed, args.seeds))
 
     from tqdm import tqdm
 
