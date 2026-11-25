@@ -219,6 +219,11 @@ def exact_arms(source: str, discovery: str, options: dict | None = None) -> dict
 # The two KWIK learners at their theorems' thresholds: no source of the main runs, built by the same code for
 # ablations/ablation_kwik_thresholds (the main sources strehl and met have the papers' thresholds).
 KWIK_THEOREM_SOURCES = {"strehl_theorem": "strehl", "met_theorem": "met"}  # source -> its main twin
+# The consistency family (discovery/consistency_family.py; NBN #333): no source of the main runs (no script,
+# not in the paper's grid), built by the same code. Two graphs from one rule: the survivors' union (sound
+# with probability 1 - delta, possibly as large as the full factored graph) and their common variables
+# (the true parents once every wrong candidate is refuted; can miss a parent before that).
+CONSISTENCY_SOURCES = {"consistency_union": "union", "consistency_common": "intersection"}  # source -> view
 
 
 def source_methods(source: str, domain) -> dict:
@@ -239,12 +244,28 @@ def source_methods(source: str, domain) -> dict:
         "truegraph_exact": lambda: exact_arms("true graph", "oracle"),
         "dynotears_lagged_exact": lambda: exact_arms("DYNOTEARS (lagged)", "dynotears", lagged),
         "fullfact": lambda: graph_arms("full-fact", "full", domain),
+        **{
+            src: (
+                lambda view=view: graph_arms(
+                    f"consistency ({view})",
+                    "consistency",
+                    domain,
+                    {"k": domain.sl_spibb_parents, "delta": DELTA, "view": view, "same_step": False},
+                )
+            )
+            for src, view in CONSISTENCY_SOURCES.items()
+        },
         "sparse": lambda: graph_arms("sparse", "sparse", domain, {"actions": domain.sparse_actions}),
         "flat": flat_arms,
         "sota": lambda: sota_arms(domain),
     }
     if source not in arms:
-        extra = tuple(SAME_STEP_SOURCES) + tuple(KWIK_THEOREM_SOURCES) + tuple(EXACT_SOURCES)
+        extra = (
+            tuple(SAME_STEP_SOURCES)
+            + tuple(KWIK_THEOREM_SOURCES)
+            + tuple(EXACT_SOURCES)
+            + tuple(CONSISTENCY_SOURCES)
+        )
         raise ValueError(f"source must be one of {SOURCES + extra}, not {source!r}")
     return {"oracle -> MDP": oracle_methods()["oracle -> MDP"]} | arms[source]()
 
