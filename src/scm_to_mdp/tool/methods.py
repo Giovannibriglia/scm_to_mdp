@@ -94,7 +94,7 @@ WIDEN_K = 2  # BIC -> IMDP (hull / padded): inputs added to every family (scm_le
 CQL_ALPHA = 0.1  # offline CQL's penalty weight (baselines/offline_q.py says how it was chosen)
 GIVEN_GRAPHS = ("oracle", "logger_markov", "random_matched", "plus_one")  # graphs given, not discovered
 FIXED_GRAPHS = ("full", "sparse")  # graphs fixed in advance, no discovery (baselines)
-DISCOVERY = ("bic", "pcmci+", "ges", "dynotears") + FIXED_GRAPHS + GIVEN_GRAPHS
+DISCOVERY = ("bic", "pcmci+", "ges", "dynotears", "consistency") + FIXED_GRAPHS + GIVEN_GRAPHS
 SELECTION = {"bic_best": bic_best.select, "given": given.select}
 KWIK_DISCOVERY = ("strehl", "met_rmax")  # discovery/kwik_structure.py: Strehl et al. 2007, Met-Rmax
 KWIK_MODES = ("s4", "kwik", "point", "spibb")  # kwik_learn
@@ -179,6 +179,10 @@ def discovery_function(name: str):
         from scm_to_mdp.discovery import sparse
 
         return sparse.fit
+    if name == "consistency":
+        from scm_to_mdp.discovery import consistency_family
+
+        return consistency_family.fit
     from scm_to_mdp.discovery import oracle
 
     return oracle.fit

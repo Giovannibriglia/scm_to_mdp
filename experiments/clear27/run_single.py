@@ -44,7 +44,8 @@ EXPERIMENT = protocol.EXPERIMENT + "_single"
 def methods_of(domain: str) -> dict[str, str]:
     """method name -> the graph source that owns it (the first one: the oracle is in every source)."""
     out: dict[str, str] = {}
-    for source in protocol.SOURCES:
+    # the consistency family is not in the paper's grid (protocol.SOURCES) but can be run alone
+    for source in protocol.SOURCES + tuple(protocol.CONSISTENCY_SOURCES):
         for name in protocol.source_methods(source, protocol.DOMAINS[domain]):
             out.setdefault(name, source)
     return out
