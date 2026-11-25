@@ -100,3 +100,48 @@ def test_fit_returns_the_graph_of_the_view_and_is_a_registered_discovery():
     assert cand.report["survivors"]["x0"] == 1 and cand.report["refuted"] == []
     with pytest.raises(ValueError, match="same_step"):
         cf.fit(data, k=2, same_step=True)
+
+
+def test_structure_keeps_the_family_per_action_and_s4_takes_the_hull_of_the_survivors():
+    from scm_to_mdp.scm_learning import kwik_intervals
+
+    data = synthetic(20000, xor)
+    st = cf.structure(data, k=2, delta=0.025)
+    assert st.method == "consistency" and set(st.factors) == {(i, 0) for i in range(4)}
+    f = st.factors[(0, 0)]
+    assert [f.candidates[h] for h in f.survivors] == [(0, 1)] and f.known.all()
+    for s, b in enumerate(data.B):  # the prediction and the S4 interval at every state
+        p = 0.9 if b[0] ^ b[1] else 0.1
+        assert abs(f.predict[s, 1] - p) < 0.05
+    bounds = kwik_intervals.learn(data, st, delta=0.025, hull="accepted")
+    for s, b in enumerate(data.B):
+        p = 0.9 if b[0] ^ b[1] else 0.1
+        assert bounds.lo[s, 0, 0, 1] <= p <= bounds.hi[s, 0, 0, 1]
+        assert bounds.hi[s, 0, 0, 1] - bounds.lo[s, 0, 0, 1] < 0.1  # one survivor: a tight interval
+    assert methods.discovery_function("consistency_sets") is cf.structure
+
+
+def test_structure_gives_an_interval_on_a_state_no_logger_visited_jointly():
+    """x0' depends on x0 only; the joint state (1, 1, 1, 1) is never logged, yet every survivor (a pair
+    with x0) has its own setting visited, so the row gets a proper interval that contains the truth."""
+    from scm_to_mdp.scm_learning import kwik_intervals
+
+    data = synthetic(20000, lambda x: 0.9 if x[0] else 0.2, keep=lambda x: not x.all())
+    st = cf.structure(data, k=2, delta=0.025)
+    f = st.factors[(0, 0)]
+    assert all(0 in f.candidates[h] for h in f.survivors) and f.survivors
+    bounds = kwik_intervals.learn(data, st, delta=0.025, hull="accepted")
+    s = int(np.flatnonzero(data.B.all(axis=1))[0])
+    assert bounds.lo[s, 0, 0, 1] <= 0.9 <= bounds.hi[s, 0, 0, 1]
+    assert bounds.hi[s, 0, 0, 1] - bounds.lo[s, 0, 0, 1] < 0.2
+
+
+def test_a_learner_with_no_survivor_gets_the_whole_interval():
+    from scm_to_mdp.scm_learning import kwik_intervals
+
+    data = synthetic(40000, lambda x: 0.95 if (x[0] ^ x[1] ^ x[2]) else 0.05)
+    st = cf.structure(data, k=1, extension_size=3, delta=0.025)
+    f = st.factors[(0, 0)]
+    assert f.survivors == [] and not f.known.any()
+    bounds = kwik_intervals.learn(data, st, delta=0.025, hull="accepted")
+    assert (bounds.lo[:, 0, 0, :2] == 0).all() and (bounds.hi[:, 0, 0, :2] == 1).all()

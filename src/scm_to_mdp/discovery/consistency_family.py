@@ -23,17 +23,30 @@ Unlike strehl_sl (the paper's rule: the first m samples of a setting, one fixed 
 used and the radius of a ball shrinks with its count (sampling="trajectory": valid for counts that depend
 on the data).
 
-fit(...) returns the chosen view as a fixed graph (Candidates), so the usual S4 learns its tables.
+fit(...) returns the chosen view as a fixed graph (Candidates), so the usual S4 learns its tables. A graph
+loses the point of the family: the union is as large as the full graph when every size-k superset of the
+true parents survives, and the intersection is not sound.
+
+structure(...) keeps the family itself, one learner per (next-state variable, action) as the KWIK learners
+do, and returns a KwikStructure (method "consistency") whose survivors are the kept candidates. S4
+(scm_learning/kwik_intervals.learn, hull="accepted") then takes, at every (s, a, i), the hull of the
+survivors' intervals, each from its own small table: a row no logger visited jointly still gets an
+interval from the settings of k variables that were visited. The hull covers the truth when a survivor
+contains the true parents, which the rule guarantees with probability >= 1 - delta (of structure), so the
+level of the sets is 1 - delta(structure) - delta(S4). A learner whose candidates are all discarded (the
+bound k is contradicted) has no survivors and its rows are [0, 1].
 """
 
 import inspect
 import itertools
 from dataclasses import dataclass, field
 
+import numpy as np
 from nbn.structure import agreement_set
 
-from scm_to_mdp.core import NEXT_MARK, Candidates, Dataset
+from scm_to_mdp.core import NEXT_MARK, Candidates, Dataset, encode
 from scm_to_mdp.discovery import oracle
+from scm_to_mdp.discovery.kwik_structure import DONT_KNOW, KwikFactor, KwikStructure
 
 VIEWS = ("union", "intersection")
 
@@ -66,6 +79,59 @@ class ConsistencyFamily:
         return out
 
 
+def _needs_extension_sets():
+    if "extension_size" not in inspect.signature(agreement_set).parameters:
+        raise RuntimeError("consistency_family needs nbn with agreement_set(extension_size=...) (NBN #333)")
+
+
+def structure(
+    dataset: Dataset,
+    k: int,
+    extension_size: int | None = None,
+    delta: float = 0.05,
+    sampling: str = "trajectory",
+    max_families: int = 1 << 16,
+    max_rows: int = 1 << 22,
+) -> KwikStructure:
+    """The kept candidates of every (next-state variable, action), as a KwikStructure (module docstring).
+    Candidates: the sets of exactly k state variables, in the order of kwik_structure (index tuples);
+    delta is shared by the learners (delta / (n K) each). predict / known: the mean of the survivors'
+    estimates where every survivor has data at the state (for reports; S4 uses the survivors)."""
+    _needs_extension_sets()
+    if k < 0:
+        raise ValueError(f"k must be >= 0, not {k}")
+    states, n, K = list(dataset.state_vars), len(dataset.state_vars), len(dataset.actions)
+    k = min(k, n)
+    e = max(1, k if extension_size is None else extension_size)
+    cands = list(itertools.combinations(range(n), k))
+    names = [tuple(states[j] for j in c) for c in cands]
+    index = {frozenset(c): h for h, c in enumerate(names)}
+    cards, B = dataset.state_cards, dataset.B
+    variables, tensors = dataset.variables, dataset.tensors()
+    of_action = dataset.action_index()
+    factors = {}
+    for a in range(K):
+        rows = np.flatnonzero(of_action == a)
+        data = {c: t[rows] for c, t in tensors.items()}
+        for i, v in enumerate(states):
+            res = agreement_set(
+                variables, data, v + NEXT_MARK, states, delta=delta / (n * K), sampling=sampling,
+                candidates=names, extension_size=e, max_families=max_families, max_rows=max_rows,
+            )  # fmt: skip
+            S, card = len(B), cards[i]
+            predict, known = np.zeros((S, card)), np.zeros(S, dtype=bool)
+            survivors = [] if res.assumption_refuted else sorted(index[frozenset(s)] for s in res.survivors)
+            if survivors:
+                cols = [states.index(p) for p in res.parents]
+                at = encode(B[:, cols], [cards[j] for j in cols]) if cols else np.zeros(S, dtype=np.int64)
+                known = ~res.set.unseen.cpu().numpy()[at]
+                predict = np.where(known[:, None], res.set.center.double().cpu().numpy()[at], 0.0)
+            accepted = np.where(known, 0, DONT_KNOW)
+            factors[(i, a)] = KwikFactor(cands, accepted, survivors, predict, known)
+    params = {"k": k, "extension_size": e, "delta": delta, "sampling": sampling}
+    return KwikStructure("consistency", factors, params)
+
+
 def family(
     dataset: Dataset,
     k: int,
@@ -78,8 +144,7 @@ def family(
     """The kept candidates of every next-state variable. k: the declared bound on the number of
     state-variable parents; extension_size: default k (the pairwise test); delta: shared by the state
     variables (delta / n each)."""
-    if "extension_size" not in inspect.signature(agreement_set).parameters:
-        raise RuntimeError("consistency_family needs nbn with agreement_set(extension_size=...) (NBN #333)")
+    _needs_extension_sets()
     if k < 0:
         raise ValueError(f"k must be >= 0, not {k}")
     states, actions = list(dataset.state_vars), tuple(dataset.action_vars)

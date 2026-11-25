@@ -223,7 +223,18 @@ KWIK_THEOREM_SOURCES = {"strehl_theorem": "strehl", "met_theorem": "met"}  # sou
 # not in the paper's grid), built by the same code. Two graphs from one rule: the survivors' union (sound
 # with probability 1 - delta, possibly as large as the full factored graph) and their common variables
 # (the true parents once every wrong candidate is refuted; can miss a parent before that).
-CONSISTENCY_SOURCES = {"consistency_union": "union", "consistency_common": "intersection"}  # source -> view
+# consistency_sets keeps the family: per (factor, action) the hull of the survivors' intervals (the kwik
+# learner's S4, hull "accepted"). Its level is 1 - DELTA in total: DELTA / 2 for the family, DELTA / 2 for S4.
+CONSISTENCY_SOURCES = {"consistency_union": "union", "consistency_common": "intersection",
+                       "consistency_sets": None}  # source -> the graph view (None: no graph)  # fmt: skip
+
+
+def consistency_set_arms(domain) -> dict:
+    base = {"learner": "kwik", "discovery": "consistency_sets",
+            "discovery_options": {"k": domain.sl_spibb_parents, "delta": DELTA / 2}}  # fmt: skip
+    return set_arms(
+        "consistency (survivors' hull)", base, {"mode": "s4", "hull": "accepted", "delta": DELTA / 2}
+    )
 
 
 def source_methods(source: str, domain) -> dict:
@@ -254,7 +265,9 @@ def source_methods(source: str, domain) -> dict:
                 )
             )
             for src, view in CONSISTENCY_SOURCES.items()
+            if view is not None
         },
+        "consistency_sets": lambda: consistency_set_arms(domain),
         "sparse": lambda: graph_arms("sparse", "sparse", domain, {"actions": domain.sparse_actions}),
         "flat": flat_arms,
         "sota": lambda: sota_arms(domain),
