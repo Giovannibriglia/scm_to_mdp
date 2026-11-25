@@ -96,7 +96,11 @@ GIVEN_GRAPHS = ("oracle", "logger_markov", "random_matched", "plus_one")  # grap
 FIXED_GRAPHS = ("full", "sparse")  # graphs fixed in advance, no discovery (baselines)
 DISCOVERY = ("bic", "pcmci+", "ges", "dynotears", "consistency") + FIXED_GRAPHS + GIVEN_GRAPHS
 SELECTION = {"bic_best": bic_best.select, "given": given.select}
-KWIK_DISCOVERY = ("strehl", "met_rmax")  # discovery/kwik_structure.py: Strehl et al. 2007, Met-Rmax
+KWIK_DISCOVERY = (
+    "strehl",
+    "met_rmax",
+    "consistency_sets",
+)  # discovery/kwik_structure.py: Strehl et al. 2007, Met-Rmax
 KWIK_MODES = ("s4", "kwik", "point", "spibb")  # kwik_learn
 # Schnitzer, Abate, Parker (AAAI 2026): interval arithmetic (box), McCormick, exact (vertex products); and
 # value iteration on nature's MDP at the robust ("worst") or optimistic ("best") fixed point (nature_mdp)
@@ -174,6 +178,10 @@ def discovery_function(name: str):
     if name in KWIK_DISCOVERY:
         from scm_to_mdp.discovery import kwik_structure
 
+        if name == "consistency_sets":  # the consistency family as a structure (survivors per factor, action)
+            from scm_to_mdp.discovery import consistency_family
+
+            return consistency_family.structure
         return kwik_structure.strehl_sl if name == "strehl" else kwik_structure.met_rmax
     if name == "sparse":
         from scm_to_mdp.discovery import sparse
