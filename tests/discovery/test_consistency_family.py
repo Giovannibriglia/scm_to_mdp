@@ -145,3 +145,19 @@ def test_a_learner_with_no_survivor_gets_the_whole_interval():
     assert f.survivors == [] and not f.known.any()
     bounds = kwik_intervals.learn(data, st, delta=0.025, hull="accepted")
     assert (bounds.lo[:, 0, 0, :2] == 0).all() and (bounds.hi[:, 0, 0, :2] == 1).all()
+
+
+def test_s4_budget_of_the_survivors_hull_is_split_over_the_tables_only():
+    """The hull of one survivor equals that candidate's own interval at delta / (n K), not delta / (n K H)."""
+    from scm_to_mdp.scm_learning import kwik_intervals
+
+    data = synthetic(2000, xor)
+    st = cf.structure(data, k=2, delta=0.025)
+    f = st.factors[(0, 0)]
+    assert [f.candidates[h] for h in f.survivors] == [(0, 1)]
+    bounds = kwik_intervals.learn(data, st, delta=0.025, hull="accepted")
+    rows, nxt = kwik_intervals._per_action(data)[0]
+    lower, upper = kwik_intervals._cp_at_states(
+        data.B, rows, nxt[:, 0], (0, 1), data.state_cards, 2, 0.025 / 4
+    )
+    assert np.allclose(bounds.lo[:, 0, 0, :2], lower) and np.allclose(bounds.hi[:, 0, 0, :2], upper)

@@ -27,7 +27,10 @@ turn it into a factored interval MDP, and one into a point model:
                          method "consistency") is used the same way: the hull of its survivors, where
                          P(that) <= the delta of its structure step (a candidate with the true parents is
                          never discarded on that event); a learner with no survivor (its bound k is
-                         contradicted) gets [0, 1].
+                         contradicted) gets [0, 1]. Its delta is split over the (factor, action) tables
+                         only, as for the fixed hull: fix, before the data, one candidate c* that contains
+                         the true parents. On the structure's event c* survives, so the hull contains c*'s
+                         interval, and only c*'s table must hold; c* is not chosen from the data.
     kwik_bounds   the learners' own inference (the "KWIK" arms): the prediction +- its accuracy (Strehl's
                   2 eps1, proof of Thm 1; Met-Rmax's eps, Thm 1), [0, 1] where it says "don't know". Its
                   level is the papers' (with their m, or with a calibrated m).
@@ -89,7 +92,8 @@ def learn(
             # fixed: every candidate, level per (factor, action) table; Met-Rmax: the survivors, level per
             # candidate table (any candidate could survive)
             use = range(H) if hull == "fixed" else f.survivors
-            d = delta / (n * K) if hull == "fixed" else delta / (n * K * H)
+            one_table = hull == "fixed" or structure.method == "consistency"  # see the module docstring
+            d = delta / (n * K) if one_table else delta / (n * K * H)
             for h in use:
                 lower, upper = _cp_at_states(B, rows, values, f.candidates[h], cards, card, d)
                 lo_i, hi_i = np.minimum(lo_i, lower), np.maximum(hi_i, upper)
