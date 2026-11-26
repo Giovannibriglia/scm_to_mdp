@@ -1470,7 +1470,7 @@ wheels = [
 
 [[package]]
 name = "nbn"
-version = "0.26.0"
+version = "0.27.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "networkx", version = "3.4.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
@@ -1483,9 +1483,9 @@ dependencies = [
     { name = "torch", version = "2.14.1", source = { registry = "https://pypi.org/simple" }, marker = "platform_machine != 'x86_64' or sys_platform != 'linux'" },
     { name = "torch", version = "2.14.1+cu126", source = { registry = "https://download.pytorch.org/whl/cu126" }, marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/f8/de/1ef35af45380f4a9e43a2339e5405618d9172dc646307ff2d5edfbf60880/nbn-0.26.0.tar.gz", hash = "sha256:5ca57390850747f90a5b1e5cb24f87e53b36f44570be68be596aa30c182e0e6d", size = 9551542, upload-time = "2026-10-18T15:37:04.842Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/e2/3b/e38f9fe938379c7c51f59d0cbe3c23e719814f76db770d02f44b552cbf9d/nbn-0.27.0.tar.gz", hash = "sha256:ce75cc6737d5dcac2f60cac63431aa4c021d5bb030e337c5e67169bfca8cf6a2", size = 9553915, upload-time = "2026-11-26T13:23:07.374Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/8a/91/19077e785480811dfdc1e55cc72379fd27ad56f382d4d908c3de060e3748/nbn-0.26.0-py3-none-any.whl", hash = "sha256:cfc28cf1e5d4c940fff4c7f3fab62a5db6714476d37f863f9e9b740da2199687", size = 2756858, upload-time = "2026-10-18T15:37:02.757Z" },
+    { url = "https://files.pythonhosted.org/packages/aa/95/867f319891fa2e4eb098255242bb46a28b290d97d5afe8443f030fe3664e/nbn-0.27.0-py3-none-any.whl", hash = "sha256:bae8e8ec97a28b6e6e57a99f0bf58e48c88659b837f585a6a133bd9e22d4a5b8", size = 2757713, upload-time = "2026-11-26T13:23:05.7Z" },
 ]
 
 [[package]]
@@ -2955,7 +2955,7 @@ requires-dist = [
     { name = "gadjid", specifier = ">=0.1.0" },
     { name = "highspy", specifier = ">=1.15.1" },
     { name = "matplotlib", specifier = ">=3.7" },
-    { name = "nbn", specifier = ">=0.26" },
+    { name = "nbn", specifier = ">=0.27" },
     { name = "numpy", specifier = ">=1.24" },
     { name = "pandas", specifier = ">=2" },
     { name = "pgmpy", marker = "extra == 'discovery'", specifier = ">=1.1" },
